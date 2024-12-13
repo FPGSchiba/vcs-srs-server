@@ -1,6 +1,6 @@
 use crate::{states::client::Client, VERSION};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::{collections::HashMap, path::Path};
 
 #[derive(Deserialize)]
 pub struct ServerState {
@@ -108,9 +108,9 @@ impl Default for GeneralSettings {
             radio_expansion: false,
             allow_radio_encryption: false,
             strict_radio_encryption: false,
-            show_tuned_count: false,
+            show_tuned_count: true,
             radio_effect_override: false,
-            show_transmitter_name: false,
+            show_transmitter_name: true,
             transmission_log_retention: 2,
             retransmission_node_limit: 0,
         }
@@ -120,10 +120,10 @@ impl Default for GeneralSettings {
 impl Default for ServerSettings {
     fn default() -> Self {
         Self {
-            client_export_file_path: "clients.json".to_owned(),
+            client_export_file_path: "clients-list.json".to_owned(),
             server_ip: "0.0.0.0".to_owned(),
             server_port: 5002,
-            upnp_enabled: false,
+            upnp_enabled: true,
         }
     }
 }
@@ -144,6 +144,9 @@ impl ServerOptions {
     }
 
     pub fn from_config_file(filename: &str) -> std::io::Result<Self> {
+        if !Path::new(filename).exists() {
+            Self::default().to_config_file(filename)?; // Create default config file
+        }
         let config = std::fs::read_to_string(filename)?;
         toml::from_str(&config).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
     }
