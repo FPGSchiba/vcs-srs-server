@@ -3,11 +3,12 @@ use std::net::SocketAddr;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 pub struct Client {
     pub id: String,
     pub addr: SocketAddr,
 }
+
 impl<'de> Deserialize<'de> for Client {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

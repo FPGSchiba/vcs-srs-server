@@ -1,5 +1,4 @@
 use crate::{states::client::Client, VERSION};
-use eframe::egui::{CentralPanel, Id};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, path::Path};
 
@@ -178,13 +177,5 @@ impl ServerState {
 
     pub fn remove_client(&mut self, id: &str) {
         self.clients.remove(id);
-    }
-}
-
-impl eframe::App for ServerState {
-    fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
-        CentralPanel::default().show(ctx, |ui| {
-            ui.label(format!("Num Clients: {}", self.clients.len()));
-        });
     }
 }

@@ -3,6 +3,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use log::info;
+
 use crate::{states::server::ServerState, VERSION};
 
 pub struct SrsVoiceServer {
@@ -27,7 +29,8 @@ impl SrsVoiceServer {
 
     pub fn start(&mut self, state: Arc<Mutex<ServerState>>) -> std::io::Result<()> {
         self.state = state;
-        let mut buf = [0; 512];
+        let mut buf = [0; 1024];
+        info!("Voice Server started on {}", self.socket.local_addr()?);
         loop {
             let (amt, src) = self.socket.recv_from(&mut buf)?;
             println!("Received {} bytes from {}", amt, src);

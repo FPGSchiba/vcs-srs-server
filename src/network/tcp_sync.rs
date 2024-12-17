@@ -1,11 +1,13 @@
-use crate::network::utils::is_version_compatible;
+use crate::network::utils::{get_sha256_hash, is_version_compatible};
+use crate::states::client::Client;
 use crate::states::radio::{
-    LoginRequest, LoginVersionMismatch, TcpMessageType, MESSAGE_TYPE_PARSE,
+    LoginFailed, LoginRequest, LoginSuccess, LoginVersionMismatch, SrsClient, TcpMessageType,
+    MESSAGE_TYPE_PARSE,
 };
 use crate::states::server::{ServerOptions, ServerState};
 use crate::VERSION;
 use log::{debug, info, warn};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{self, Value};
 use std::collections::HashMap;
 use std::io::Write;
@@ -15,6 +17,7 @@ use std::{
     sync::{Arc, Mutex},
     thread,
 };
+use uuid::Uuid;
 
 pub struct SrsTcpServer {
     listener: TcpListener,
@@ -49,11 +52,12 @@ impl SrsTcpServer {
             let client = SrsClientLoop::new(stream.try_clone().unwrap(), Arc::clone(&self.state));
             let client = Arc::new(Mutex::new(client));
             self.connections.push(client.clone());
+            let mut connections = self.connections.clone();
             thread::Builder::new()
                 .name(format!("Client-{}", addr))
                 .spawn(move || {
                     let mut client = client.lock().unwrap();
-                    client.start();
+                    client.start(&mut connections);
                 })
                 .unwrap();
         }
@@ -62,17 +66,24 @@ impl SrsTcpServer {
 
 struct SrsClientLoop {
     stream: TcpStream,
+    id: Option<String>,
     state: Arc<Mutex<ServerState>>,
+    connections: Vec<Arc<Mutex<SrsClientLoop>>>,
 }
 
 impl SrsClientLoop {
     pub fn new(stream: TcpStream, state: Arc<Mutex<ServerState>>) -> Self {
-        Self { stream, state }
+        Self {
+            stream,
+            state,
+            id: None,
+            connections: Vec::new(),
+        }
     }
 
-    pub fn start(&mut self) {
+    pub fn start(&mut self, connections: &mut Vec<Arc<Mutex<SrsClientLoop>>>) {
+        self.connections = connections.clone();
         let stream = self.stream.try_clone().unwrap();
-        let state = self.state.lock().unwrap();
         loop {
             if let Ok(message_str) = self.read_message() {
                 if message_str.is_empty() {
@@ -106,14 +117,71 @@ impl SrsClientLoop {
                             let login_data: LoginRequest =
                                 serde_json::from_str(&message_str).unwrap();
                             if is_version_compatible(&login_data.version) {
-                                debug!("Login: {}", login_data.client.name);
+                                let mut state = self.state.lock().unwrap();
+                                if login_data.password
+                                    == get_sha256_hash(&state.options.awacs.blue_password)
+                                {
+                                    drop(state);
+                                    let message = LoginSuccess {
+                                        version: VERSION.to_owned(),
+                                        message_type: TcpMessageType::LoginSuccess as i32,
+                                        client: SrsClient {
+                                            name: login_data.client.name.clone(),
+                                            coalition: 2, // For blue
+                                            allow_record: login_data.client.allow_record,
+                                            id: Uuid::new_v4().to_string(),
+                                        },
+                                    };
+                                    self.send_message(&message).unwrap();
+                                    let mut state = self.state.lock().unwrap();
+                                    state.add_client(Client::new(
+                                        message.client.id.clone(),
+                                        stream.peer_addr().unwrap(),
+                                    ));
+                                    drop(state);
+                                    self.id = Some(message.client.id.clone());
+                                    info!("Login Success: {}", message.client.name);
+                                } else if login_data.password
+                                    == get_sha256_hash(&state.options.awacs.red_password)
+                                {
+                                    drop(state);
+                                    let message = LoginSuccess {
+                                        version: VERSION.to_owned(),
+                                        message_type: TcpMessageType::LoginSuccess as i32,
+                                        client: SrsClient {
+                                            name: login_data.client.name.clone(),
+                                            coalition: 1, // For red
+                                            allow_record: login_data.client.allow_record,
+                                            id: Uuid::new_v4().to_string(),
+                                        },
+                                    };
+                                    self.send_message(&message).unwrap();
+                                    let mut state = self.state.lock().unwrap();
+                                    state.add_client(Client::new(
+                                        message.client.id.clone(),
+                                        stream.peer_addr().unwrap(),
+                                    ));
+                                    drop(state);
+                                    self.id = Some(message.client.id.clone());
+                                    info!("Login Success: {}", message.client.name);
+                                } else {
+                                    drop(state);
+                                    debug!("Login Failed: {}", login_data.version);
+                                    let message = LoginFailed {
+                                        version: VERSION.to_owned(),
+                                        message_type: TcpMessageType::LoginFailed as i32,
+                                        message: "Invalid Password".to_owned(),
+                                    };
+                                    self.send_message(&message).unwrap();
+                                    break;
+                                }
                             } else {
                                 debug!("Version Mismatch: {}", login_data.version);
                                 let message = LoginVersionMismatch {
                                     version: VERSION.to_owned(),
                                     message_type: TcpMessageType::VersionMismatch as i32,
                                 };
-                                self.send_message(message).unwrap();
+                                self.send_message(&message).unwrap();
                                 break;
                             }
                         }
@@ -136,13 +204,27 @@ impl SrsClientLoop {
 
         info!("Closing Connection: {}", stream.peer_addr().unwrap());
         stream.shutdown(std::net::Shutdown::Both).unwrap();
+
+        if let Some(id) = &self.id {
+            let mut state = self.state.lock().unwrap();
+            state.remove_client(id);
+            drop(state);
+        }
     }
 
-    fn send_message<S: Serialize>(&self, message: S) -> Result<(), std::io::Error> {
+    fn send_message<S: Serialize>(&self, message: &S) -> Result<(), std::io::Error> {
         let mut stream = self.stream.try_clone().unwrap();
         let message = serde_json::to_string(&message)? + "\n";
         stream.write_all(message.as_bytes())?;
 
+        Ok(())
+    }
+
+    fn broadcast_message<S: Serialize>(&self, message: S) -> Result<(), std::io::Error> {
+        for connection in &self.connections {
+            let connection = connection.lock().unwrap();
+            connection.send_message(&message)?;
+        }
         Ok(())
     }
 
