@@ -1,8 +1,14 @@
-use crate::states::radio::{TcpMessageType, MESSAGE_TYPE_PARSE};
+use crate::network::utils::is_version_compatible;
+use crate::states::radio::{
+    LoginRequest, LoginVersionMismatch, TcpMessageType, MESSAGE_TYPE_PARSE,
+};
 use crate::states::server::{ServerOptions, ServerState};
 use crate::VERSION;
+use log::{debug, info, warn};
+use serde::{Deserialize, Serialize};
 use serde_json::{self, Value};
 use std::collections::HashMap;
+use std::io::Write;
 use std::{
     io::Read,
     net::{TcpListener, TcpStream},
@@ -32,10 +38,14 @@ impl SrsTcpServer {
 
     pub fn start(&mut self, state: Arc<Mutex<ServerState>>) {
         self.state = state;
+        info!(
+            "TCP Server started on: {}",
+            self.listener.local_addr().unwrap()
+        );
         for stream in self.listener.incoming() {
             let stream = stream.unwrap();
             let addr = stream.peer_addr().unwrap();
-            println!("Connection from: {}", addr);
+            info!("TCP Connection from: {}", addr);
             let client = SrsClientLoop::new(stream.try_clone().unwrap(), Arc::clone(&self.state));
             let client = Arc::new(Mutex::new(client));
             self.connections.push(client.clone());
@@ -62,49 +72,78 @@ impl SrsClientLoop {
 
     pub fn start(&mut self) {
         let stream = self.stream.try_clone().unwrap();
+        let state = self.state.lock().unwrap();
         loop {
             if let Ok(message_str) = self.read_message() {
+                if message_str.is_empty() {
+                    continue; // Skip empty messages
+                }
+
                 if let Some(message_type) = SrsClientLoop::parse_message_type(&message_str) {
                     match message_type {
                         TcpMessageType::Update => {
-                            println!("Update");
+                            debug!("Update: {}", message_str);
                         }
                         TcpMessageType::Ping => {
-                            println!("Ping");
+                            debug!("Ping: {}", message_str);
                         }
                         TcpMessageType::Sync => {
-                            println!("Sync");
+                            debug!("Sync: {}", message_str);
                         }
                         TcpMessageType::RadioUpdate => {
-                            println!("RadioUpdate");
+                            debug!("RadioUpdate: {}", message_str);
                         }
                         TcpMessageType::ServerSettings => {
-                            println!("ServerSettings");
+                            debug!("ServerSettings: {}", message_str);
                         }
                         TcpMessageType::ClientDisconnect => {
-                            println!("ClientDisconnect");
+                            debug!("ClientDisconnect: {}", message_str);
                         }
                         TcpMessageType::VersionMismatch => {
-                            println!("VersionMismatch");
+                            debug!("VersionMismatch: {}", message_str); // This should not happen (Client only code)
                         }
-                        TcpMessageType::ClientPassword => {
-                            println!("ClientPassword");
+                        TcpMessageType::Login => {
+                            let login_data: LoginRequest =
+                                serde_json::from_str(&message_str).unwrap();
+                            if is_version_compatible(&login_data.version) {
+                                debug!("Login: {}", login_data.client.name);
+                            } else {
+                                debug!("Version Mismatch: {}", login_data.version);
+                                let message = LoginVersionMismatch {
+                                    version: VERSION.to_owned(),
+                                    message_type: TcpMessageType::VersionMismatch as i32,
+                                };
+                                self.send_message(message).unwrap();
+                                break;
+                            }
                         }
-                        TcpMessageType::ClientAwacsDisconnect => {
-                            println!("ClientAwacsDisconnect");
+                        TcpMessageType::LoginSuccess => {
+                            debug!("Login Success: {}", message_str); // This should not happen (Client only code)
+                        }
+                        TcpMessageType::LoginFailed => {
+                            debug!("Login Failed: {}", message_str); // This should not happen (Client only code)
                         }
                     }
                 } else {
-                    eprintln!("Failed to get message type");
+                    warn!("Failed to get message type");
                     break;
                 }
             } else {
+                warn!("Failed to read message");
                 break;
             }
         }
 
-        println!("Closing Connection: {}", stream.peer_addr().unwrap());
+        info!("Closing Connection: {}", stream.peer_addr().unwrap());
         stream.shutdown(std::net::Shutdown::Both).unwrap();
+    }
+
+    fn send_message<S: Serialize>(&self, message: S) -> Result<(), std::io::Error> {
+        let mut stream = self.stream.try_clone().unwrap();
+        let message = serde_json::to_string(&message)? + "\n";
+        stream.write_all(message.as_bytes())?;
+
+        Ok(())
     }
 
     fn read_message(&self) -> Result<String, std::io::Error> {

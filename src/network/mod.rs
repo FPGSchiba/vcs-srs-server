@@ -1,5 +1,6 @@
 pub mod tcp_sync;
 pub mod upd_voice;
+pub mod utils;
 
 use std::{
     collections::HashMap,

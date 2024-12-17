@@ -1,0 +1,20 @@
+appenders:
+    stdout:
+        kind: console
+        encoder:
+            pattern: "{d(%Y-%m-%d %H:%M:%S)} {h({l})} {m}{n}"
+        filters:
+            - kind: threshold
+              level: debug
+    file:
+        kind: file
+        path: "log/vngd-srs-server.log"
+        encoder:
+            pattern: "[{d(%Y-%m-%d %H:%M:%S)} - {M}] {h({l})} | {m}{n}"
+
+loggers:
+  vngd_srs_server:
+      level: trace
+      appenders:
+          - stdout
+          - file

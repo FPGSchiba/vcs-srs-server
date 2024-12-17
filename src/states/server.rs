@@ -1,22 +1,23 @@
 use crate::{states::client::Client, VERSION};
+use eframe::egui::{CentralPanel, Id};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, path::Path};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct ServerState {
     pub clients: HashMap<String, Client>,
     pub options: ServerOptions,
     pub version: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct ServerOptions {
     pub general: GeneralSettings,
     pub server: ServerSettings,
     pub awacs: AwacsSettings,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct GeneralSettings {
     #[serde(rename = "TRANSMISSION_LOG_ENABLED")]
     pub transmissing_log: bool,
@@ -60,7 +61,7 @@ pub struct GeneralSettings {
     pub retransmission_node_limit: u32,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct ServerSettings {
     #[serde(rename = "CLIENT_EXPORT_FILE_PATH")]
     pub client_export_file_path: String,
@@ -72,7 +73,7 @@ pub struct ServerSettings {
     pub upnp_enabled: bool,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct AwacsSettings {
     #[serde(rename = "EXTERNAL_AWACS_MODE_BLUE_PASSWORD")]
     pub blue_password: String,
@@ -177,5 +178,13 @@ impl ServerState {
 
     pub fn remove_client(&mut self, id: &str) {
         self.clients.remove(id);
+    }
+}
+
+impl eframe::App for ServerState {
+    fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
+        CentralPanel::default().show(ctx, |ui| {
+            ui.label(format!("Num Clients: {}", self.clients.len()));
+        });
     }
 }
