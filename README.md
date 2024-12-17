@@ -38,13 +38,12 @@ With the new communication flow the UDP socket will only start, once the Client 
 
 $$
 \begin{align}
-    (Client) &\to [\text{\verb|LOGIN|}] &\to (Server) \\
+    (Client) &\to [\text{LOGIN}] &\to (Server) \\
     (Server) &\to 
     \begin{cases}
-        [\text{\verb|LOGIN_SUCESS|}] &\text{if versionCheck and validPassword} \\
-        [\text{\verb|LOGIN_FAILED|}] &\text{if !validPassword and versionCheck} \\
-        [\text{\verb|VERSION_MISMATCH|}] &\text{if !versionCheck}
+        [\text{LOGIN\textunderscore SUCESS}] &\text{if versionCheck and validPassword} \\
+        [\text{LOGIN\textunderscore FAILED}] &\text{if !validPassword and versionCheck} \\
+        [\text{VERSION\textunderscore MISMATCH}] &\text{if !versionCheck}
     \end{cases} &\to (Client) \\
 \end{align}
 $$
-
