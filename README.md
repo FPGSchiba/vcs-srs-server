@@ -36,7 +36,7 @@ With the new communication flow the UDP socket will only start, once the Client 
 
 ### Login Flow
 
-$$
+```math
 \begin{align}
     (Client) &\to [\text{LOGIN}] &\to (Server) \\
     (Server) &\to 
@@ -46,4 +46,4 @@ $$
         [\text{VERSION\textunderscore MISMATCH}] &\text{if !versionCheck}
     \end{cases} &\to (Client) \\
 \end{align}
-$$
+```
