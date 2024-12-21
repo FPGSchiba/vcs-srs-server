@@ -1,27 +1,31 @@
-use eframe::egui::CentralPanel;
-use std::sync::{Arc, Mutex};
+mod state;
 
-use crate::states::server::ServerState;
+use eframe::egui::CentralPanel;
+use state::UIState;
+use std::sync::mpsc::{Receiver, Sender};
+
+use crate::states::events::{ServerUIEvent, UIServerEvent};
 
 pub struct SrsUi {
-    pub server_state: Arc<Mutex<ServerState>>,
+    pub ui_sender: Sender<ServerUIEvent>,
+    pub ui_receiver: Receiver<UIServerEvent>,
+    pub state: UIState,
 }
 
 impl SrsUi {
-    pub fn new(server_state: Arc<Mutex<ServerState>>) -> Self {
-        Self { server_state }
+    pub fn new(ui_sender: Sender<ServerUIEvent>, ui_receiver: Receiver<UIServerEvent>) -> Self {
+        Self {
+            ui_sender,
+            ui_receiver,
+            state: UIState::default(),
+        }
     }
 }
 
 impl eframe::App for SrsUi {
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
         CentralPanel::default().show(ctx, |ui| {
-            let server_state = self.server_state.try_lock();
-            if let Ok(server_state) = server_state {
-                ui.label(format!("Num Clients: {}", server_state.clients.len()));
-            } else {
-                ui.label("Num Clients: 0");
-            }
+            ui.label(format!("Num Clients: {}", self.state.clients.len()));
         });
     }
 }

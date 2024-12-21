@@ -62,8 +62,8 @@ pub struct GeneralSettings {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ServerSettings {
-    #[serde(rename = "CLIENT_EXPORT_FILE_PATH")]
-    pub client_export_file_path: String,
+    #[serde(rename = "BAN_LIST_FILE_PATH")]
+    pub ban_list_file_path: String,
     #[serde(rename = "SERVER_IP")]
     pub server_ip: String,
     #[serde(rename = "SERVER_PORT")]
@@ -120,7 +120,7 @@ impl Default for GeneralSettings {
 impl Default for ServerSettings {
     fn default() -> Self {
         Self {
-            client_export_file_path: "clients-list.json".to_owned(),
+            ban_list_file_path: "banlist.json".to_owned(),
             server_ip: "0.0.0.0".to_owned(),
             server_port: 5002,
             upnp_enabled: true,

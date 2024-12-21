@@ -1,9 +1,15 @@
 use log::info;
 use log4rs;
 use network::SrsServer;
-use states::server::{self, ServerOptions};
+use states::{
+    events::{ServerUIEvent, UIServerEvent},
+    server::ServerOptions,
+};
 use std::{
-    sync::{Arc, Mutex},
+    sync::{
+        mpsc::{channel, Receiver, Sender},
+        Arc, Mutex,
+    },
     thread,
 };
 use ui::SrsUi;
@@ -20,16 +26,26 @@ fn main() -> Result<(), eframe::Error> {
 
     info!("Starting VNGD SRS Server - v{}", VERSION);
 
+    // Channels for communication between threads
+    let (server_sender, ui_receiver): (Sender<UIServerEvent>, Receiver<UIServerEvent>) = channel();
+    let (ui_sender, server_receiver): (Sender<ServerUIEvent>, Receiver<ServerUIEvent>) = channel();
+
     let address = &config.server.server_ip;
     let port = &config.server.server_port;
     let srs_server = network::tcp_sync::SrsTcpServer::new(address, port).unwrap();
     let voice_server = network::upd_voice::SrsVoiceServer::new(address, port).unwrap();
     let server = Arc::new(Mutex::new(
-        SrsServer::new(srs_server, voice_server, config).unwrap(),
+        SrsServer::new(
+            srs_server,
+            voice_server,
+            config,
+            server_sender,
+            server_receiver,
+        )
+        .unwrap(),
     ));
 
     let server_clone = Arc::clone(&server);
-    let state = Arc::clone(&server.lock().unwrap().state);
     thread::Builder::new()
         .name("Server".to_string())
         .spawn(move || {
@@ -60,6 +76,6 @@ fn main() -> Result<(), eframe::Error> {
     eframe::run_native(
         &format!("VNGD SRS Server - {}", VERSION),
         options,
-        Box::new(|_| Ok(Box::new(SrsUi::new(state)))),
+        Box::new(|_| Ok(Box::new(SrsUi::new(ui_sender, ui_receiver)))),
     )
 }

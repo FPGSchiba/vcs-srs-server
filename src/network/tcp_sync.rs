@@ -117,7 +117,7 @@ impl SrsClientLoop {
                             let login_data: LoginRequest =
                                 serde_json::from_str(&message_str).unwrap();
                             if is_version_compatible(&login_data.version) {
-                                let mut state = self.state.lock().unwrap();
+                                let state = self.state.lock().unwrap();
                                 if login_data.password
                                     == get_sha256_hash(&state.options.awacs.blue_password)
                                 {

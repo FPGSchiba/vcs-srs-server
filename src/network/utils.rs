@@ -1,4 +1,3 @@
-use log::debug;
 use sha2::{Digest, Sha256};
 
 pub fn is_version_compatible(version: &str) -> bool {
@@ -10,6 +9,5 @@ pub fn get_sha256_hash(data: &str) -> String {
     hasher.update(data.as_bytes());
     let result = hasher.finalize();
     let str_result = format!("{:x}", result);
-    debug!("Hashed: {} to {}", data, str_result);
     str_result
 }
