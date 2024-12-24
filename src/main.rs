@@ -2,7 +2,7 @@ use log::info;
 use log4rs;
 use network::SrsServer;
 use states::{
-    events::{ServerUIEvent, UIServerEvent},
+    events::{ServerUIEvent, TCPServerEvent, UIServerEvent},
     server::ServerOptions,
 };
 use std::{
@@ -29,28 +29,27 @@ fn main() -> Result<(), eframe::Error> {
     // Channels for communication between threads
     let (server_sender, ui_receiver): (Sender<UIServerEvent>, Receiver<UIServerEvent>) = channel();
     let (ui_sender, server_receiver): (Sender<ServerUIEvent>, Receiver<ServerUIEvent>) = channel();
+    let (tcp_sender, server_tcp_receiver): (Sender<TCPServerEvent>, Receiver<TCPServerEvent>) =
+        channel();
 
     let address = &config.server.server_ip;
     let port = &config.server.server_port;
-    let srs_server = network::tcp_sync::SrsTcpServer::new(address, port).unwrap();
+    let srs_server = network::tcp_sync::SrsTcpServer::new(address, port, tcp_sender).unwrap();
     let voice_server = network::upd_voice::SrsVoiceServer::new(address, port).unwrap();
-    let server = Arc::new(Mutex::new(
-        SrsServer::new(
-            srs_server,
-            voice_server,
-            config,
-            server_sender,
-            server_receiver,
-        )
-        .unwrap(),
-    ));
+    let mut server = SrsServer::new(
+        srs_server,
+        voice_server,
+        config,
+        server_sender,
+        server_receiver,
+        server_tcp_receiver,
+    )
+    .unwrap();
 
-    let server_clone = Arc::clone(&server);
     thread::Builder::new()
         .name("Server".to_string())
         .spawn(move || {
-            let srs_server = server_clone.lock().unwrap();
-            srs_server.start();
+            server.start();
         })
         .unwrap();
 

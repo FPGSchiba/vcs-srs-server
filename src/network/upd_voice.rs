@@ -1,6 +1,6 @@
 use std::{
     net::SocketAddr,
-    sync::{Arc, Mutex},
+    sync::{Arc, RwLock},
 };
 
 use log::info;
@@ -10,7 +10,7 @@ use crate::{states::server::ServerState, VERSION};
 pub struct SrsVoiceServer {
     socket: std::net::UdpSocket,
     connections: Vec<SocketAddr>,
-    state: Arc<Mutex<ServerState>>,
+    state: Arc<RwLock<ServerState>>,
 }
 
 impl SrsVoiceServer {
@@ -19,7 +19,7 @@ impl SrsVoiceServer {
         Ok(Self {
             socket,
             connections: Vec::new(),
-            state: Arc::new(Mutex::new(ServerState {
+            state: Arc::new(RwLock::new(ServerState {
                 clients: std::collections::HashMap::new(),
                 options: Default::default(),
                 version: VERSION.to_owned(),
@@ -27,7 +27,7 @@ impl SrsVoiceServer {
         })
     }
 
-    pub fn start(&mut self, state: Arc<Mutex<ServerState>>) -> std::io::Result<()> {
+    pub fn start(&mut self, state: Arc<RwLock<ServerState>>) -> std::io::Result<()> {
         self.state = state;
         let mut buf = [0; 1024];
         info!("Voice Server started on {}", self.socket.local_addr()?);

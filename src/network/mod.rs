@@ -5,22 +5,23 @@ pub mod utils;
 use std::{
     collections::HashMap,
     sync::{
-        mpsc::{Receiver, Sender},
-        Arc, Mutex,
+        mpsc::{channel, Receiver, Sender},
+        Arc, Mutex, RwLock,
     },
 };
 
 use crate::states::{
-    events::{ServerUIEvent, UIServerEvent},
+    events::{ServerUIEvent, TCPServerEvent, UIServerEvent},
     server::{ServerOptions, ServerState},
 };
 
 pub struct SrsServer {
     pub tcp_server: Arc<Mutex<tcp_sync::SrsTcpServer>>,
     pub udp_server: Arc<Mutex<upd_voice::SrsVoiceServer>>,
-    pub state: Arc<Mutex<ServerState>>,
-    pub server_sender: Sender<UIServerEvent>,
-    pub server_receiver: Receiver<ServerUIEvent>,
+    pub state: Arc<RwLock<ServerState>>,
+    pub server_ui_sender: Sender<UIServerEvent>,
+    pub server_ui_receiver: Receiver<ServerUIEvent>,
+    server_tcp_receiver: Receiver<TCPServerEvent>,
 }
 
 impl SrsServer {
@@ -28,23 +29,25 @@ impl SrsServer {
         srs_server: tcp_sync::SrsTcpServer,
         voice_server: upd_voice::SrsVoiceServer,
         config: ServerOptions,
-        server_sender: Sender<UIServerEvent>,
-        server_receiver: Receiver<ServerUIEvent>,
+        server_ui_sender: Sender<UIServerEvent>,
+        server_ui_receiver: Receiver<ServerUIEvent>,
+        server_tcp_receiver: Receiver<TCPServerEvent>,
     ) -> std::io::Result<Self> {
         Ok(Self {
             tcp_server: Arc::new(Mutex::new(srs_server)),
             udp_server: Arc::new(Mutex::new(voice_server)),
-            server_sender,
-            server_receiver,
-            state: Arc::new(Mutex::new(ServerState {
+            server_ui_sender,
+            server_ui_receiver,
+            state: Arc::new(RwLock::new(ServerState {
                 clients: HashMap::new(),
                 options: config,
                 version: crate::VERSION.to_owned(),
             })),
+            server_tcp_receiver,
         })
     }
 
-    pub fn start(&self) {
+    pub fn start(&mut self) {
         let tcp_server = Arc::clone(&self.tcp_server);
         let udp_server = Arc::clone(&self.udp_server);
         let state = Arc::clone(&self.state);
@@ -67,41 +70,63 @@ impl SrsServer {
             .unwrap();
 
         loop {
-            // Server UI Channel Loop
-            match self.server_receiver.recv() {
+            // Server UI Events
+            match self.server_ui_receiver.try_recv() {
                 Ok(event) => match event {
                     ServerUIEvent::BanClient(id) => {
                         log::info!("Banning client: {}", id);
-                        break;
                     }
                     ServerUIEvent::UnbanClient(id) => {
                         log::info!("Unbanning client: {}", id);
-                        break;
                     }
                     ServerUIEvent::Stop => {
                         log::info!("Shutting down server");
-                        break;
                     }
                     ServerUIEvent::Start => {
                         log::info!("Starting server");
-                        break;
                     }
                     ServerUIEvent::KickClient(id) => {
                         log::info!("Kicking client: {}", id);
-                        break;
                     }
                     ServerUIEvent::MuteClient(id) => {
                         log::info!("Muting client: {}", id);
-                        break;
                     }
                     ServerUIEvent::UnmuteClient(id) => {
                         log::info!("Unmuting client: {}", id);
-                        break;
                     }
                 },
                 Err(e) => {
                     log::error!("Error receiving event: {}", e);
-                    break;
+                }
+            }
+
+            // TCP Server Events
+            match self.server_tcp_receiver.try_recv() {
+                Ok(event) => match event {
+                    TCPServerEvent::BanClient(id) => {
+                        log::info!("Banning client: {}", id);
+                    }
+                    TCPServerEvent::UnbanClient(id) => {
+                        log::info!("Unbanning client: {}", id);
+                    }
+                    TCPServerEvent::ClientConnected(id) => {
+                        log::info!("Client connected: {}", id);
+                    }
+                    TCPServerEvent::ClientDisconnected(id) => {
+                        log::info!("Client disconnected: {}", id);
+                    }
+                    TCPServerEvent::KickClient(id) => {
+                        log::info!("Kicking client: {}", id);
+                    }
+                    TCPServerEvent::MuteClient(id) => {
+                        log::info!("Muting client: {}", id);
+                    }
+                    TCPServerEvent::UnmuteClient(id) => {
+                        log::info!("Unmuting client: {}", id);
+                    }
+                },
+                Err(e) => {
+                    log::error!("Error receiving event: {}", e);
                 }
             }
         }

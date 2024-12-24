@@ -1,5 +1,6 @@
 use crate::network::utils::{get_sha256_hash, is_version_compatible};
 use crate::states::client::Client;
+use crate::states::events::TCPServerEvent;
 use crate::states::radio::{
     LoginFailed, LoginRequest, LoginSuccess, LoginVersionMismatch, SrsClient, TcpMessageType,
     MESSAGE_TYPE_PARSE,
@@ -11,35 +12,47 @@ use serde::Serialize;
 use serde_json::{self, Value};
 use std::collections::HashMap;
 use std::io::Write;
+use std::sync::mpsc::Sender;
 use std::{
     io::Read,
+    sync::{Arc, Mutex, RwLock},
+};
+use tokio::io::AsyncReadExt;
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, TcpStream},
-    sync::{Arc, Mutex},
-    thread,
+    sync::{mpsc, oneshot},
+    task,
 };
 use uuid::Uuid;
 
 pub struct SrsTcpServer {
     listener: TcpListener,
     connections: Vec<Arc<Mutex<SrsClientLoop>>>,
-    state: Arc<Mutex<ServerState>>,
+    state: Arc<RwLock<ServerState>>,
+    server_sender: Sender<TCPServerEvent>,
 }
 
 impl SrsTcpServer {
-    pub fn new(address: &String, port: &u16) -> std::io::Result<Self> {
-        let listener = TcpListener::bind(format!("{}:{}", address, port))?;
+    pub async fn new(
+        address: &String,
+        port: &u16,
+        server_sender: Sender<TCPServerEvent>,
+    ) -> std::io::Result<Self> {
+        let listener = TcpListener::bind(format!("{}:{}", address, port)).await?;
         Ok(Self {
             listener,
-            state: Arc::new(Mutex::new(ServerState {
+            state: Arc::new(RwLock::new(ServerState {
                 clients: HashMap::new(),
                 options: ServerOptions::default(),
                 version: VERSION.to_owned(),
             })),
             connections: Vec::new(),
+            server_sender,
         })
     }
 
-    pub fn start(&mut self, state: Arc<Mutex<ServerState>>) {
+    pub fn start(&mut self, state: Arc<RwLock<ServerState>>) {
         self.state = state;
         info!(
             "TCP Server started on: {}",
@@ -53,13 +66,10 @@ impl SrsTcpServer {
             let client = Arc::new(Mutex::new(client));
             self.connections.push(client.clone());
             let mut connections = self.connections.clone();
-            thread::Builder::new()
-                .name(format!("Client-{}", addr))
-                .spawn(move || {
-                    let mut client = client.lock().unwrap();
-                    client.start(&mut connections);
-                })
-                .unwrap();
+            task::spawn(async move {
+                let mut client = client.lock().unwrap();
+                client.start(&mut connections);
+            });
         }
     }
 }
@@ -67,12 +77,12 @@ impl SrsTcpServer {
 struct SrsClientLoop {
     stream: TcpStream,
     id: Option<String>,
-    state: Arc<Mutex<ServerState>>,
+    state: Arc<RwLock<ServerState>>,
     connections: Vec<Arc<Mutex<SrsClientLoop>>>,
 }
 
 impl SrsClientLoop {
-    pub fn new(stream: TcpStream, state: Arc<Mutex<ServerState>>) -> Self {
+    pub fn new(stream: TcpStream, state: Arc<RwLock<ServerState>>) -> Self {
         Self {
             stream,
             state,
@@ -81,11 +91,10 @@ impl SrsClientLoop {
         }
     }
 
-    pub fn start(&mut self, connections: &mut Vec<Arc<Mutex<SrsClientLoop>>>) {
+    pub async fn start(&mut self, connections: &mut Vec<Arc<Mutex<SrsClientLoop>>>) {
         self.connections = connections.clone();
-        let stream = self.stream.try_clone().unwrap();
         loop {
-            if let Ok(message_str) = self.read_message() {
+            if let Ok(message_str) = self.read_message().await {
                 if message_str.is_empty() {
                     continue; // Skip empty messages
                 }
@@ -117,62 +126,51 @@ impl SrsClientLoop {
                             let login_data: LoginRequest =
                                 serde_json::from_str(&message_str).unwrap();
                             if is_version_compatible(&login_data.version) {
-                                let state = self.state.lock().unwrap();
-                                if login_data.password
-                                    == get_sha256_hash(&state.options.awacs.blue_password)
-                                {
-                                    drop(state);
+                                let is_blue = {
+                                    let state = self.state.read().unwrap();
+                                    if login_data.password
+                                        == get_sha256_hash(&state.options.awacs.blue_password)
+                                    {
+                                        true
+                                    } else if login_data.password
+                                        == get_sha256_hash(&state.options.awacs.red_password)
+                                    {
+                                        false
+                                    } else {
+                                        None
+                                    }
+                                };
+
+                                if let Some(is_blue) = is_blue {
+                                    let coalition = if is_blue { 2 } else { 1 };
                                     let message = LoginSuccess {
                                         version: VERSION.to_owned(),
                                         message_type: TcpMessageType::LoginSuccess as i32,
                                         client: SrsClient {
                                             name: login_data.client.name.clone(),
-                                            coalition: 2, // For blue
+                                            coalition,
                                             allow_record: login_data.client.allow_record,
                                             id: Uuid::new_v4().to_string(),
                                         },
                                     };
-                                    self.send_message(&message).unwrap();
-                                    let mut state = self.state.lock().unwrap();
-                                    state.add_client(Client::new(
-                                        message.client.id.clone(),
-                                        stream.peer_addr().unwrap(),
-                                    ));
-                                    drop(state);
-                                    self.id = Some(message.client.id.clone());
-                                    info!("Login Success: {}", message.client.name);
-                                } else if login_data.password
-                                    == get_sha256_hash(&state.options.awacs.red_password)
-                                {
-                                    drop(state);
-                                    let message = LoginSuccess {
-                                        version: VERSION.to_owned(),
-                                        message_type: TcpMessageType::LoginSuccess as i32,
-                                        client: SrsClient {
-                                            name: login_data.client.name.clone(),
-                                            coalition: 1, // For red
-                                            allow_record: login_data.client.allow_record,
-                                            id: Uuid::new_v4().to_string(),
-                                        },
-                                    };
-                                    self.send_message(&message).unwrap();
-                                    let mut state = self.state.lock().unwrap();
-                                    state.add_client(Client::new(
-                                        message.client.id.clone(),
-                                        stream.peer_addr().unwrap(),
-                                    ));
-                                    drop(state);
+                                    self.send_message(&message).await.unwrap();
+                                    {
+                                        let mut state = self.state.write().unwrap();
+                                        state.add_client(Client::new(
+                                            message.client.id.clone(),
+                                            self.stream.peer_addr().unwrap(),
+                                        ));
+                                    }
                                     self.id = Some(message.client.id.clone());
                                     info!("Login Success: {}", message.client.name);
                                 } else {
-                                    drop(state);
                                     debug!("Login Failed: {}", login_data.version);
                                     let message = LoginFailed {
                                         version: VERSION.to_owned(),
                                         message_type: TcpMessageType::LoginFailed as i32,
                                         message: "Invalid Password".to_owned(),
                                     };
-                                    self.send_message(&message).unwrap();
+                                    self.send_message(&message).await.unwrap();
                                     break;
                                 }
                             } else {
@@ -181,7 +179,7 @@ impl SrsClientLoop {
                                     version: VERSION.to_owned(),
                                     message_type: TcpMessageType::VersionMismatch as i32,
                                 };
-                                self.send_message(&message).unwrap();
+                                self.send_message(&message).await.unwrap();
                                 break;
                             }
                         }
@@ -202,38 +200,34 @@ impl SrsClientLoop {
             }
         }
 
-        info!("Closing Connection: {}", stream.peer_addr().unwrap());
-        stream.shutdown(std::net::Shutdown::Both).unwrap();
+        info!("Closing Connection: {}", self.stream.peer_addr().unwrap());
+        self.stream.shutdown().await.unwrap();
 
         if let Some(id) = &self.id {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.write().unwrap();
             state.remove_client(id);
-            drop(state);
         }
     }
 
-    fn send_message<S: Serialize>(&self, message: &S) -> Result<(), std::io::Error> {
-        let mut stream = self.stream.try_clone().unwrap();
+    async fn send_message<S: Serialize>(&mut self, message: &S) -> Result<(), std::io::Error> {
         let message = serde_json::to_string(&message)? + "\n";
-        stream.write_all(message.as_bytes())?;
-
+        self.stream.write_all(message.as_bytes()).await;
         Ok(())
     }
 
-    fn broadcast_message<S: Serialize>(&self, message: S) -> Result<(), std::io::Error> {
+    async fn broadcast_message<S: Serialize>(&self, message: S) -> Result<(), std::io::Error> {
         for connection in &self.connections {
-            let connection = connection.lock().unwrap();
-            connection.send_message(&message)?;
+            let mut connection = connection.lock().unwrap();
+            connection.send_message(&message).await;
         }
         Ok(())
     }
 
-    fn read_message(&self) -> Result<String, std::io::Error> {
-        let mut stream = self.stream.try_clone().unwrap();
+    async fn read_message(&mut self) -> Result<String, std::io::Error> {
         let mut message = String::new();
         let mut buf = [0; 1024];
         loop {
-            let bytes_read = stream.read(&mut buf)?;
+            let bytes_read = self.stream.read(&mut buf).await.unwrap();
             if bytes_read == 0 {
                 break;
             }
