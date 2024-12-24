@@ -1,5 +1,6 @@
 # vngd-srs-server
-Secret Project, psst, don't tell Dabble he won't understand the pain
+
+Not so secret project anymore. This is a project to create a server for the DCS SRS (Simple Radio Standalone) software.
 
 ## Table of Contents
 - [vngd-srs-server](#vngd-srs-server)
