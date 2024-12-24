@@ -1,23 +1,23 @@
 # vngd-srs-server
 Secret Project, psst, don't tell Dabble he won't understand the pain
 
-# Better Control Protocol (TCP)
+## Better Control Protocol (TCP)
 **Version**: 1.0
 **Last Updated**: December 24, 2024
 
-## Table of Contents
+### Table of Contents
 - [vngd-srs-server](#vngd-srs-server)
-- [Better Control Protocol (TCP)](#better-control-protocol-tcp)
-  - [Table of Contents](#table-of-contents)
-  - [Overview](#overview)
-    - [Old Message Types](#old-message-types)
-    - [New Message Types](#new-message-types)
-  - [Login Flow](#login-flow)
-  - [Changelog](#changelog)
-    - [Version 1.1](#version-11)
-    - [Version 1.0](#version-10)
+  - [Better Control Protocol (TCP)](#better-control-protocol-tcp)
+    - [Table of Contents](#table-of-contents)
+    - [Overview](#overview)
+      - [Old Message Types](#old-message-types)
+      - [New Message Types](#new-message-types)
+    - [Login Flow](#login-flow)
+    - [Changelog](#changelog)
+      - [Version 1.1](#version-11)
+      - [Version 1.0](#version-10)
 
-## Overview
+### Overview
 
 The Better Control Protocol (TCP) introduces a new communication flow to improve reliability and security. Key changes include:
 
@@ -25,7 +25,7 @@ The Better Control Protocol (TCP) introduces a new communication flow to improve
 - **Server-managed IDs**: Clients no longer generate their own IDs; IDs are assigned by the server.
 - **Improved login flow**: The server validates the client before allowing UDP communication.
 
-### Old Message Types
+#### Old Message Types
 
 | ID  | Type                             | Description                                               | Body      |
 | --- | -------------------------------- | --------------------------------------------------------- | --------- |
@@ -39,7 +39,7 @@ The Better Control Protocol (TCP) introduces a new communication flow to improve
 | 7   | `EXTERNAL_AWACS_MODE_PASSWORD`   | Login request from client                                 | `unknown` |
 | 8   | `EXTERNAL_AWACS_MODE_DISCONNECT` | Disconnect only from AWACS                                | `unknown` |
 
-### New Message Types
+#### New Message Types
 
 | ID  | Type               | Description                                                            | Body     |
 | --- | ------------------ | ---------------------------------------------------------------------- | -------- |
@@ -54,7 +54,7 @@ The Better Control Protocol (TCP) introduces a new communication flow to improve
 | 8   | `LOGIN_SUCCESS`    | Sent to the clien to start the UDP Loop. (Only received by the Client) | `unkown` |
 | 9   | `LOGIN_FAILED`     | Sent to the Client to restart Login. (Only received by the Client)     | `unkown` |
 
-## Login Flow
+### Login Flow
 
 ```mermaid
 sequenceDiagram
@@ -68,12 +68,12 @@ sequenceDiagram
     end
 ```
 
-## Changelog
+### Changelog
 
-### Version 1.1
+#### Version 1.1
 - Added `LOGIN_SUCCESS` and `LOGIN_FAILED` message types.
 - Replaced `CLIENT_DISCONNECT` with `DISCONNECT`.
 - Improved login flow to include version and password validation.
 
-### Version 1.0
+#### Version 1.0
 - Initial version of the protocol.
