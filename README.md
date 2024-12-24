@@ -1,14 +1,10 @@
 # vngd-srs-server
 Secret Project, psst, don't tell Dabble he won't understand the pain
 
-## Better Control Protocol (TCP)
-**Version**: 1.0
-**Last Updated**: December 24, 2024
-
-### Table of Contents
+## Table of Contents
 - [vngd-srs-server](#vngd-srs-server)
+  - [Table of Contents](#table-of-contents)
   - [Better Control Protocol (TCP)](#better-control-protocol-tcp)
-    - [Table of Contents](#table-of-contents)
     - [Overview](#overview)
       - [Old Message Types](#old-message-types)
       - [New Message Types](#new-message-types)
@@ -16,6 +12,10 @@ Secret Project, psst, don't tell Dabble he won't understand the pain
     - [Changelog](#changelog)
       - [Version 1.1](#version-11)
       - [Version 1.0](#version-10)
+
+## Better Control Protocol (TCP)
+**Version**: 1.0
+**Last Updated**: December 24, 2024
 
 ### Overview
 
