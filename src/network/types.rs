@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
-use std::str;
 
 use phf::phf_map;
+
+use crate::state::client::Client;
 
 pub enum TcpMessageType {
     Update,
@@ -89,4 +90,10 @@ pub struct LoginSuccess {
     pub message_type: i32,
     #[serde(rename = "Client")]
     pub client: SrsClient,
+}
+
+pub enum ConnectionEvent {
+    LoginSuccess(Client),
+    ClientDisconnect(String),
+    ServerSettings,
 }

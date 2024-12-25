@@ -1,13 +1,5 @@
-use crate::{states::client::Client, VERSION};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, path::Path};
-
-#[derive(Deserialize, Clone)]
-pub struct ServerState {
-    pub clients: HashMap<String, Client>,
-    pub options: ServerOptions,
-    pub version: String,
-}
+use std::path::Path;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ServerOptions {
@@ -149,33 +141,5 @@ impl ServerOptions {
         }
         let config = std::fs::read_to_string(filename)?;
         toml::from_str(&config).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
-    }
-}
-
-impl ServerState {
-    pub fn new(filename: Option<String>) -> Self {
-        if let Some(filename) = filename {
-            let settings = ServerOptions::from_config_file(&filename).unwrap();
-            return Self {
-                clients: HashMap::new(),
-                options: settings,
-                version: VERSION.to_owned(),
-            };
-        }
-        let settings = ServerOptions::default();
-        settings.to_config_file("server.toml").unwrap();
-        return Self {
-            clients: HashMap::new(),
-            options: settings,
-            version: VERSION.to_owned(),
-        };
-    }
-
-    pub fn add_client(&mut self, client: Client) {
-        self.clients.insert(client.id.clone(), client);
-    }
-
-    pub fn remove_client(&mut self, id: &str) {
-        self.clients.remove(id);
     }
 }
