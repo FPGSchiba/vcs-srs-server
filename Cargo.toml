@@ -8,7 +8,7 @@ phf = { version = "0.11", features = ["macros"] }
 serde_json = "1.0.134"
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8.19"
-eframe = { version = "0.30.0", features = [
+eframe = { version = "0.31.0", features = [
     "default",
     "__screenshot", # __screenshot is so we can dump a screenshot using EFRAME_SCREENSHOT_TO
 ] }
