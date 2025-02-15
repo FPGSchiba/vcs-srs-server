@@ -5,23 +5,30 @@ use tokio::{
     sync::{broadcast, mpsc, RwLock},
 };
 
-use crate::{error::ServerError, network::types::ConnectionEvent, state::SharedState};
+use crate::{error::ServerError, network::types::ConnectionEvent};
+use crate::state::{AdminState, ClientState, OptionsState};
 
 pub struct TcpHandler {
     listener: TcpListener,
-    state: Arc<RwLock<SharedState>>,
+    client_sate: Arc<RwLock<ClientState>>,
+    options_state: Arc<RwLock<OptionsState>>,
+    admin_state: Arc<RwLock<AdminState>>,
     event_tx: mpsc::Sender<ConnectionEvent>,
 }
 
 impl TcpHandler {
     pub fn new(
         listener: TcpListener,
-        state: Arc<RwLock<SharedState>>,
+        client_sate: Arc<RwLock<ClientState>>,
+        options_state: Arc<RwLock<OptionsState>>,
+        admin_state: Arc<RwLock<AdminState>>,
         event_tx: mpsc::Sender<ConnectionEvent>,
     ) -> Self {
         Self {
             listener,
-            state,
+            client_sate,
+            options_state,
+            admin_state,
             event_tx,
         }
     }
@@ -61,11 +68,13 @@ impl TcpHandler {
         addr: std::net::SocketAddr,
         event_tx: mpsc::Sender<ConnectionEvent>,
     ) {
-        let state = Arc::clone(&self.state);
+        let client_state = Arc::clone(&self.client_sate);
+        let options_state = Arc::clone(&self.options_state);
+        let admin_state = Arc::clone(&self.admin_state);
 
         tokio::spawn(async move {
-            let client = crate::network::tcp::connection::ClientConnection::new(
-                stream, addr, state, event_tx,
+            let mut client = crate::network::tcp::connection::ClientConnection::new(
+                stream, addr, client_state, options_state, admin_state, event_tx,
             );
 
             if let Err(e) = client.handle_connection().await {

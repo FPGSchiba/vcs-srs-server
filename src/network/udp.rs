@@ -1,20 +1,23 @@
 use std::sync::Arc;
 
-use crate::{error::ServerError, state::SharedState};
+use crate::{error::ServerError};
 use log::{error, info};
 use tokio::{
     net::UdpSocket,
     sync::{broadcast, RwLock},
 };
+use crate::state::{AdminState, ClientState, OptionsState};
 
 pub struct UdpHandler {
     socket: UdpSocket,
-    state: Arc<RwLock<SharedState>>,
+    client_sate: Arc<RwLock<ClientState>>,
+    option_state: Arc<RwLock<OptionsState>>,
+    admin_state: Arc<RwLock<AdminState>>,
 }
 
 impl UdpHandler {
-    pub fn new(socket: UdpSocket, state: Arc<RwLock<SharedState>>) -> Self {
-        Self { socket, state }
+    pub fn new(socket: UdpSocket, client_sate: Arc<RwLock<ClientState>>, option_state: Arc<RwLock<OptionsState>>, admin_state: Arc<RwLock<AdminState>>) -> Self {
+        Self { socket, client_sate, option_state, admin_state }
     }
 
     pub async fn run(&mut self) -> Result<(), ServerError> {

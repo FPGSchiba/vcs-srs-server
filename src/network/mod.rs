@@ -7,14 +7,17 @@ use tcp::handler::TcpHandler;
 use udp::UdpHandler;
 
 use crate::event::{ServerToUiEvent, UiToServerEvent};
-use crate::{error::ServerError, network::types::ConnectionEvent, state::SharedState};
+use crate::{error::ServerError, network::types::ConnectionEvent};
+use crate::state::{AdminState, ClientState, OptionsState};
 
 pub mod tcp;
 pub mod types;
 pub mod udp;
 
 pub struct VoiceServer {
-    pub state: Arc<RwLock<SharedState>>,
+    pub client_state: Arc<RwLock<ClientState>>,
+    pub options_state: Arc<RwLock<OptionsState>>,
+    pub admin_state: Arc<RwLock<AdminState>>,
     udp_handler: Option<Arc<RwLock<UdpHandler>>>,
     tcp_handler: Option<Arc<RwLock<TcpHandler>>>,
     event_tx: broadcast::Sender<ServerToUiEvent>,
@@ -25,14 +28,18 @@ pub struct VoiceServer {
 
 impl VoiceServer {
     pub fn new(
-        state: Arc<RwLock<SharedState>>,
+        client_state: Arc<RwLock<ClientState>>,
+        options_state: Arc<RwLock<OptionsState>>,
+        admin_state: Arc<RwLock<AdminState>>,
         event_tx: broadcast::Sender<ServerToUiEvent>,
         ui_rx: mpsc::Receiver<UiToServerEvent>,
     ) -> Self {
         let (connection_tx, connection_rx) = mpsc::channel::<ConnectionEvent>(32);
 
         let mut server = Self {
-            state: state,
+            client_state,
+            options_state,
+            admin_state,
             udp_handler: None,
             tcp_handler: None,
             event_tx,
@@ -52,22 +59,26 @@ impl VoiceServer {
 
     pub async fn start(&mut self) -> Result<(), ServerError> {
         // Create shutdown channels
-        let ip = self.state.read().await.options.server.server_ip.clone();
-        let port = self.state.read().await.options.server.server_port;
+        let ip = self.options_state.read().await.options.server.server_ip.clone();
+        let port = self.options_state.read().await.options.server.server_port;
         let address = format!("{}:{}", ip, port);
 
         // Initialize UDP handler
         let udp_socket = UdpSocket::bind(&address).await?;
         let udp = Arc::new(RwLock::new(UdpHandler::new(
             udp_socket,
-            Arc::clone(&self.state),
+            Arc::clone(&self.client_state),
+            Arc::clone(&self.options_state),
+            Arc::clone(&self.admin_state),
         )));
 
         // Initialize TCP handler
         let tcp_listener = TcpListener::bind(address).await?;
         let tcp = Arc::new(RwLock::new(TcpHandler::new(
             tcp_listener,
-            Arc::clone(&self.state),
+            Arc::clone(&self.client_state),
+            Arc::clone(&self.options_state),
+            Arc::clone(&self.admin_state),
             self.connection_tx.clone(),
         )));
 
@@ -97,7 +108,6 @@ impl VoiceServer {
     }
 
     async fn spawn_ui_event_handler(&mut self) {
-        let state = Arc::clone(&self.state);
         let event_tx = self.event_tx.clone();
         let ui_rx = self.ui_rx.clone();
 
@@ -113,7 +123,6 @@ impl VoiceServer {
     }
 
     fn spawn_connection_event_handler(&self) {
-        let state = Arc::clone(&self.state);
         let event_rx = Arc::clone(&self.connection_rx);
 
         tokio::spawn(async move {

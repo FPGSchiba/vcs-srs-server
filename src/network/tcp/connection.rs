@@ -13,18 +13,22 @@ use uuid::Uuid;
 use crate::{
     error::{LoginError, ServerError},
     network::types::{
-        ConnectionEvent, LoginFailed, LoginRequest, LoginSuccess, LoginVersionMismatch, SrsClient,
+        ConnectionEvent, LoginFailed, LoginRequest, LoginSuccess, LoginVersionMismatch,
         TcpMessageType, MESSAGE_TYPE_PARSE,
     },
-    state::SharedState,
     utils::network::{get_sha256_hash, is_version_compatible},
     VERSION,
 };
+use crate::network::types::RadioUpdateRequest;
+use crate::state::client::Client;
+use crate::state::{AdminState, ClientState, OptionsState};
 
 pub struct ClientConnection {
     stream: TcpStream,
     addr: SocketAddr,
-    state: Arc<RwLock<SharedState>>,
+    client_state: Arc<RwLock<ClientState>>,
+    options_state: Arc<RwLock<OptionsState>>,
+    admin_state: Arc<RwLock<AdminState>>,
     event_tx: mpsc::Sender<ConnectionEvent>,
 }
 
@@ -32,13 +36,17 @@ impl ClientConnection {
     pub fn new(
         stream: TcpStream,
         addr: SocketAddr,
-        state: Arc<RwLock<SharedState>>,
+        client_sate: Arc<RwLock<ClientState>>,
+        options_state: Arc<RwLock<OptionsState>>,
+        admin_state: Arc<RwLock<AdminState>>,
         event_tx: mpsc::Sender<ConnectionEvent>,
     ) -> Self {
         Self {
             stream,
             addr,
-            state,
+            client_state: client_sate,
+            options_state,
+            admin_state,
             event_tx,
         }
     }
@@ -50,7 +58,13 @@ impl ClientConnection {
                     if message.is_empty() {
                         continue; // Skip empty messages
                     }
-                    let _ = self.handle_message(&message).await;
+                    if let Err(e) = self.handle_message(&message).await {
+                        error!("Failed to handle message from {}: {}", self.addr, e);
+                        if let Err(e) = self.handle_disconnect().await {
+                            panic!("Failed to disconnect client: {}", e);
+                        }
+                        break;
+                    }
                 }
                 Err(e) => {
                     error!("Failed to read message from {}: {}", self.addr, e);
@@ -76,13 +90,15 @@ impl ClientConnection {
                     debug!("Sync: {}", message);
                 }
                 TcpMessageType::RadioUpdate => {
-                    debug!("RadioUpdate: {}", message);
+                    let radio_data: RadioUpdateRequest = serde_json::from_str(&message).unwrap();
+                    self.client_state.write().await.update_radio_information(&self.addr, radio_data.client.radio_information.unwrap());
+                    info!("Updated Radio information for: {}", self.addr);
                 }
                 TcpMessageType::ServerSettings => {
                     debug!("ServerSettings: {}", message);
                 }
                 TcpMessageType::ClientDisconnect => {
-                    debug!("ClientDisconnect: {}", message);
+                    self.handle_disconnect().await?;
                 }
                 TcpMessageType::Login => {
                     let login_data: LoginRequest = serde_json::from_str(&message).unwrap();
@@ -121,6 +137,7 @@ impl ClientConnection {
             }
         } else {
             error!("Unknown message type: {}", message);
+            return Err(ServerError::ProtocolError(format!("Unknown message type: {}", message).to_owned()));
         }
         Ok(())
     }
@@ -131,27 +148,41 @@ impl ClientConnection {
         }
 
         if login_data.password
-            != get_sha256_hash(&self.state.read().await.options.awacs.blue_password)
+            != get_sha256_hash(&self.options_state.read().await.options.awacs.blue_password)
             && login_data.password
-                != get_sha256_hash(&self.state.read().await.options.awacs.red_password)
+                != get_sha256_hash(&self.options_state.read().await.options.awacs.red_password)
         {
             return Err(LoginError::InvalidPassword);
         }
 
         let is_blue = login_data.password
-            == get_sha256_hash(&self.state.read().await.options.awacs.blue_password);
+            == get_sha256_hash(&self.options_state.read().await.options.awacs.blue_password);
         let coalition = if is_blue { 2 } else { 1 };
+        let client_id = Uuid::new_v4().to_string();
         let message = LoginSuccess {
             version: VERSION.to_owned(),
             message_type: TcpMessageType::LoginSuccess as i32,
-            client: SrsClient {
+            client: Client {
+                addr: Some(self.addr),
                 name: login_data.client.name.clone(),
                 coalition,
                 allow_record: login_data.client.allow_record,
-                id: Uuid::new_v4().to_string(),
+                id: Some(client_id.clone()),
+                radio_information: None,
             },
         };
         self.send_message(&message).await.unwrap();
+        self.client_state.write().await.add_client(
+            self.addr,
+            Client {
+                id: Some(client_id),
+                addr: Some(self.addr),
+                name: login_data.client.name.clone(),
+                coalition,
+                allow_record: login_data.client.allow_record,
+                radio_information: None,
+            },
+        );
         Ok(())
     }
 
@@ -172,7 +203,7 @@ impl ClientConnection {
         let mut message = String::new();
         let mut buf = [0; 1024];
         loop {
-            let bytes_read = self.stream.read(&mut buf).await.unwrap();
+            let bytes_read = self.stream.read(&mut buf).await?;
             if bytes_read == 0 {
                 break;
             }
@@ -186,19 +217,11 @@ impl ClientConnection {
 
     async fn handle_disconnect(&mut self) -> Result<(), ServerError> {
         // Remove client from shared state
-        // self.state.remove_client(self.addr).await?;
-
-        // Notify other components about disconnection
-        /*
-        self.event_tx
-            .send(ConnectionEvent::Disconnect(self.addr))
-            .await
-            .map_err(|e| ServerError::InternalError(format!("Failed to send event: {}", e)))?;
-        */
-        // Log disconnection
+        self.client_state.write().await.remove_client(&self.addr);
+        // Shutdown the stream
         self.stream.shutdown().await?;
+        // Log disconnection
         info!("Client {} disconnected", self.addr);
-
         Ok(())
     }
 

@@ -71,25 +71,23 @@ pub struct LoginFailed {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct SrsClient {
-    #[serde(rename = "ClientGuid")]
-    pub id: String,
-    #[serde(rename = "Coalition")]
-    pub coalition: i32,
-    #[serde(rename = "AllorRecord")]
-    pub allow_record: bool,
-    #[serde(rename = "Name")]
-    pub name: String,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
 pub struct LoginSuccess {
     #[serde(rename = "Version")]
     pub version: String,
     #[serde(rename = "MsgType")]
     pub message_type: i32,
     #[serde(rename = "Client")]
-    pub client: SrsClient,
+    pub client: Client,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct RadioUpdateRequest {
+    #[serde(rename = "MsgType")]
+    pub message_type: i32,
+    #[serde(rename = "Version")]
+    pub version: String,
+    #[serde(rename = "Client")]
+    pub client: Client,
 }
 
 pub enum ConnectionEvent {
