@@ -4,6 +4,7 @@ use phf::phf_map;
 
 use crate::state::client::Client;
 
+#[derive(Clone, Debug)]
 pub enum TcpMessageType {
     Update,
     Ping,
