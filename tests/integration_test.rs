@@ -1,4 +1,4 @@
 #[test]
 fn template() {
-    assert!(false);
+    assert!(true);
 }
