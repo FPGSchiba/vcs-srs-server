@@ -28,7 +28,7 @@ jobs:
         run: cargo llvm-cov --no-cfg-coverage --all-features --workspace --codecov --output-path codecov.json
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v5
         with:
           files: codecov.json
           fail_ci_if_error: true
