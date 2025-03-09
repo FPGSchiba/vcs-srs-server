@@ -1,18 +1,10 @@
-use std::cmp::PartialEq;
-use eframe::{App, Frame};
-use log::error;
-use std::sync::Arc;
 use egui::{Color32, RichText};
 use egui_dock::{DockArea, DockState, NodeIndex, Style, SurfaceIndex};
-use tokio::{
-    runtime::Runtime,
-    sync::{broadcast, mpsc, RwLock},
-};
+use std::cmp::PartialEq;
+use std::sync::Arc;
+use tokio::sync::{broadcast, mpsc, RwLock};
 
-use crate::{
-    event::{ServerToUiEvent, UiToServerEvent},
-    ControlMessage,
-};
+use crate::event::{ServerToUiEvent, UiToServerEvent};
 use crate::state::{AdminState, ClientState, OptionsState};
 
 pub struct ServerGui {
@@ -80,16 +72,16 @@ impl ServerTab {
                 "Content of {}. This tab sure is fancy!",
                 self.title()
             ))
-                .italics()
-                .size(20.0)
-                .color(Color32::from_rgb(255, 128, 64)),
+            .italics()
+            .size(20.0)
+            .color(Color32::from_rgb(255, 128, 64)),
             TabKind::Admin => RichText::new(format!(
                 "Content of {}. This tab is for the admin.",
                 self.title()
             ))
-                .code()
-                .size(24.0)
-                .color(Color32::from_rgb(128, 255, 64)),
+            .code()
+            .size(24.0)
+            .color(Color32::from_rgb(128, 255, 64)),
         });
     }
 }
@@ -137,7 +129,7 @@ impl ServerGui {
         options_state: Arc<RwLock<OptionsState>>,
         admin_state: Arc<RwLock<AdminState>>,
         ui_tx: mpsc::Sender<UiToServerEvent>,
-        mut server_rx: broadcast::Receiver<ServerToUiEvent>,
+        server_rx: broadcast::Receiver<ServerToUiEvent>,
     ) -> Self {
         let mut tree = DockState::new(vec![ServerTab::setting(SurfaceIndex::main(), NodeIndex(1))]);
 
