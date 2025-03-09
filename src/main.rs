@@ -1,5 +1,7 @@
 use eframe::App;
 use log::error;
+use log::info;
+use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use vngd_srs_server::state::{AdminState, ClientState, OptionsState};
@@ -10,12 +12,12 @@ use vngd_srs_server::{
 
 #[tokio::main]
 async fn main() -> Result<(), ServerError> {
-    // Initialize logging
-    log4rs::init_file("config/log4rs.yaml", Default::default())
+    // Initialize logging with default config if not found
+    init_logging()
         .map_err(|e| ServerError::ConfigError(format!("Failed to initialize logging: {}", e)))?;
 
-    // Load configuration
-    let config = ServerOptions::from_config_file("config/server.toml")
+    // Load server configuration with default if not found
+    let config = init_server_config()
         .map_err(|e| ServerError::ConfigError(format!("Failed to load configuration: {}", e)))?;
 
     let client_state = Arc::new(RwLock::new(ClientState::new()));
@@ -60,4 +62,102 @@ async fn main() -> Result<(), ServerError> {
     // Cleanup
     server_handle.abort();
     Ok(())
+}
+
+fn init_logging() -> Result<(), ServerError> {
+    const LOG_CONFIG_PATH: &str = "config/log4rs.yaml";
+
+    if !Path::new(LOG_CONFIG_PATH).exists() {
+        // Create config directory if it doesn't exist
+        std::fs::create_dir_all("config").map_err(|e| {
+            ServerError::ConfigError(format!("Failed to create config directory: {}", e))
+        })?;
+
+        // Default logging configuration
+        let default_config = r#"
+appenders:
+    stdout:
+        kind: console
+        encoder:
+            pattern: "{d(%Y-%m-%d %H:%M:%S)} {h({l})} {m}{n}"
+        filters:
+            - kind: threshold
+              level: trace
+    file:
+        kind: file
+        path: "log/vngd-srs-server.log"
+        encoder:
+            pattern: "[{d(%Y-%m-%d %H:%M:%S)} - {M}] {h({l})} | {m}{n}"
+        filters:
+            - kind: threshold
+              level: warn
+
+loggers:
+  vngd_srs_server:
+      level: trace
+      appenders:
+          - stdout
+          - file
+"#;
+
+        // Create log directory if it doesn't exist
+        std::fs::create_dir_all("log").map_err(|e| {
+            ServerError::ConfigError(format!("Failed to create log directory: {}", e))
+        })?;
+
+        // Write default config
+        std::fs::write(LOG_CONFIG_PATH, default_config).map_err(|e| {
+            ServerError::ConfigError(format!("Failed to write default log config: {}", e))
+        })?;
+
+        info!(
+            "Created default logging configuration at {}",
+            LOG_CONFIG_PATH
+        );
+    }
+
+    // Initialize logging
+    log4rs::init_file(LOG_CONFIG_PATH, Default::default())
+        .map_err(|e| ServerError::ConfigError(format!("Failed to initialize logging: {}", e)))?;
+
+    Ok(())
+}
+
+fn init_server_config() -> Result<ServerOptions, ServerError> {
+    const SERVER_CONFIG_PATH: &str = "config/server.toml";
+
+    if !Path::new(SERVER_CONFIG_PATH).exists() {
+        // Create config directory if it doesn't exist
+        std::fs::create_dir_all("config").map_err(|e| {
+            ServerError::ConfigError(format!("Failed to create config directory: {}", e))
+        })?;
+
+        // Create default configuration
+        let default_config = ServerOptions::default();
+
+        // Convert to TOML string
+        let config_str = toml::to_string_pretty(&default_config).map_err(|e| {
+            ServerError::ConfigError(format!("Failed to serialize default config: {}", e))
+        })?;
+
+        // Write default config
+        std::fs::write(SERVER_CONFIG_PATH, config_str).map_err(|e| {
+            ServerError::ConfigError(format!("Failed to write default server config: {}", e))
+        })?;
+
+        info!(
+            "Created default server configuration at {}",
+            SERVER_CONFIG_PATH
+        );
+
+        Ok(default_config)
+    } else {
+        // Load existing configuration
+        let config_str = std::fs::read_to_string(SERVER_CONFIG_PATH).map_err(|e| {
+            ServerError::ConfigError(format!("Failed to read server config: {}", e))
+        })?;
+
+        toml::from_str(&config_str)
+            .map_err(|e| ServerError::ConfigError(format!("Failed to parse server config: {}", e)))
+    }
 }
