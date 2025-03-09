@@ -1,0 +1,29 @@
+name: Test
+on: pull_request_target
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Setup Rust-Toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+    
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate code coverage
+        run: cargo llvm-cov --all-features --workspace --codecov --output-path codecov.json
+      
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          files: codecov.json
+          fail_ci_if_error: true
