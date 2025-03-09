@@ -1,15 +1,22 @@
-use image::buffer;
 use log::{debug, error, info};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
-use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
-    sync::{broadcast, mpsc, RwLock},
+    sync::{mpsc, RwLock},
 };
 use uuid::Uuid;
 
+use crate::network::types::RadioUpdateRequest;
+use crate::state::client::Client;
+use crate::state::{AdminState, ClientState, OptionsState};
 use crate::{
     error::{LoginError, ServerError},
     network::types::{
@@ -19,9 +26,6 @@ use crate::{
     utils::network::{get_sha256_hash, is_version_compatible},
     VERSION,
 };
-use crate::network::types::RadioUpdateRequest;
-use crate::state::client::Client;
-use crate::state::{AdminState, ClientState, OptionsState};
 
 pub struct ClientConnection {
     stream: TcpStream,
@@ -52,92 +56,196 @@ impl ClientConnection {
     }
 
     pub async fn handle_connection(mut self) -> Result<(), ServerError> {
+        let mut is_disconnected = false;
+        let timeout_duration = Duration::from_secs(30); // Configurable timeout
+        let mut last_activity = Instant::now();
+
         loop {
-            match self.read_message().await {
-                Ok(message) => {
-                    if message.is_empty() {
-                        continue; // Skip empty messages
-                    }
-                    if let Err(e) = self.handle_message(&message).await {
-                        error!("Failed to handle message from {}: {}", self.addr, e);
-                        if let Err(e) = self.handle_disconnect().await {
-                            panic!("Failed to disconnect client: {}", e);
+            if is_disconnected {
+                break;
+            }
+
+            // Check for timeout
+            if last_activity.elapsed() > timeout_duration {
+                error!("Connection timeout for client {}", self.addr);
+                return Err(ServerError::NetworkError(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "Connection timeout",
+                )));
+            }
+
+            // Use tokio::select! to handle both message reading and timeout
+            tokio::select! {
+                read_result = self.read_message() => {
+                    match read_result {
+                        Ok(message) => {
+                            last_activity = Instant::now(); // Reset timeout counter
+                            if message.is_empty() {
+                                continue;
+                            }
+
+                            if let Err(e) = self.handle_message(&message).await {
+                                error!("Failed to handle message from {}: {}", self.addr, e);
+                                match self.handle_disconnect().await {
+                                    Ok(_) => {
+                                        info!("Client {} disconnected gracefully after message handling error", self.addr);
+                                        is_disconnected = true;
+                                    }
+                                    Err(disconnect_err) => {
+                                        error!("Failed to disconnect client {} gracefully: {}", self.addr, disconnect_err);
+                                        is_disconnected = true;
+                                        return Err(e);
+                                    }
+                                }
+                            }
                         }
-                        break;
+                        Err(e) => {
+                            error!("Failed to read message from {}: {}", self.addr, e);
+                            let server_error = ServerError::NetworkError(e);
+
+                            if let Err(disconnect_err) = self.handle_disconnect().await {
+                                error!("Failed to disconnect client {} after read error: {}", self.addr, disconnect_err);
+                                return Err(server_error);
+                            }
+
+                            info!("Client {} disconnected after read error", self.addr);
+                            break;
+                        }
                     }
                 }
-                Err(e) => {
-                    error!("Failed to read message from {}: {}", self.addr, e);
-                    break;
+                _ = tokio::time::sleep(timeout_duration) => {
+                    error!("Connection timeout for client {}", self.addr);
+                    if let Err(e) = self.handle_disconnect().await {
+                        error!("Failed to disconnect client {} after timeout: {}", self.addr, e);
+                    }
+                    return Err(ServerError::NetworkError(
+                        std::io::Error::new(std::io::ErrorKind::TimedOut, "Connection timeout")
+                    ));
                 }
             }
         }
 
-        // Cleanup on disconnect
-        self.handle_disconnect().await
+        if !is_disconnected {
+            self.handle_disconnect().await?;
+        }
+
+        Ok(())
     }
 
     async fn handle_message(&mut self, message: &String) -> Result<(), ServerError> {
-        if let Some(message_type) = Self::parse_message_type(&message) {
-            match message_type {
-                TcpMessageType::Update => {
-                    debug!("Update: {}", message);
-                }
-                TcpMessageType::Ping => {
-                    debug!("Ping: {}", message);
-                }
-                TcpMessageType::Sync => {
-                    debug!("Sync: {}", message);
-                }
-                TcpMessageType::RadioUpdate => {
-                    let radio_data: RadioUpdateRequest = serde_json::from_str(&message).unwrap();
-                    self.client_state.write().await.update_radio_information(&self.addr, radio_data.client.radio_information.unwrap());
-                    info!("Updated Radio information for: {}", self.addr);
-                }
-                TcpMessageType::ServerSettings => {
-                    debug!("ServerSettings: {}", message);
-                }
-                TcpMessageType::ClientDisconnect => {
-                    self.handle_disconnect().await?;
-                }
-                TcpMessageType::Login => {
-                    let login_data: LoginRequest = serde_json::from_str(&message).unwrap();
-                    info!("Login: {:?}", login_data);
-                    if let Err(error) = self.handle_login(&login_data).await {
-                        match error {
+        let message_type = Self::parse_message_type(message)?;
+
+        match message_type {
+            TcpMessageType::Update => {
+                debug!("Update: {}", message);
+            }
+            TcpMessageType::Ping => {
+                debug!("Ping: {}", message);
+            }
+            TcpMessageType::Sync => {
+                debug!("Sync: {}", message);
+            }
+            TcpMessageType::RadioUpdate => {
+                let radio_data: RadioUpdateRequest =
+                    serde_json::from_str(message).map_err(|e| {
+                        ServerError::ProtocolError(format!("Invalid radio update format: {}", e))
+                    })?;
+
+                let radio_info = radio_data.client.radio_information.ok_or_else(|| {
+                    ServerError::ProtocolError("Missing radio information".to_string())
+                })?;
+
+                self.client_state
+                    .write()
+                    .await
+                    .update_radio_information(&self.addr, radio_info)
+                    .map_err(|e| {
+                        ServerError::StateError(format!("Failed to update radio info: {}", e))
+                    })?;
+
+                info!("Updated Radio information for: {}", self.addr);
+            }
+            TcpMessageType::ServerSettings => {
+                debug!("ServerSettings: {}", message);
+            }
+            TcpMessageType::ClientDisconnect => {
+                self.handle_disconnect().await?;
+            }
+            TcpMessageType::Login => {
+                let login_data: LoginRequest = serde_json::from_str(message).map_err(|e| {
+                    ServerError::ProtocolError(format!("Invalid login request format: {}", e))
+                })?;
+
+                info!("Login attempt from client: {}", login_data.client.name);
+
+                match self.handle_login(&login_data).await {
+                    Ok(_) => {
+                        info!("Login successful for client: {}", login_data.client.name);
+                    }
+                    Err(error) => {
+                        let response = match error {
                             LoginError::VersionMismatch => {
-                                debug!("Version Mismatch: {}", login_data.version);
+                                debug!("Version mismatch: client version {}", login_data.version);
                                 let message = LoginVersionMismatch {
                                     version: VERSION.to_owned(),
                                     message_type: TcpMessageType::VersionMismatch as i32,
                                 };
-                                self.send_message(&message).await.unwrap();
+                                let result = self.send_message(&message).await;
+                                if let Err(e) = result {
+                                    error!("Failed to send version mismatch response: {}", e);
+                                    return Err(ServerError::NetworkError(std::io::Error::new(
+                                        std::io::ErrorKind::Other,
+                                        "Failed to send version mismatch response",
+                                    )));
+                                }
                             }
                             LoginError::InvalidPassword => {
-                                debug!("Login Failed: {}", login_data.version);
+                                debug!("Invalid password for client: {}", login_data.client.name);
                                 let message = LoginFailed {
                                     version: VERSION.to_owned(),
                                     message_type: TcpMessageType::LoginFailed as i32,
                                     message: "Invalid Password".to_owned(),
                                 };
-                                self.send_message(&message).await.unwrap();
+                                let result = self.send_message(&message).await;
+                                if let Err(e) = result {
+                                    error!("Failed to send login response: {}", e);
+                                    return Err(ServerError::NetworkError(std::io::Error::new(
+                                        std::io::ErrorKind::Other,
+                                        "Failed to send login response",
+                                    )));
+                                }
                             }
-                        }
+                        };
+
+                        self.send_message(&response).await.map_err(|e| {
+                            ServerError::NetworkError(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                format!("Failed to send login response: {}", e),
+                            ))
+                        })?;
+
+                        return Err(ServerError::ProtocolError(format!(
+                            "Login failed: {}",
+                            match error {
+                                LoginError::VersionMismatch => "version mismatch",
+                                LoginError::InvalidPassword => "invalid password",
+                            }
+                        )));
                     }
-                }
-                TcpMessageType::VersionMismatch => {
-                    debug!("VersionMismatch: {}", message); // This should not happen (Client only code)
-                }
-                TcpMessageType::LoginSuccess => {
-                    debug!("Login Success: {}", message); // This should not happen (Client only code)
-                }
-                TcpMessageType::LoginFailed => {
-                    debug!("Login Failed: {}", message); // This should not happen (Client only code)
-                }
+                };
             }
-        } else {
-            error!("Unknown message type: {}", message);
-            return Err(ServerError::ProtocolError(format!("Unknown message type: {}", message).to_owned()));
+            TcpMessageType::VersionMismatch
+            | TcpMessageType::LoginSuccess
+            | TcpMessageType::LoginFailed => {
+                debug!(
+                    "Received client-only message type {:?} from {}: {}",
+                    message_type, self.addr, message
+                );
+                return Err(ServerError::ProtocolError(format!(
+                    "Received client-only message type from {}",
+                    self.addr
+                )));
+            }
         }
         Ok(())
     }
@@ -216,41 +324,34 @@ impl ClientConnection {
     }
 
     async fn handle_disconnect(&mut self) -> Result<(), ServerError> {
-        // Remove client from shared state
         self.client_state.write().await.remove_client(&self.addr);
-        // Shutdown the stream
-        self.stream.shutdown().await?;
-        // Log disconnection
+        if let Err(e) = self.stream.shutdown().await {
+            return Err(ServerError::NetworkError(e));
+        }
         info!("Client {} disconnected", self.addr);
         Ok(())
     }
 
-    fn parse_message_type(message: &str) -> Option<&TcpMessageType> {
-        let message: HashMap<String, Value> = match serde_json::from_str(message) {
-            Ok(msg) => msg,
-            Err(e) => {
-                eprintln!("Failed to parse JSON: {}", e);
-                return None;
-            }
-        };
-        let message_type = match message.get("MsgType").and_then(|v| match v {
-            Value::Number(s) => Some(format!("{}", s.as_u64().unwrap())),
-            _ => None,
-        }) {
-            Some(mt) => mt,
-            None => {
-                eprintln!("Invalid message type");
-                return None;
-            }
-        };
-        let message_type = match MESSAGE_TYPE_PARSE.get(&message_type.as_str()) {
-            Some(mt) => mt,
-            None => {
-                eprintln!("Unknown message type");
-                return None;
-            }
-        };
-        Some(message_type)
+    fn parse_message_type(message: &str) -> Result<TcpMessageType, ServerError> {
+        let message: HashMap<String, Value> = serde_json::from_str(message)
+            .map_err(|e| ServerError::ProtocolError(format!("Invalid JSON: {}", e)))?;
+
+        let message_type = message
+            .get("MsgType")
+            .and_then(|v| match v {
+                Value::Number(s) => s.as_u64().map(|n| n.to_string()),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                ServerError::ProtocolError("Missing or invalid message type".to_string())
+            })?;
+
+        MESSAGE_TYPE_PARSE
+            .get(message_type.as_str())
+            .cloned()
+            .ok_or_else(|| {
+                ServerError::ProtocolError(format!("Unknown message type: {}", message_type))
+            })
     }
 }
 

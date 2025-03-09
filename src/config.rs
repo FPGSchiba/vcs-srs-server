@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+
+use crate::error::ConfigError;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ServerOptions {
@@ -130,16 +131,44 @@ impl Default for AwacsSettings {
 }
 
 impl ServerOptions {
-    pub fn to_config_file(&self, filename: &str) -> std::io::Result<()> {
-        let config = toml::to_string(self).unwrap();
-        std::fs::write(filename, config)
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        // Validate server port
+        if self.server.server_port == 0 {
+            return Err(ConfigError::ValidationError(
+                "Server port cannot be 0".to_string(),
+            ));
+        }
+
+        // Validate frequencies
+        if self.general.test_frequencies.is_empty() {
+            return Err(ConfigError::ValidationError(
+                "Test frequencies cannot be empty".to_string(),
+            ));
+        }
+
+        // Validate global lobby frequency
+        if self.general.global_lobby_freq <= 0.0 {
+            return Err(ConfigError::ValidationError(
+                "Global lobby frequency must be positive".to_string(),
+            ));
+        }
+
+        Ok(())
     }
 
-    pub fn from_config_file(filename: &str) -> std::io::Result<Self> {
-        if !Path::new(filename).exists() {
-            Self::default().to_config_file(filename)?; // Create default config file
+    pub fn to_config_file(&self, filename: &str) -> Result<(), ConfigError> {
+        self.validate()?;
+        let config_str = toml::to_string(self)?; // This will now convert toml::ser::Error to ConfigError::TomlSerError
+        std::fs::write(filename, config_str)?;
+        Ok(())
+    }
+
+    pub fn from_config_file(filename: &str) -> Result<Self, ConfigError> {
+        if !std::path::Path::new(filename).exists() {
+            Self::default().to_config_file(filename)?;
         }
-        let config = std::fs::read_to_string(filename)?;
-        toml::from_str(&config).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+        let config_str = std::fs::read_to_string(filename)?;
+        let config = toml::from_str(&config_str)?; // This will convert toml::de::Error to ConfigError::TomlDeError
+        Ok(config)
     }
 }
