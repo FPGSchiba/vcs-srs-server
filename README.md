@@ -1,5 +1,7 @@
 # vngd-srs-server
 
+[![codecov](https://codecov.io/gh/FPGSchiba/vngd-srs-server/graph/badge.svg?token=nNZfrid7u7)](https://codecov.io/gh/FPGSchiba/vngd-srs-server)
+
 Not so secret project anymore. This is a project to create a server for the DCS SRS (Simple Radio Standalone) software.
 
 ## Table of Contents
