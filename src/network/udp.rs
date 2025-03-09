@@ -6,7 +6,7 @@ use crate::state::{AdminState, ClientState, OptionsState};
 use log::{error, info};
 use tokio::{
     net::UdpSocket,
-    sync::{broadcast, RwLock},
+    sync::RwLock,
 };
 
 pub struct UdpHandler {
