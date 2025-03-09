@@ -10,7 +10,7 @@ use udp::UdpHandler;
 use crate::error::VoiceServerError;
 use crate::event::{ServerToUiEvent, UiToServerEvent};
 use crate::state::{AdminState, ClientState, OptionsState};
-use crate::{error::ServerError, network::types::ConnectionEvent};
+use crate::network::types::ConnectionEvent;
 
 pub mod tcp;
 pub mod types;
@@ -249,13 +249,7 @@ async fn handle_ui_event(
     event_tx: &broadcast::Sender<ServerToUiEvent>,
 ) -> Result<(), VoiceServerError> {
     match event {
-        _ => {
-            error!("UI event not implemented");
-            // Return proper error instead of ignoring
-            Err(VoiceServerError::EventError(
-                "Unimplemented UI event".to_string(),
-            ))
-        }
+        
     }
 }
 

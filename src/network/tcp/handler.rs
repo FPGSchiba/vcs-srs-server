@@ -2,7 +2,7 @@ use log::{error, info};
 use std::sync::Arc;
 use tokio::{
     net::TcpListener,
-    sync::{broadcast, mpsc, RwLock},
+    sync::{mpsc, RwLock},
 };
 
 use crate::state::{AdminState, ClientState, OptionsState};

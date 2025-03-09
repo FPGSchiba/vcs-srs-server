@@ -1,7 +1,5 @@
 use std::net::SocketAddr;
-use log::debug;
-use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Client {
