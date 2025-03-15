@@ -4,10 +4,7 @@ use std::sync::Arc;
 use crate::error::ServerError;
 use crate::state::{AdminState, ClientState, OptionsState};
 use log::{error, info};
-use tokio::{
-    net::UdpSocket,
-    sync::RwLock,
-};
+use tokio::{net::UdpSocket, sync::RwLock};
 
 pub struct UdpHandler {
     socket: UdpSocket,

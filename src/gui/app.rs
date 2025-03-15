@@ -4,14 +4,17 @@ use std::cmp::PartialEq;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, RwLock};
 
-use crate::event::{ServerToUiEvent, UiToServerEvent};
+use crate::event::{ControlToUiEvent, UiToControlEvent, UiToVoiceEvent, VoiceToUiEvent};
 use crate::state::{AdminState, ClientState, OptionsState};
 
 pub struct ServerGui {
     client_state: Arc<RwLock<ClientState>>,
     options_state: Arc<RwLock<OptionsState>>,
     admin_state: Arc<RwLock<AdminState>>,
-    ui_tx: mpsc::Sender<UiToServerEvent>,
+    ui_control_tx: mpsc::Sender<UiToControlEvent>,
+    ui_voice_tx: mpsc::Sender<UiToVoiceEvent>,
+    control_ui_rx: broadcast::Receiver<ControlToUiEvent>,
+    voice_ui_rx: broadcast::Receiver<VoiceToUiEvent>,
     server_running: bool,
     dock_state: DockState<ServerTab>,
     counter: usize,
@@ -128,8 +131,10 @@ impl ServerGui {
         client_state: Arc<RwLock<ClientState>>,
         options_state: Arc<RwLock<OptionsState>>,
         admin_state: Arc<RwLock<AdminState>>,
-        ui_tx: mpsc::Sender<UiToServerEvent>,
-        server_rx: broadcast::Receiver<ServerToUiEvent>,
+        ui_voice_tx: mpsc::Sender<UiToVoiceEvent>,
+        ui_control_tx: mpsc::Sender<UiToControlEvent>,
+        control_ui_rx: broadcast::Receiver<ControlToUiEvent>,
+        voice_ui_rx: broadcast::Receiver<VoiceToUiEvent>,
     ) -> Self {
         let mut tree = DockState::new(vec![ServerTab::setting(SurfaceIndex::main(), NodeIndex(1))]);
 
@@ -150,7 +155,10 @@ impl ServerGui {
             client_state,
             options_state,
             admin_state,
-            ui_tx,
+            ui_voice_tx,
+            ui_control_tx,
+            control_ui_rx,
+            voice_ui_rx,
             server_running: true,
             dock_state: tree,
             counter: 3,
