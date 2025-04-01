@@ -3,11 +3,13 @@ use log::error;
 use log::info;
 use std::path::Path;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
+use vngd_srs_server::control::start_control;
+use vngd_srs_server::state::client;
 use vngd_srs_server::state::{AdminState, ClientState, OptionsState};
 use vngd_srs_server::{
     config::ServerOptions, error::ServerError, event::EventBus, gui::app::ServerGui,
-    network::VoiceServer,
+    voice::VoiceServer,
 };
 
 #[tokio::main]
@@ -30,8 +32,9 @@ async fn main() -> Result<(), ServerError> {
         client_state.clone(),
         option_state.clone(),
         admin_state.clone(),
-        event_bus.server_tx.clone(),
-        event_bus.ui_rx,
+        event_bus.voice_ui_tx.clone(),
+        event_bus.ui_voice_rx,
+        event_bus.control_voice_rx,
     );
 
     // Spawn server task
@@ -41,12 +44,34 @@ async fn main() -> Result<(), ServerError> {
         }
     });
 
+    let control_handle = {
+        let client_state = client_state.clone();
+        let option_state = option_state.clone();
+        let admin_state = admin_state.clone();
+        tokio::spawn(async move {
+            if let Err(e) = start_control(
+                client_state,
+                option_state,
+                admin_state,
+                Arc::new(Mutex::new(event_bus.ui_control_rx)),
+                event_bus.control_voice_tx.clone(),
+                event_bus.control_ui_tx.clone(),
+            )
+            .await
+            {
+                error!("Control error: {}", e);
+            }
+        })
+    };
+
     let gui = ServerGui::new(
         client_state,
         option_state,
         admin_state,
-        event_bus.ui_tx,
-        event_bus.server_rx.resubscribe(),
+        event_bus.ui_voice_tx.clone(),
+        event_bus.ui_control_tx.clone(),
+        event_bus.control_ui_rx.resubscribe(),
+        event_bus.voice_ui_rx.resubscribe(),
     );
 
     let native_options = eframe::NativeOptions::default();
@@ -61,6 +86,7 @@ async fn main() -> Result<(), ServerError> {
 
     // Cleanup
     server_handle.abort();
+    control_handle.abort();
     Ok(())
 }
 

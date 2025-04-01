@@ -1,11 +1,12 @@
-pub mod api;
 pub mod config;
+pub mod control;
 pub mod error;
 pub mod event;
 pub mod gui;
 pub mod network;
 pub mod state;
 pub mod utils;
+pub mod voice;
 
 pub enum ControlMessage {
     Start,

@@ -43,6 +43,20 @@ pub enum VoiceServerError {
     HandlerError(String),
 }
 
+#[derive(Error, Debug)]
+pub enum ControlError {
+    #[error("Network error: {0}")]
+    NetworkError(#[from] std::io::Error),
+    #[error("Server initialization error: {0}")]
+    InitError(String),
+    #[error("Event handling error: {0}")]
+    EventError(String),
+    #[error("State error: {0}")]
+    StateError(String),
+    #[error("Handler error: {0}")]
+    HandlerError(String),
+}
+
 #[derive(Debug, Error)]
 pub enum LoginError {
     #[error("Version mismatch")]
