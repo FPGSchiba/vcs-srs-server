@@ -1,5 +1,7 @@
 pub mod models;
 mod routes;
+mod socket;
+
 use crate::{
     error::ControlError,
     event::{ControlToUiEvent, ControlToVoiceEvent, UiToControlEvent},
@@ -31,13 +33,17 @@ pub async fn start_control(
         .with_state(voice_tx)
         .build_layer();
 
+    // Register the namespace and connection handler
+    io.ns("/", socket::on_connect);
+
     let app = Router::new()
         .nest("/api/v1", routes::get_router())
         .layer(layer);
 
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .map_err(|_| ControlError::InitError("Failed to open API listener.".to_string()))?;
+    let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
+        error!("Failed to bind TCP listener: {:?}", e);
+        ControlError::InitError("Failed to open API listener.".to_string())
+    })?;
 
     spawn_ui_event_handler(ui_rx).await?;
 
@@ -46,10 +52,14 @@ pub async fn start_control(
         listener.local_addr().unwrap()
     );
 
-    axum::serve(listener, app).await.unwrap();
+    // Start the server with error handling
+    if let Err(e) = axum::serve(listener, app).await {
+        error!("Server error: {:?}", e);
+        return Err(ControlError::InitError(format!("Server error: {:?}", e)));
+    }
+
     Ok(())
 }
-
 async fn spawn_ui_event_handler(
     ui_rx: Arc<Mutex<mpsc::Receiver<UiToControlEvent>>>,
 ) -> Result<(), ControlError> {

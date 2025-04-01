@@ -15,9 +15,9 @@ env_logger = { version = "0.11.7", default-features = false, features = [
 ] }
 egui = { version = "0.31.1" }
 egui_dock = { version = "0.16.0" }
-image = { version = "0.25.5" }
+image = { version = "0.25.6" }
 log4rs = { version = "1.3.0" }
-log = { version = "0.4.26" }
+log = { version = "0.4.27" }
 sha2 = { version = "0.10.8" }
 tokio = { version = "1.44.1", features = ["full"] }
 thiserror = { version = "2.0.12" }
@@ -27,5 +27,5 @@ uuid = { version = "1.16.0", features = [
     "fast-rng",
     "macro-diagnostics",
 ] }
-axum = { version = "0.8.1" }
-socketioxide = { version = "0.16.1", features = ["state"] }
+axum = { version = "0.8.3" }
+socketioxide = { version = "0.16.2", features = ["state", "v4"] }
