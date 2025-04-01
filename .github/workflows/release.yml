@@ -1,8 +1,9 @@
 name: Release Version
 
 on:
-  pull_request:
-    types: [closed]
+  push:
+    branches:
+      - master
 
 jobs:
   changelog:
@@ -11,7 +12,7 @@ jobs:
       pull-requests: write
     name: Changelog
     runs-on: ubuntu-latest
-    if: github.event.pull_request.merged
+    if: github.event.pull_request.merged == true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -30,7 +31,7 @@ jobs:
   release:
     name: Create Release
     runs-on: ubuntu-latest
-    if: github.event.pull_request.merged
+    if: github.event.pull_request.merged == true
     needs: changelog
     steps:
       - name: Checkout
@@ -64,7 +65,7 @@ jobs:
           - os: macos-latest
             artifact_name: vngd-srs-server
             asset_name: vngd-srs-server-macos-amd64
-    if: github.event.pull_request.merged
+    if: github.event.pull_request.merged == true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
