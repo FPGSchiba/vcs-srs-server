@@ -8,6 +8,9 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
     steps:
+      - name: Not implemented
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
