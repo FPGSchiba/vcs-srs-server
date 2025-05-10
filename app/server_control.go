@@ -7,6 +7,7 @@ import (
 	"go.uber.org/zap"
 	"net/http"
 	"time"
+	"vcs-server/control"
 	"vcs-server/voice"
 )
 
@@ -160,4 +161,71 @@ func (a *App) stopVoiceServer() string {
 	a.AdminState.Unlock()
 
 	return "Voice server stopped"
+}
+
+func (a *App) startControlServer() string {
+	a.AdminState.Lock()
+	if a.AdminState.ControlStatus.IsRunning {
+		a.AdminState.Unlock()
+		return "Control server is already running"
+	}
+	a.AdminState.Unlock()
+
+	// Create stop channel
+	stopChan := make(chan struct{})
+	a.AdminState.Lock()
+	a.AdminState.StopSignals["control"] = stopChan
+	a.AdminState.Unlock()
+
+	controlServer := control.NewServer(a.ServerState, a.logger)
+	a.controlServer = controlServer
+
+	if err := controlServer.Start(":9001", stopChan); err != nil {
+		a.logger.Error("Failed to start control server", zap.Error(err))
+		a.AdminState.Lock()
+		a.AdminState.ControlStatus.Error = err.Error()
+		a.AdminState.ControlStatus.IsRunning = false
+		a.AdminState.Unlock()
+		return "Failed to start control server: " + err.Error()
+	}
+
+	a.AdminState.Lock()
+	a.AdminState.ControlStatus.IsRunning = true
+	a.AdminState.ControlStatus.Error = ""
+	a.AdminState.Unlock()
+
+	return "Control server started"
+}
+
+func (a *App) stopControlServer() string {
+	a.AdminState.Lock()
+	if !a.AdminState.ControlStatus.IsRunning {
+		a.AdminState.Unlock()
+		return "Control server is not running"
+	}
+
+	// Signal stop
+	if stopChan, exists := a.AdminState.StopSignals["control"]; exists {
+		close(stopChan)
+		delete(a.AdminState.StopSignals, "control")
+	}
+	a.AdminState.Unlock()
+
+	if a.controlServer != nil {
+		err := a.controlServer.Stop()
+		if err != nil {
+			a.logger.Error("Failed to stop control server", zap.Error(err))
+			a.AdminState.Lock()
+			a.AdminState.ControlStatus.Error = err.Error()
+			a.AdminState.Unlock()
+			return "Error stopping Control server: " + err.Error()
+		}
+	}
+
+	a.AdminState.Lock()
+	a.AdminState.ControlStatus.IsRunning = false
+	a.AdminState.ControlStatus.Error = ""
+	a.AdminState.Unlock()
+
+	return "Control server stopped"
 }

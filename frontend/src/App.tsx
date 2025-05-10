@@ -1,7 +1,7 @@
 import {useState} from 'react';
 import logo from './assets/images/logo-universal.png';
 import './App.css';
-import {Greet} from "../wailsjs/go/main/App";
+import {Greet} from "../wailsjs/go/app/App";
 import ServerControls from "./components/ServerControl";
 
 function App() {

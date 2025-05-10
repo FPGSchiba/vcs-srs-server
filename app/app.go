@@ -2,8 +2,10 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"go.uber.org/zap"
 	"net/http"
+	"vcs-server/control"
 	"vcs-server/state"
 	"vcs-server/utils"
 	"vcs-server/voice"
@@ -18,6 +20,7 @@ type App struct {
 	logger        *zap.Logger
 	httpServer    *http.Server
 	voiceServer   *voice.Server
+	controlServer *control.Server // Add this
 }
 
 // NewApp creates a new App application struct
@@ -65,38 +68,38 @@ func (a *App) Greet(name string) string {
 
 // StartServer starts the HTTP and Voice servers
 func (a *App) StartServer() string {
-	// Check status without holding the lock for the entire operation
-	a.AdminState.RLock()
-	if a.AdminState.HTTPStatus.IsRunning || a.AdminState.VoiceStatus.IsRunning {
-		a.AdminState.RUnlock()
+	a.AdminState.Lock()
+	if a.AdminState.HTTPStatus.IsRunning ||
+		a.AdminState.VoiceStatus.IsRunning ||
+		a.AdminState.ControlStatus.IsRunning {
+		a.AdminState.Unlock()
 		return "One or more servers are already running"
 	}
-	a.AdminState.RUnlock()
+	a.AdminState.Unlock()
 
-	// Start servers without holding the main lock
+	resControl := a.startControlServer()
 	resVoice := a.startVoiceServer()
 	resHTTP := a.startHTTPServer()
 
-	return resHTTP + "\n" + resVoice
+	return fmt.Sprintf("%s\n%s\n%s", resHTTP, resVoice, resControl)
 }
 
 // StopServer starts the HTTP and Voice servers
 func (a *App) StopServer() string {
-	// First check if servers are running
 	a.AdminState.RLock()
-	if !a.AdminState.HTTPStatus.IsRunning && !a.AdminState.VoiceStatus.IsRunning {
+	if !a.AdminState.HTTPStatus.IsRunning &&
+		!a.AdminState.VoiceStatus.IsRunning &&
+		!a.AdminState.ControlStatus.IsRunning {
 		a.AdminState.RUnlock()
-		return "Both servers are not running"
+		return "All servers are already stopped"
 	}
 	a.AdminState.RUnlock()
 
-	// Stop HTTP server first
 	resHTTP := a.stopHTTPServer()
-
-	// Then stop Voice server
 	resVoice := a.stopVoiceServer()
+	resControl := a.stopControlServer()
 
-	return resHTTP + "\n" + resVoice
+	return fmt.Sprintf("%s\n%s\n%s", resHTTP, resVoice, resControl)
 }
 
 // GetServerStatus returns the status of the HTTP and Voice servers
@@ -105,7 +108,8 @@ func (a *App) GetServerStatus() map[string]state.ServiceStatus {
 	defer a.AdminState.RUnlock()
 
 	return map[string]state.ServiceStatus{
-		"http":  a.AdminState.HTTPStatus,
-		"voice": a.AdminState.VoiceStatus,
+		"http":    a.AdminState.HTTPStatus,
+		"voice":   a.AdminState.VoiceStatus,
+		"control": a.AdminState.ControlStatus,
 	}
 }
