@@ -1,0 +1,27 @@
+@use "sass:meta";
+@use "variables.module" as variables;
+
+html {
+  height: 100%;
+}
+
+body {
+  user-select: none;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica,
+  Arial, sans-serif;
+  margin: 0;
+  background-color: variables.$color-background;
+  height: 100%;
+
+  #root {
+    height: 100%;
+
+    #App {
+      height: 100%;
+    }
+  }
+
+  @include meta.load-css('components/header');
+  @include meta.load-css('components/footer');
+  @include meta.load-css('components/server-control');
+}

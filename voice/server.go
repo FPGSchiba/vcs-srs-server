@@ -2,10 +2,10 @@ package voice
 
 import (
 	_ "encoding/binary"
+	"github.com/FPGSchiba/vcs-srs-server/state"
 	"net"
 	"sync"
 	"time"
-	"vcs-server/state"
 
 	"go.uber.org/zap"
 )

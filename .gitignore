@@ -4,3 +4,4 @@ frontend/dist
 log/
 **/wailsjs/go/**
 .idea/
+config.yaml

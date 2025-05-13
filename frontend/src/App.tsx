@@ -1,28 +1,24 @@
-import {useState} from 'react';
-import logo from './assets/images/logo-universal.png';
-import './App.css';
-import {Greet} from "../wailsjs/go/app/App";
 import ServerControls from "./components/ServerControl";
+import { Routes, Route } from "react-router";
+import SettingsPage from "./pages/Settings";
+import CoalitionsPage from "./pages/Coalitions";
+import ClientListPage from "./pages/ClientList";
+import Header from "./components/Header";
+import Footer from "./components/Footer";
+import Navigation from "./components/Navigation";
 
 function App() {
-    const [resultText, setResultText] = useState("Please enter your name below 👇");
-    const [name, setName] = useState('');
-    const updateName = (e: any) => setName(e.target.value);
-    const updateResultText = (result: string) => setResultText(result);
-
-    function greet() {
-        Greet(name).then(updateResultText);
-    }
-
     return (
         <div id="App">
-            <img src={logo} id="logo" alt="logo"/>
-            <div id="result" className="result">{resultText}</div>
-            <div id="input" className="input-box">
-                <input id="name" className="input" onChange={updateName} autoComplete="off" name="input" type="text"/>
-                <button className="btn" onClick={greet}>Greet</button>
-            </div>
+            <Header />
             <ServerControls />
+            <Navigation />
+            <Routes>
+                <Route index element={<SettingsPage />} />
+                <Route path="/coalitions" element={<CoalitionsPage />} />
+                <Route path="/client-list" element={<ClientListPage />} />
+            </Routes>
+            <Footer />
         </div>
     )
 }

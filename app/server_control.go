@@ -3,12 +3,12 @@ package app
 import (
 	"context"
 	"errors"
+	"github.com/FPGSchiba/vcs-srs-server/control"
+	"github.com/FPGSchiba/vcs-srs-server/voice"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 	"net/http"
 	"time"
-	"vcs-server/control"
-	"vcs-server/voice"
 )
 
 func (a *App) startHTTPServer() string {

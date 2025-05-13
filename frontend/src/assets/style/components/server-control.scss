@@ -1,0 +1,101 @@
+@use "../variables.module" as variables;
+
+.control {
+  &.control-container {
+    margin: 30px 60px;
+    padding: 10px 20px;
+    display: flex;
+    flex-direction: column;
+    border-radius: 10px;
+    height: 180px;
+  }
+
+  &.control-general {
+    &.control-general-container {
+      display: flex;
+      flex-direction: row;
+      justify-content: space-between;
+      align-items: center;
+      width: 100%;
+    }
+
+    &.control-general-title {
+      font-weight: bold;
+      color: variables.$color-text-primary;
+      margin-bottom: 10px;
+      flex-grow: 3;
+    }
+  }
+
+
+  &.control-content {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+
+  &.control-items {
+    display: flex;
+    margin-right: 10px;
+  }
+
+  &.control-item {
+    &.control-item-container {
+      display: flex;
+      background-color: variables.$color-background;
+      height: 40px;
+      border-radius: 10px;
+      padding: 3px 10px;
+      margin-right: 10px;
+      text-align: center;
+      align-items: center;
+    }
+
+    &.control-item-title {
+      margin-right: 10px;
+    }
+
+    &.control-item-running {
+      display: inline-flex;
+      margin-left: auto;
+      color: variables.$color-text-black;
+      background-color: variables.$color-success;
+    }
+
+    &.control-item-stopped {
+      display: inline-flex;
+      margin-left: auto;
+      background-color: variables.$color-error;
+    }
+  }
+
+  &.control-button {
+    display: inline-flex;
+    height: 40px;
+
+    &.running {
+      color: variables.$color-text-primary;
+      background-color: variables.$color-error;
+    }
+
+    &.stopped {
+      background-color: variables.$color-success;
+    }
+  }
+
+  &.control-box {
+    &.control-box-mid {
+      display: flex;
+      width: 100%;
+      align-items: center;
+      justify-content: flex-start;
+    }
+  }
+
+  &.control-errors {
+    width: 100%;
+    color: variables.$color-error;
+  }
+}

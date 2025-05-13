@@ -1,0 +1,24 @@
+@use "../variables.module" as variables;
+
+.footer {
+  &.footer-container {
+    display: inline-flex;
+    background-color: variables.$color-background-dark;
+    height: 40px;
+    width: 100%;
+    flex-direction: row;
+    position: fixed;
+    bottom: 0;
+    align-items: center;
+  }
+
+  &.footer-server {
+    margin-left: 20px;
+  }
+
+  &.footer-version {
+    margin-left: auto;
+    margin-right: 20px;
+    color: variables.$color-text-disabled;
+  }
+}

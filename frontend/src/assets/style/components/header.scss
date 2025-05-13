@@ -1,0 +1,56 @@
+@use "sass:meta";
+@use '../variables.module' as variables;
+
+.header {
+  &.header-container {
+    --wails-draggable:drag;
+    display: inline-flex;
+    background-color: variables.$color-background-dark;
+    height: 40px;
+    flex-direction: row;
+    width: 100%;
+  }
+
+  &.header-action {
+    &.header-action-container {
+      display: inline-flex;
+      flex-direction: row;
+      align-items: center;
+      justify-content: flex-end;
+      width: 120px;
+      height: 40px;
+      margin-left: auto;
+      margin-right: 10px;
+    }
+
+    &.header-action-close {
+      width: 40px;
+      height: 40px;
+      color: variables.$color-text-primary
+    }
+
+    &.header-action-minimize {
+      width: 40px;
+      height: 40px;
+      color: variables.$color-text-primary
+    }
+  }
+
+  &.header-icon {
+    &.header-icon-container {
+      display: inline-flex;
+      flex-direction: row;
+      justify-content: center;
+      align-items: center;
+      width: 40px;
+      margin-left: 10px;
+      height: 100%;
+      justify-self: flex-start;
+    }
+
+    &.header-icon-image {
+      width: 35px;
+      height: 35px;
+    }
+  }
+}
