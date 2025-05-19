@@ -16,6 +16,8 @@ jobs:
     steps:
       - name: Not implemented
         run: exit 1
+
+      # TODO: Implement Docker and Binary Build
       
       - name: Checkout
         uses: actions/checkout@v4
