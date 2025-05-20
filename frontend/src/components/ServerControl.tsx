@@ -1,15 +1,25 @@
 import { GetServerStatus, StartServer, StopServer, GetSettings } from '../../wailsjs/go/app/App'
-import { useState, useEffect } from 'react'
+import {useState, useEffect, JSX} from 'react'
 import {Box, Button, Chip, Paper, Typography} from "@mui/material";
-import {ServerStatus, SettingsState} from "../types";
+import {state} from "../../wailsjs/go/models";
+
+interface ServiceStatus {
+    IsRunning: boolean;
+    Error: string;
+}
+
+interface ServerStatus {
+    http: ServiceStatus;
+    voice: ServiceStatus;
+    control: ServiceStatus;
+}
 
 
-
-const ServerControls: React.FC = () => {
+const ServerControls: () => JSX.Element = () => {
     const [status, setStatus] = useState<ServerStatus | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [numClients , setNumClients] = useState(0);
-    const [settings, setSettings] = useState<SettingsState | null>(null);
+    const [settings, setSettings] = useState<state.SettingsState | null>(null);
 
     const fetchStatus = async () => {
         try {
@@ -23,7 +33,7 @@ const ServerControls: React.FC = () => {
     const fetchSettings = async () => {
         try {
             const newSettings = await GetSettings();
-            setSettings(newSettings as SettingsState);
+            setSettings(newSettings as state.SettingsState);
         } catch (error) {
             console.error('Failed to fetch settings:', error);
         }
@@ -72,17 +82,17 @@ const ServerControls: React.FC = () => {
                         <div className="control control-item control-item-container">
                             <span className="control control-item control-item-title">HTTP Server:</span>
                             <Chip className={`control control-item control-item-${status?.http.IsRunning ? 'running' : 'stopped'}`} label={status?.http.IsRunning ? 'Running' : 'Stopped'} />
-                            <Chip className={`control control-item control-general-port`} label={`Port: ${settings?.servers.http.port}`} />
+                            <Chip className={`control control-item control-item-port`} label={`Port: ${settings?.Servers.HTTP.Port}`} />
                         </div>
                         <div className="control control-item control-item-container">
                             <span className="control control-item control-item-title">Voice Server:</span>
                             <Chip className={`control control-item control-item-${status?.voice.IsRunning ? 'running' : 'stopped'}`} label={status?.voice.IsRunning ? 'Running' : 'Stopped'} />
-                            <Chip className={`control control-item control-general-port`} label={`Port: ${settings?.servers.voice.port}`} />
+                            <Chip className={`control control-item control-item-port`} label={`Port: ${settings?.Servers.Voice.Port}`} />
                         </div>
                         <div className="control control-item control-item-container">
                             <span className="control control-item control-item-title">Control Server:</span>
                             <Chip className={`control control-item control-item-${status?.control.IsRunning ? 'running' : 'stopped'}`} label={status?.control.IsRunning ? 'Running' : 'Stopped'} />
-                            <Chip className={`control control-item control-general-port`} label={`Port: ${settings?.servers.control.port}`} />
+                            <Chip className={`control control-item control-item-port`} label={`Port: ${settings?.Servers.Control.Port}`} />
                         </div>
                     </div>
                     <Button

@@ -21,7 +21,12 @@ body {
     }
   }
 
+  // Components
   @include meta.load-css('components/header');
   @include meta.load-css('components/footer');
   @include meta.load-css('components/server-control');
+  @include meta.load-css('components/content-wrapper');
+
+  // Pages
+  @include meta.load-css('pages/settings');
 }

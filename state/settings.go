@@ -8,13 +8,15 @@ import (
 
 type SettingsState struct {
 	sync.RWMutex
-	// State holds the current state of the settings
-	Servers    ServerSettings `yaml:"servers"`
-	Coalitions []Coalition    `yaml:"coalitions"`
+	// SettingsState holds the current state of the settings
+	Servers     ServerSettings    `yaml:"servers"`
+	Coalitions  []Coalition       `yaml:"coalitions"`
+	Frequencies FrequencySettings `yaml:"frequencies"`
+	General     GeneralSettings   `yaml:"general"`
+	file        string            `yaml:"-"`
 }
 
 type ServerSettings struct {
-	sync.RWMutex
 	// ServerSettings holds the current settings of the server
 	HTTP    ServerSetting `yaml:"http"`
 	Voice   ServerSetting `yaml:"voice"`
@@ -22,18 +24,27 @@ type ServerSettings struct {
 }
 
 type ServerSetting struct {
-	sync.RWMutex
 	Host string `yaml:"host"`
 	Port int    `yaml:"port"`
 }
 
 type Coalition struct {
-	sync.RWMutex
 	// The Coalition holds the current settings of the coalition
 	Name        string `yaml:"name"`
 	Description string `yaml:"description"`
 	Color       string `yaml:"color"`
 	Password    string `yaml:"password"`
+}
+
+type FrequencySettings struct {
+	// FrequencySettings holds the current settings of the frequency
+	TestFrequencies   []float64 `yaml:"testFrequencies"`
+	GlobalFrequencies []float64 `yaml:"globalFrequencies"`
+}
+
+type GeneralSettings struct {
+	// GeneralSettings holds the current settings of the general settings
+	MaxRadiosPerUser int `yaml:"maxRadiosPerUser"`
 }
 
 func GetSettingsState(file string) (*SettingsState, error) {
@@ -46,6 +57,7 @@ func GetSettingsState(file string) (*SettingsState, error) {
 			const defaultPort = 5002
 
 			settings := &SettingsState{
+				file: file,
 				Servers: ServerSettings{
 					HTTP: ServerSetting{
 						Host: defaultHost,
@@ -61,7 +73,7 @@ func GetSettingsState(file string) (*SettingsState, error) {
 					},
 				},
 			}
-			err = settings.Save(file)
+			err = settings.Save()
 			if err != nil {
 				return settings, err
 			}
@@ -74,18 +86,19 @@ func GetSettingsState(file string) (*SettingsState, error) {
 	if err != nil {
 		return nil, err
 	}
+	settings.file = file
 	// Return the settings
 	return settings, nil
 }
 
-func (settings *SettingsState) Save(file string) error {
+func (settings *SettingsState) Save() error {
 	// Save the settings to the file
 	yamlData, err := yaml.Marshal(settings)
 	if err != nil {
 		return err
 	}
 
-	err = os.WriteFile(file, yamlData, 0644)
+	err = os.WriteFile(settings.file, yamlData, 0644)
 	if err != nil {
 		return err
 	}

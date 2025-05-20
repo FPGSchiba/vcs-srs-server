@@ -13,3 +13,11 @@ coalitions:
     description: Coalition 1
     color: #FF0000
     password: password1
+frequencies:
+  testFrequencies:
+    - 247.2
+    - 120.3
+  globalFrequencies:
+    - 248.22
+general:
+  maxRadiosPerUser: 20
