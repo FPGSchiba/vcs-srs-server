@@ -3,13 +3,16 @@ package app
 import (
 	"context"
 	"fmt"
+	"github.com/FPGSchiba/vcs-srs-server/control"
+	"github.com/FPGSchiba/vcs-srs-server/state"
+	"github.com/FPGSchiba/vcs-srs-server/voice"
+	"github.com/lxn/win"
 	"go.uber.org/zap"
 	"net/http"
-	"vcs-server/control"
-	"vcs-server/state"
-	"vcs-server/utils"
-	"vcs-server/voice"
+	"syscall"
 )
+
+const Version = "v0.1.0"
 
 // App struct
 type App struct {
@@ -57,13 +60,8 @@ func NewApp(logger *zap.Logger) *App {
 // so we can call the runtime methods
 func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
-}
-
-// TODO: Delete this function
-func (a *App) Greet(name string) string {
-	logger := utils.GetLogger()
-	logger.Info("Greet called", zap.String("name", name))
-	return "Hello " + name
+	hwnd := win.FindWindow(nil, syscall.StringToUTF16Ptr("vcs-server"))
+	win.SetWindowLong(hwnd, win.GWL_EXSTYLE, win.GetWindowLong(hwnd, win.GWL_EXSTYLE)|win.WS_EX_LAYERED)
 }
 
 // StartServer starts the HTTP and Voice servers
@@ -112,4 +110,8 @@ func (a *App) GetServerStatus() map[string]state.ServiceStatus {
 		"voice":   a.AdminState.VoiceStatus,
 		"control": a.AdminState.ControlStatus,
 	}
+}
+
+func (a *App) GetServerVersion() string {
+	return Version
 }

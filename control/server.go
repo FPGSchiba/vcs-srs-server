@@ -3,13 +3,13 @@ package control
 import (
 	"context"
 	"fmt"
+	"github.com/FPGSchiba/vcs-srs-server/state"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"net"
 	"sync"
-	"vcs-server/state"
 )
 
 type Server struct {
