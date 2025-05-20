@@ -1,23 +1,15 @@
-import { GetServerStatus, StartServer, StopServer } from '../../wailsjs/go/app/App'
+import { GetServerStatus, StartServer, StopServer, GetSettings } from '../../wailsjs/go/app/App'
 import { useState, useEffect } from 'react'
 import {Box, Button, Chip, Paper, Typography} from "@mui/material";
+import {ServerStatus, SettingsState} from "../types";
 
-interface ServiceStatus {
-    IsRunning: boolean;
-    Error: string;
-}
 
-interface ServerStatus {
-    http: ServiceStatus;
-    voice: ServiceStatus;
-    control: ServiceStatus; // Add control
-}
 
 const ServerControls: React.FC = () => {
     const [status, setStatus] = useState<ServerStatus | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [numClients , setNumClients] = useState(0);
-    const [port, setPort] = useState(5002);
+    const [settings, setSettings] = useState<SettingsState | null>(null);
 
     const fetchStatus = async () => {
         try {
@@ -28,9 +20,21 @@ const ServerControls: React.FC = () => {
         }
     };
 
+    const fetchSettings = async () => {
+        try {
+            const newSettings = await GetSettings();
+            setSettings(newSettings as SettingsState);
+        } catch (error) {
+            console.error('Failed to fetch settings:', error);
+        }
+    }
+
     useEffect(() => {
-        fetchStatus();
-        const interval = setInterval(fetchStatus, 3000);
+        const fetchAll = async () => {
+            await Promise.all([fetchStatus(), fetchSettings()]);
+        };
+        fetchAll();
+        const interval = setInterval(fetchAll, 3000);
         return () => clearInterval(interval);
     }, []);
 
@@ -58,7 +62,6 @@ const ServerControls: React.FC = () => {
             <div className="control control-general control-general-container">
                 <Typography className="control control-general control-general-title" variant={"h4"}>Server Status</Typography>
                 <div className="control control-general control-general-items">
-                    <Chip className={`control control-general control-general-item`} label={`Port: ${port}`} />
                     <Chip className={`control control-general control-general-item`} label={`Clients: ${numClients}`} />
                 </div>
 
@@ -69,14 +72,17 @@ const ServerControls: React.FC = () => {
                         <div className="control control-item control-item-container">
                             <span className="control control-item control-item-title">HTTP Server:</span>
                             <Chip className={`control control-item control-item-${status?.http.IsRunning ? 'running' : 'stopped'}`} label={status?.http.IsRunning ? 'Running' : 'Stopped'} />
+                            <Chip className={`control control-item control-general-port`} label={`Port: ${settings?.servers.http.port}`} />
                         </div>
                         <div className="control control-item control-item-container">
                             <span className="control control-item control-item-title">Voice Server:</span>
                             <Chip className={`control control-item control-item-${status?.voice.IsRunning ? 'running' : 'stopped'}`} label={status?.voice.IsRunning ? 'Running' : 'Stopped'} />
+                            <Chip className={`control control-item control-general-port`} label={`Port: ${settings?.servers.voice.port}`} />
                         </div>
                         <div className="control control-item control-item-container">
                             <span className="control control-item control-item-title">Control Server:</span>
                             <Chip className={`control control-item control-item-${status?.control.IsRunning ? 'running' : 'stopped'}`} label={status?.control.IsRunning ? 'Running' : 'Stopped'} />
+                            <Chip className={`control control-item control-general-port`} label={`Port: ${settings?.servers.control.port}`} />
                         </div>
                     </div>
                     <Button

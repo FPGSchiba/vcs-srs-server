@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"flag"
 	"github.com/FPGSchiba/vcs-srs-server/app"
 	"github.com/FPGSchiba/vcs-srs-server/utils"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
@@ -24,8 +25,13 @@ func main() {
 			println(err.Error())
 		}
 	}(logger)
+
+	var configFilepath string
+	flag.StringVar(&configFilepath, "config", "config.yaml", "The Path to the config file")
+	flag.Parse()
+
 	// Create an instance of the app structure
-	gui := app.NewApp(logger)
+	gui := app.NewApp(logger, configFilepath)
 
 	// Create application with options
 	err := wails.Run(&options.App{

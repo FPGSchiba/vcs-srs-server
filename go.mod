@@ -1,4 +1,4 @@
-module vcs-server
+module github.com/FPGSchiba/vcs-srs-server
 
 go 1.23.0
 
@@ -6,10 +6,13 @@ toolchain go1.23.4
 
 require (
 	github.com/gin-gonic/gin v1.10.0
+	github.com/lxn/win v0.0.0-20210218163916-a377121e959e
 	github.com/wailsapp/wails/v2 v2.10.1
 	go.uber.org/zap v1.27.0
 	google.golang.org/grpc v1.72.1
+	google.golang.org/protobuf v1.36.6
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -59,8 +62,6 @@ require (
 	golang.org/x/sys v0.33.0 // indirect
 	golang.org/x/text v0.25.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250218202821-56aae31c358a // indirect
-	google.golang.org/protobuf v1.36.6 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 // replace github.com/wailsapp/wails/v2 v2.10.1 => C:\Users\Jann\go\pkg\mod

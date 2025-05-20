@@ -1,0 +1,15 @@
+servers:
+  http:
+    host: 0.0.0.0
+    port: 80
+  control:
+    host: 0.0.0.0
+    port: 5002
+  voice:
+    host: 0.0.0.0
+    port: 5002
+coalitions:
+  - name: coalition1
+    description: Coalition 1
+    color: #FF0000
+    password: password1

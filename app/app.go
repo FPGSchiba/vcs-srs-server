@@ -27,13 +27,15 @@ type App struct {
 }
 
 // NewApp creates a new App application struct
-func NewApp(logger *zap.Logger) *App {
+func NewApp(logger *zap.Logger, configFilePath string) *App {
 	serverState := &state.ServerState{
 		Clients: make(map[string]*state.ClientState),
 	}
 
-	settingsState := &state.SettingsState{
-		// Initialize settings state if needed
+	settingsState, err := state.GetSettingsState(configFilePath)
+	if err != nil {
+		logger.Error("Failed to load settings", zap.Error(err))
+		panic(err) // Without settings, we can't run
 	}
 
 	adminState := &state.AdminState{
