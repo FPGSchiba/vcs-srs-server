@@ -4,6 +4,8 @@ import { GetSettings, SaveGeneralSettings, SaveServerSettings } from "../../wail
 import { useForm, Controller } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import {state} from "../../wailsjs/go/models";
+import {EventsOn} from "../../wailsjs/runtime";
 
 const settingsSchema = z.object({
     General: z.object({
@@ -78,20 +80,42 @@ function SettingsPage() {
         }
     };
 
+    const handleSettingsChange = async (settings: state.SettingsState) => {
+        reset({
+            General: {
+                MaxRadiosPerUser: Number(settings.General.MaxRadiosPerUser) || 1,
+            },
+            Servers: {
+                HTTP: {
+                    Port: Number(settings.Servers.HTTP.Port) || 80,
+                    Host: settings.Servers.HTTP.Host ?? "",
+                },
+                Voice: {
+                    Port: Number(settings.Servers.Voice.Port) || 5002,
+                    Host: settings.Servers.Voice.Host ?? "",
+                },
+                Control: {
+                    Port: Number(settings.Servers.Control.Port) || 5002,
+                    Host: settings.Servers.Control.Host ?? "",
+                },
+            },
+        })
+    }
+
+    EventsOn("settings/changed", handleSettingsChange);
+
     useEffect(() => {
         fetchSettings();
-        const interval = setInterval(fetchSettings, 3000);
-        return () => clearInterval(interval);
     }, []);
 
     return (
         <Paper className="settings settings-paper">
-            <form onSubmit={handleSubmit(onSubmit)} style={{ height: "100%" }}>
+            <form onSubmit={handleSubmit(onSubmit)} className="settings settings-form">
                 <Box className="settings settings-content">
                     <Box className="settings settings-general settings-general-wrapper">
                         <Typography className="settings settings-general settings-general-title" variant="h4">General</Typography>
                         <FormControl className="settings settings-general settings-general-control" component="fieldset" >
-                            <FormLabel className="settings settings-general settings-general-label" id="demo-simple-select-label">Max Number of Radios per User</FormLabel>
+                            <FormLabel className="settings settings-general settings-general-label">Max Number of Radios per User</FormLabel>
                             <Controller
                                 name="General.MaxRadiosPerUser"
                                 control={control}
@@ -123,6 +147,7 @@ function SettingsPage() {
                                             variant="outlined"
                                             error={!!fieldState.error}
                                             helperText={fieldState.error?.message}
+                                            onChange={e => field.onChange(e.target.value === "" ? "" : Number(e.target.value))}
                                         />
                                     )}
                                 />
@@ -157,6 +182,7 @@ function SettingsPage() {
                                             variant="outlined"
                                             error={!!fieldState.error}
                                             helperText={fieldState.error?.message}
+                                            onChange={e => field.onChange(e.target.value === "" ? "" : Number(e.target.value))}
                                         />
                                     )}
                                 />
@@ -191,6 +217,7 @@ function SettingsPage() {
                                             variant="outlined"
                                             error={!!fieldState.error}
                                             helperText={fieldState.error?.message}
+                                            onChange={e => field.onChange(e.target.value === "" ? "" : Number(e.target.value))}
                                         />
                                     )}
                                 />

@@ -67,12 +67,17 @@
     }
   }
 
+  &.settings-form {
+    display: flex;
+    flex-direction: column;
+  }
+
   &.settings-save {
     display: inline-flex;
-    margin-left: auto;
     width: 120px;
     height: 40px;
     font-size: 15px;
-    margin-top: 10px;
+    margin: 10px;
+    align-self: flex-end;
   }
 }

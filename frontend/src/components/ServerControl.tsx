@@ -2,21 +2,11 @@ import { GetServerStatus, StartServer, StopServer, GetSettings } from '../../wai
 import {useState, useEffect, JSX} from 'react'
 import {Box, Button, Chip, Paper, Typography} from "@mui/material";
 import {state} from "../../wailsjs/go/models";
-
-interface ServiceStatus {
-    IsRunning: boolean;
-    Error: string;
-}
-
-interface ServerStatus {
-    http: ServiceStatus;
-    voice: ServiceStatus;
-    control: ServiceStatus;
-}
+import {EventsOn} from "../../wailsjs/runtime";
 
 
 const ServerControls: () => JSX.Element = () => {
-    const [status, setStatus] = useState<ServerStatus | null>(null);
+    const [status, setStatus] = useState<state.AdminState | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [numClients , setNumClients] = useState(0);
     const [settings, setSettings] = useState<state.SettingsState | null>(null);
@@ -24,7 +14,7 @@ const ServerControls: () => JSX.Element = () => {
     const fetchStatus = async () => {
         try {
             const newStatus = await GetServerStatus();
-            setStatus(newStatus as ServerStatus);
+            setStatus(newStatus);
         } catch (error) {
             console.error('Failed to fetch server status:', error);
         }
@@ -33,25 +23,37 @@ const ServerControls: () => JSX.Element = () => {
     const fetchSettings = async () => {
         try {
             const newSettings = await GetSettings();
-            setSettings(newSettings as state.SettingsState);
+            setSettings(newSettings);
         } catch (error) {
             console.error('Failed to fetch settings:', error);
         }
     }
 
+    const handleStatusChange = async (status: state.AdminState) => {
+        setStatus(status);
+    }
+
+    const handleSettingsChange = async (settings: state.SettingsState) => {
+        setSettings(settings);
+    }
+
+    EventsOn("admin/changed", handleStatusChange);
+    EventsOn("settings/changed", handleSettingsChange);
+
     useEffect(() => {
-        const fetchAll = async () => {
-            await Promise.all([fetchStatus(), fetchSettings()]);
-        };
-        fetchAll();
-        const interval = setInterval(fetchAll, 3000);
-        return () => clearInterval(interval);
+        if (settings === null) {
+            fetchSettings();
+
+        }
+        if (status === null) {
+            fetchStatus();
+        }
     }, []);
 
     const handleServerToggle = async () => {
         setIsLoading(true);
         try {
-            if (status?.http.IsRunning || status?.voice.IsRunning || status?.control.IsRunning) {
+            if (status?.HTTPStatus.IsRunning || status?.VoiceStatus.IsRunning || status?.ControlStatus.IsRunning) {
                 await StopServer();
             } else {
                 await StartServer();
@@ -64,7 +66,7 @@ const ServerControls: () => JSX.Element = () => {
         }
     };
 
-    const isRunning = status?.http.IsRunning || status?.voice.IsRunning || status?.control.IsRunning;
+    const isRunning = status?.HTTPStatus.IsRunning || status?.VoiceStatus.IsRunning || status?.ControlStatus.IsRunning;
 
     return (
         <Paper className="control control-container">
@@ -81,17 +83,17 @@ const ServerControls: () => JSX.Element = () => {
                     <div className="control control-items">
                         <div className="control control-item control-item-container">
                             <span className="control control-item control-item-title">HTTP Server:</span>
-                            <Chip className={`control control-item control-item-${status?.http.IsRunning ? 'running' : 'stopped'}`} label={status?.http.IsRunning ? 'Running' : 'Stopped'} />
+                            <Chip className={`control control-item control-item-${status?.HTTPStatus.IsRunning ? 'running' : 'stopped'}`} label={status?.HTTPStatus.IsRunning ? 'Running' : 'Stopped'} />
                             <Chip className={`control control-item control-item-port`} label={`Port: ${settings?.Servers.HTTP.Port}`} />
                         </div>
                         <div className="control control-item control-item-container">
                             <span className="control control-item control-item-title">Voice Server:</span>
-                            <Chip className={`control control-item control-item-${status?.voice.IsRunning ? 'running' : 'stopped'}`} label={status?.voice.IsRunning ? 'Running' : 'Stopped'} />
+                            <Chip className={`control control-item control-item-${status?.VoiceStatus.IsRunning ? 'running' : 'stopped'}`} label={status?.VoiceStatus.IsRunning ? 'Running' : 'Stopped'} />
                             <Chip className={`control control-item control-item-port`} label={`Port: ${settings?.Servers.Voice.Port}`} />
                         </div>
                         <div className="control control-item control-item-container">
                             <span className="control control-item control-item-title">Control Server:</span>
-                            <Chip className={`control control-item control-item-${status?.control.IsRunning ? 'running' : 'stopped'}`} label={status?.control.IsRunning ? 'Running' : 'Stopped'} />
+                            <Chip className={`control control-item control-item-${status?.ControlStatus.IsRunning ? 'running' : 'stopped'}`} label={status?.ControlStatus.IsRunning ? 'Running' : 'Stopped'} />
                             <Chip className={`control control-item control-item-port`} label={`Port: ${settings?.Servers.Control.Port}`} />
                         </div>
                     </div>
@@ -107,9 +109,9 @@ const ServerControls: () => JSX.Element = () => {
                 <Box className="control control-box control-box-right">
 
                     <div className="control control-errors">
-                        {status?.http.Error && <div className="control control-error">HTTP Server Error: {status.http.Error}</div>}
-                        {status?.voice.Error && <div className="control control-error">Voice Server Error: {status.voice.Error}</div>}
-                        {status?.control.Error && <div className="control control-error">Control Server Error: {status.control.Error}</div>}
+                        {status?.HTTPStatus.Error && <div className="control control-error">HTTP Server Error: {status.HTTPStatus.Error}</div>}
+                        {status?.VoiceStatus.Error && <div className="control control-error">Voice Server Error: {status.VoiceStatus.Error}</div>}
+                        {status?.ControlStatus.Error && <div className="control control-error">Control Server Error: {status.ControlStatus.Error}</div>}
                     </div>
                 </Box>
             </div>

@@ -33,11 +33,14 @@ func main() {
 	// Create an instance of the app structure
 	gui := app.NewApp(logger, configFilepath)
 
+	adaptedLogger := utils.NewZapLoggerAdapter(logger)
+
 	// Create application with options
 	err := wails.Run(&options.App{
 		Title:  "vcs-server",
 		Width:  1080,
 		Height: 800,
+		Logger: adaptedLogger,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

@@ -3,9 +3,12 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/FPGSchiba/vcs-srs-server/control"
+	"github.com/FPGSchiba/vcs-srs-server/events"
 	"github.com/FPGSchiba/vcs-srs-server/voice"
 	"github.com/gin-gonic/gin"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"go.uber.org/zap"
 	"net/http"
 	"time"
@@ -15,6 +18,7 @@ func (a *App) startHTTPServer() string {
 	a.AdminState.Lock()
 	if a.AdminState.HTTPStatus.IsRunning {
 		a.AdminState.Unlock()
+		runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
 		return "HTTP server is already running"
 	}
 	a.AdminState.Unlock()
@@ -22,21 +26,25 @@ func (a *App) startHTTPServer() string {
 	// Create stop channel
 	stopChan := make(chan struct{})
 	a.AdminState.Lock()
-	a.AdminState.StopSignals["http"] = stopChan
+	a.StopSignals["http"] = stopChan
 	a.AdminState.Unlock()
 
 	go func() {
 		r := gin.Default()
 		// Configure your gin routes and socket.io here
 
+		a.SettingsState.RLock()
+
 		a.httpServer = &http.Server{
-			Addr:    ":8080", // TODO: Load this from SettingsState
+			Addr:    fmt.Sprintf("%s:%d", a.SettingsState.Servers.HTTP.Host, a.SettingsState.Servers.HTTP.Port),
 			Handler: r,
 			// Add timeouts to prevent hanging
 			ReadTimeout:  15 * time.Second,
 			WriteTimeout: 15 * time.Second,
 			IdleTimeout:  60 * time.Second,
 		}
+
+		a.SettingsState.RUnlock()
 
 		// Update status
 		a.AdminState.Lock()
@@ -58,6 +66,7 @@ func (a *App) startHTTPServer() string {
 		a.logger.Info("HTTP server stopped listening")
 	}()
 
+	runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
 	return "HTTP server started"
 }
 
@@ -66,13 +75,14 @@ func (a *App) stopHTTPServer() string {
 	a.AdminState.Lock()
 	if !a.AdminState.HTTPStatus.IsRunning {
 		a.AdminState.Unlock()
+		runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
 		return "HTTP server is not running"
 	}
 
 	// Signal stop
-	if stopChan, exists := a.AdminState.StopSignals["http"]; exists {
+	if stopChan, exists := a.StopSignals["http"]; exists {
 		close(stopChan)
-		delete(a.AdminState.StopSignals, "http")
+		delete(a.StopSignals, "http")
 	}
 	a.AdminState.Unlock()
 
@@ -85,6 +95,8 @@ func (a *App) stopHTTPServer() string {
 		a.AdminState.Lock()
 		a.AdminState.HTTPStatus.Error = err.Error()
 		a.AdminState.Unlock()
+
+		runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
 		return "Error stopping HTTP server: " + err.Error()
 	}
 
@@ -93,6 +105,8 @@ func (a *App) stopHTTPServer() string {
 	a.AdminState.HTTPStatus.IsRunning = false
 	a.AdminState.HTTPStatus.Error = ""
 	a.AdminState.Unlock()
+
+	runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
 
 	return "HTTP server stopped"
 }
@@ -106,7 +120,7 @@ func (a *App) startVoiceServer() string {
 	}
 
 	stopChan := make(chan struct{})
-	a.AdminState.StopSignals["voice"] = stopChan
+	a.StopSignals["voice"] = stopChan
 
 	go func() {
 		voiceServer := voice.NewServer(a.ServerState, a.logger)
@@ -118,16 +132,18 @@ func (a *App) startVoiceServer() string {
 		a.AdminState.VoiceStatus.Error = ""
 		a.AdminState.Unlock()
 
-		// TODO: Load this from SettingsState
-		if err := voiceServer.Listen(":9000", stopChan); err != nil {
+		a.SettingsState.RLock()
+		if err := voiceServer.Listen(fmt.Sprintf("%s:%d", a.SettingsState.Servers.Voice.Host, a.SettingsState.Servers.Voice.Port), stopChan); err != nil {
 			a.AdminState.Lock()
 			a.AdminState.VoiceStatus.Error = err.Error()
 			a.AdminState.VoiceStatus.IsRunning = false
 			a.AdminState.Unlock()
 			a.logger.Error("voice server error", zap.Error(err))
 		}
+		a.SettingsState.RUnlock()
 	}()
 
+	runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
 	return "voice server started"
 }
 
@@ -140,9 +156,9 @@ func (a *App) stopVoiceServer() string {
 	}
 
 	// Signal stop
-	if stopChan, exists := a.AdminState.StopSignals["voice"]; exists {
+	if stopChan, exists := a.StopSignals["voice"]; exists {
 		close(stopChan)
-		delete(a.AdminState.StopSignals, "voice")
+		delete(a.StopSignals, "voice")
 	}
 	a.AdminState.Unlock()
 
@@ -151,6 +167,7 @@ func (a *App) stopVoiceServer() string {
 		a.AdminState.Lock()
 		a.AdminState.VoiceStatus.Error = err.Error()
 		a.AdminState.Unlock()
+		runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
 		return "Error stopping Voice server: " + err.Error()
 	}
 
@@ -160,6 +177,7 @@ func (a *App) stopVoiceServer() string {
 	a.AdminState.VoiceStatus.Error = ""
 	a.AdminState.Unlock()
 
+	runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
 	return "Voice server stopped"
 }
 
@@ -167,6 +185,7 @@ func (a *App) startControlServer() string {
 	a.AdminState.Lock()
 	if a.AdminState.ControlStatus.IsRunning {
 		a.AdminState.Unlock()
+		runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
 		return "Control server is already running"
 	}
 	a.AdminState.Unlock()
@@ -174,26 +193,30 @@ func (a *App) startControlServer() string {
 	// Create stop channel
 	stopChan := make(chan struct{})
 	a.AdminState.Lock()
-	a.AdminState.StopSignals["control"] = stopChan
+	a.StopSignals["control"] = stopChan
 	a.AdminState.Unlock()
 
 	controlServer := control.NewServer(a.ServerState, a.logger)
 	a.controlServer = controlServer
 
-	if err := controlServer.Start(":9001", stopChan); err != nil {
+	a.SettingsState.RLock()
+	if err := controlServer.Start(fmt.Sprintf("%s:%d", a.SettingsState.Servers.Control.Host, a.SettingsState.Servers.Control.Port), stopChan); err != nil {
 		a.logger.Error("Failed to start control server", zap.Error(err))
 		a.AdminState.Lock()
 		a.AdminState.ControlStatus.Error = err.Error()
 		a.AdminState.ControlStatus.IsRunning = false
 		a.AdminState.Unlock()
+		runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
 		return "Failed to start control server: " + err.Error()
 	}
+	a.SettingsState.RUnlock()
 
 	a.AdminState.Lock()
 	a.AdminState.ControlStatus.IsRunning = true
 	a.AdminState.ControlStatus.Error = ""
 	a.AdminState.Unlock()
 
+	runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
 	return "Control server started"
 }
 
@@ -201,13 +224,14 @@ func (a *App) stopControlServer() string {
 	a.AdminState.Lock()
 	if !a.AdminState.ControlStatus.IsRunning {
 		a.AdminState.Unlock()
+		runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
 		return "Control server is not running"
 	}
 
 	// Signal stop
-	if stopChan, exists := a.AdminState.StopSignals["control"]; exists {
+	if stopChan, exists := a.StopSignals["control"]; exists {
 		close(stopChan)
-		delete(a.AdminState.StopSignals, "control")
+		delete(a.StopSignals, "control")
 	}
 	a.AdminState.Unlock()
 
@@ -227,5 +251,6 @@ func (a *App) stopControlServer() string {
 	a.AdminState.ControlStatus.Error = ""
 	a.AdminState.Unlock()
 
+	runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
 	return "Control server stopped"
 }

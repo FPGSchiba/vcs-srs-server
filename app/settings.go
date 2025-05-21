@@ -2,7 +2,9 @@ package app
 
 import (
 	"fmt"
+	"github.com/FPGSchiba/vcs-srs-server/events"
 	"github.com/FPGSchiba/vcs-srs-server/state"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 func (a *App) GetSettings() *state.SettingsState {
@@ -20,6 +22,7 @@ func (a *App) SaveGeneralSettings(newSettings *state.GeneralSettings) {
 		a.logger.Error(fmt.Sprintf("Failed to save settings: %v", err))
 		return
 	}
+	runtime.EventsEmit(a.ctx, events.SettingsChanged, a.SettingsState)
 }
 
 func (a *App) SaveServerSettings(newSettings *state.ServerSettings) {
@@ -31,4 +34,5 @@ func (a *App) SaveServerSettings(newSettings *state.ServerSettings) {
 		a.logger.Error(fmt.Sprintf("Failed to save settings: %v", err))
 		return
 	}
+	runtime.EventsEmit(a.ctx, events.SettingsChanged, a.SettingsState)
 }

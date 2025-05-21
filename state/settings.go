@@ -6,14 +6,14 @@ import (
 	"sync"
 )
 
+// SettingsState holds the current state of the settings
 type SettingsState struct {
-	sync.RWMutex
-	// SettingsState holds the current state of the settings
-	Servers     ServerSettings    `yaml:"servers"`
-	Coalitions  []Coalition       `yaml:"coalitions"`
-	Frequencies FrequencySettings `yaml:"frequencies"`
-	General     GeneralSettings   `yaml:"general"`
-	file        string            `yaml:"-"`
+	sync.RWMutex `yaml:"-"`
+	Servers      ServerSettings    `yaml:"servers"`
+	Coalitions   []Coalition       `yaml:"coalitions"`
+	Frequencies  FrequencySettings `yaml:"frequencies"`
+	General      GeneralSettings   `yaml:"general"`
+	file         string            `yaml:"-"`
 }
 
 type ServerSettings struct {

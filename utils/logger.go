@@ -10,6 +10,51 @@ import (
 
 var logger *zap.Logger
 
+// ZapLoggerAdapter adapts zap.Logger to implement logger.Logger
+type ZapLoggerAdapter struct {
+	zapLogger *zap.Logger
+}
+
+// NewZapLoggerAdapter creates a new adapter for zap.Logger
+func NewZapLoggerAdapter(zapLogger *zap.Logger) *ZapLoggerAdapter {
+	return &ZapLoggerAdapter{zapLogger: zapLogger}
+}
+
+// Print implements logger.Logger.Print
+func (a *ZapLoggerAdapter) Print(message string) {
+	a.zapLogger.Info(message)
+}
+
+// Trace implements logger.Logger.Trace
+func (a *ZapLoggerAdapter) Trace(message string) {
+	a.zapLogger.Debug(message) // Using Debug for Trace
+}
+
+// Warning implements logger.Logger.Warning
+func (a *ZapLoggerAdapter) Warning(message string) {
+	a.zapLogger.Warn(message)
+}
+
+// Debug implements logger.Logger.Debug
+func (a *ZapLoggerAdapter) Debug(message string) {
+	a.zapLogger.Debug(message)
+}
+
+// Info implements logger.Logger.Info
+func (a *ZapLoggerAdapter) Info(message string) {
+	a.zapLogger.Info(message)
+}
+
+// Error implements logger.Logger.Error
+func (a *ZapLoggerAdapter) Error(message string) {
+	a.zapLogger.Error(message)
+}
+
+// Fatal implements logger.Logger.Error
+func (a *ZapLoggerAdapter) Fatal(message string) {
+	a.zapLogger.Fatal(message)
+}
+
 func CreateLogger() *zap.Logger {
 	stdout := zapcore.AddSync(os.Stdout)
 

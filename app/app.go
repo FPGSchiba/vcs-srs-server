@@ -24,6 +24,7 @@ type App struct {
 	httpServer    *http.Server
 	voiceServer   *voice.Server
 	controlServer *control.Server // Add this
+	StopSignals   map[string]chan struct{}
 }
 
 // NewApp creates a new App application struct
@@ -47,7 +48,6 @@ func NewApp(logger *zap.Logger, configFilePath string) *App {
 			IsRunning: false,
 			Error:     "",
 		},
-		StopSignals: make(map[string]chan struct{}),
 	}
 
 	return &App{
@@ -55,6 +55,7 @@ func NewApp(logger *zap.Logger, configFilePath string) *App {
 		SettingsState: settingsState,
 		AdminState:    adminState,
 		logger:        logger,
+		StopSignals:   make(map[string]chan struct{}),
 	}
 }
 
@@ -103,15 +104,11 @@ func (a *App) StopServer() string {
 }
 
 // GetServerStatus returns the status of the HTTP and Voice servers
-func (a *App) GetServerStatus() map[string]state.ServiceStatus {
+func (a *App) GetServerStatus() *state.AdminState {
 	a.AdminState.RLock()
 	defer a.AdminState.RUnlock()
 
-	return map[string]state.ServiceStatus{
-		"http":    a.AdminState.HTTPStatus,
-		"voice":   a.AdminState.VoiceStatus,
-		"control": a.AdminState.ControlStatus,
-	}
+	return a.AdminState
 }
 
 func (a *App) GetServerVersion() string {

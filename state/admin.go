@@ -7,7 +7,6 @@ type AdminState struct {
 	HTTPStatus    ServiceStatus
 	VoiceStatus   ServiceStatus
 	ControlStatus ServiceStatus
-	StopSignals   map[string]chan struct{}
 }
 
 type ServiceStatus struct {
