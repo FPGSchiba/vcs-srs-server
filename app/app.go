@@ -2,11 +2,12 @@ package app
 
 import (
 	"context"
-	"fmt"
 	"github.com/FPGSchiba/vcs-srs-server/control"
+	"github.com/FPGSchiba/vcs-srs-server/events"
 	"github.com/FPGSchiba/vcs-srs-server/state"
 	"github.com/FPGSchiba/vcs-srs-server/voice"
 	"github.com/lxn/win"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"go.uber.org/zap"
 	"net/http"
 	"syscall"
@@ -68,49 +69,53 @@ func (a *App) Startup(ctx context.Context) {
 }
 
 // StartServer starts the HTTP and Voice servers
-func (a *App) StartServer() string {
+func (a *App) StartServer() {
 	a.AdminState.Lock()
 	if a.AdminState.HTTPStatus.IsRunning ||
 		a.AdminState.VoiceStatus.IsRunning ||
 		a.AdminState.ControlStatus.IsRunning {
 		a.AdminState.Unlock()
-		return "One or more servers are already running"
+		return
 	}
 	a.AdminState.Unlock()
 
-	resControl := a.startControlServer()
-	resVoice := a.startVoiceServer()
-	resHTTP := a.startHTTPServer()
+	a.startControlServer()
+	a.startVoiceServer()
+	a.startHTTPServer()
 
-	return fmt.Sprintf("%s\n%s\n%s", resHTTP, resVoice, resControl)
+	return
 }
 
 // StopServer starts the HTTP and Voice servers
-func (a *App) StopServer() string {
+func (a *App) StopServer() {
 	a.AdminState.RLock()
 	if !a.AdminState.HTTPStatus.IsRunning &&
 		!a.AdminState.VoiceStatus.IsRunning &&
 		!a.AdminState.ControlStatus.IsRunning {
 		a.AdminState.RUnlock()
-		return "All servers are already stopped"
+		return
 	}
 	a.AdminState.RUnlock()
 
-	resHTTP := a.stopHTTPServer()
-	resVoice := a.stopVoiceServer()
-	resControl := a.stopControlServer()
+	a.stopHTTPServer()
+	a.stopVoiceServer()
+	a.stopControlServer()
 
-	return fmt.Sprintf("%s\n%s\n%s", resHTTP, resVoice, resControl)
+	return
 }
 
 // GetServerStatus returns the status of the HTTP and Voice servers
 func (a *App) GetServerStatus() *state.AdminState {
 	a.AdminState.RLock()
 	defer a.AdminState.RUnlock()
-
 	return a.AdminState
 }
 
 func (a *App) GetServerVersion() string {
 	return Version
+}
+
+func (a *App) Notify(notification events.Notification) {
+	runtime.EventsEmit(a.ctx, events.NotificationEvent, notification)
+	a.logger.Info("Notification", zap.String("title", notification.Title), zap.String("message", notification.Message), zap.String("level", notification.Level))
 }

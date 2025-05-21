@@ -109,8 +109,8 @@ function SettingsPage() {
     }, []);
 
     return (
-        <Paper className="settings settings-paper">
-            <form onSubmit={handleSubmit(onSubmit)} className="settings settings-form">
+        <form onSubmit={handleSubmit(onSubmit)} className="settings settings-form">
+            <Paper className="settings settings-paper">
                 <Box className="settings settings-content">
                     <Box className="settings settings-general settings-general-wrapper">
                         <Typography className="settings settings-general settings-general-title" variant="h4">General</Typography>
@@ -240,9 +240,9 @@ function SettingsPage() {
                         </Box>
                     </Box>
                 </Box>
-                <Button className="settings settings-save" variant="contained" type="submit">Save</Button>
-            </form>
-        </Paper>
+            </Paper>
+            <Button className="settings settings-save" variant="contained" type="submit">Save</Button>
+        </form>
     );
 }
 

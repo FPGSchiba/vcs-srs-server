@@ -14,12 +14,12 @@ import (
 	"time"
 )
 
-func (a *App) startHTTPServer() string {
+func (a *App) startHTTPServer() {
 	a.AdminState.Lock()
 	if a.AdminState.HTTPStatus.IsRunning {
 		a.AdminState.Unlock()
-		runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
-		return "HTTP server is already running"
+		a.Notify(events.NewNotification("HTTP server already running", "HTTP server is already running", "warning"))
+		return
 	}
 	a.AdminState.Unlock()
 
@@ -56,6 +56,7 @@ func (a *App) startHTTPServer() string {
 
 		// Start server
 		if err := a.httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			a.Notify(events.NewNotification("HTTP server error", "Could not start HTTP Server.", "error"))
 			a.logger.Error("HTTP server error", zap.Error(err))
 			a.AdminState.Lock()
 			a.AdminState.HTTPStatus.Error = err.Error()
@@ -67,16 +68,15 @@ func (a *App) startHTTPServer() string {
 	}()
 
 	runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
-	return "HTTP server started"
 }
 
-func (a *App) stopHTTPServer() string {
+func (a *App) stopHTTPServer() {
 	// First mark the server as stopping
 	a.AdminState.Lock()
 	if !a.AdminState.HTTPStatus.IsRunning {
 		a.AdminState.Unlock()
-		runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
-		return "HTTP server is not running"
+		a.Notify(events.NewNotification("HTTP server error", "HTTP server is not running", "warning"))
+		return
 	}
 
 	// Signal stop
@@ -97,7 +97,8 @@ func (a *App) stopHTTPServer() string {
 		a.AdminState.Unlock()
 
 		runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
-		return "Error stopping HTTP server: " + err.Error()
+		a.Notify(events.NewNotification("HTTP server error", "Could not stop HTTP Server.", "error"))
+		return
 	}
 
 	// Update final status
@@ -107,16 +108,15 @@ func (a *App) stopHTTPServer() string {
 	a.AdminState.Unlock()
 
 	runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
-
-	return "HTTP server stopped"
 }
 
-func (a *App) startVoiceServer() string {
+func (a *App) startVoiceServer() {
 	a.AdminState.Lock()
 	defer a.AdminState.Unlock()
 
 	if a.AdminState.VoiceStatus.IsRunning {
-		return "voice server is already running"
+		a.Notify(events.NewNotification("Voice server error", "voice server is already running", "warning"))
+		return
 	}
 
 	stopChan := make(chan struct{})
@@ -138,21 +138,23 @@ func (a *App) startVoiceServer() string {
 			a.AdminState.VoiceStatus.Error = err.Error()
 			a.AdminState.VoiceStatus.IsRunning = false
 			a.AdminState.Unlock()
+
+			a.Notify(events.NewNotification("voice server error", "Could not start Voice server", "error"))
 			a.logger.Error("voice server error", zap.Error(err))
 		}
 		a.SettingsState.RUnlock()
 	}()
 
 	runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
-	return "voice server started"
 }
 
-func (a *App) stopVoiceServer() string {
+func (a *App) stopVoiceServer() {
 	// First mark the server as stopping
 	a.AdminState.Lock()
 	if !a.AdminState.VoiceStatus.IsRunning {
 		a.AdminState.Unlock()
-		return "Voice server is not running"
+		a.Notify(events.NewNotification("Voice server error", "Voice server is not running", "warning"))
+		return
 	}
 
 	// Signal stop
@@ -167,8 +169,8 @@ func (a *App) stopVoiceServer() string {
 		a.AdminState.Lock()
 		a.AdminState.VoiceStatus.Error = err.Error()
 		a.AdminState.Unlock()
-		runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
-		return "Error stopping Voice server: " + err.Error()
+		a.Notify(events.NewNotification("Voice server error", "Could stop start Voice server", "error"))
+		return
 	}
 
 	// Update final status
@@ -178,15 +180,14 @@ func (a *App) stopVoiceServer() string {
 	a.AdminState.Unlock()
 
 	runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
-	return "Voice server stopped"
 }
 
-func (a *App) startControlServer() string {
+func (a *App) startControlServer() {
 	a.AdminState.Lock()
 	if a.AdminState.ControlStatus.IsRunning {
 		a.AdminState.Unlock()
-		runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
-		return "Control server is already running"
+		a.Notify(events.NewNotification("Control server error", "Control server is already running", "warning"))
+		return
 	}
 	a.AdminState.Unlock()
 
@@ -206,8 +207,8 @@ func (a *App) startControlServer() string {
 		a.AdminState.ControlStatus.Error = err.Error()
 		a.AdminState.ControlStatus.IsRunning = false
 		a.AdminState.Unlock()
-		runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
-		return "Failed to start control server: " + err.Error()
+		a.Notify(events.NewNotification("Control server error", "Could not start Control server", "error"))
+		return
 	}
 	a.SettingsState.RUnlock()
 
@@ -217,15 +218,14 @@ func (a *App) startControlServer() string {
 	a.AdminState.Unlock()
 
 	runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
-	return "Control server started"
 }
 
-func (a *App) stopControlServer() string {
+func (a *App) stopControlServer() {
 	a.AdminState.Lock()
 	if !a.AdminState.ControlStatus.IsRunning {
 		a.AdminState.Unlock()
-		runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
-		return "Control server is not running"
+		a.Notify(events.NewNotification("Control server error", "Control server is not running", "warning"))
+		return
 	}
 
 	// Signal stop
@@ -242,7 +242,8 @@ func (a *App) stopControlServer() string {
 			a.AdminState.Lock()
 			a.AdminState.ControlStatus.Error = err.Error()
 			a.AdminState.Unlock()
-			return "Error stopping Control server: " + err.Error()
+			a.Notify(events.NewNotification("Control server error", "Could not stop control server", "error"))
+			return
 		}
 	}
 
@@ -252,5 +253,4 @@ func (a *App) stopControlServer() string {
 	a.AdminState.Unlock()
 
 	runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
-	return "Control server stopped"
 }

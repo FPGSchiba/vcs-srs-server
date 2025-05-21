@@ -27,12 +27,10 @@
     }
   }
 
-
   &.control-content {
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     justify-content: space-between;
-    align-items: center;
     margin-bottom: 10px;
   }
 
@@ -83,24 +81,25 @@
   &.control-button {
     display: inline-flex;
     height: 40px;
-
-    &.running {
-      color: variables.$color-text-primary;
-      background-color: variables.$color-error;
-    }
-
-    &.stopped {
-      background-color: variables.$color-success;
-    }
+    width: 145px;
   }
 
   &.control-box {
     &.control-box-mid {
       display: flex;
       flex-direction: row;
-      width: 100%;
       align-items: center;
+      flex-grow: 2;
       justify-content: flex-start;
+      margin-right: 10px;
+    }
+
+    &.control-box-right {
+      width: 50%;
+      overflow-y: scroll;
+      overflow-x: hidden;
+      scrollbar-width: thin;
+      scrollbar-color: variables.$color-primary-main variables.$color-background-paper;
     }
   }
 

@@ -1,0 +1,45 @@
+@use "../variables.module" as variables;
+
+.coalitions {
+  &.coalitions-paper {
+    padding: 10px;
+    background-color: variables.$color-background-paper;
+    border-radius: 10px;
+    height: 300px;
+    max-height: 300px;
+    display: flex;
+    flex-direction: column;
+    overflow-y: scroll;
+    overflow-x: hidden;
+    scrollbar-color: variables.$color-primary-main variables.$color-background-paper;
+    scrollbar-width: thin;
+  }
+
+  &.coalitions-add {
+    width: 180px;
+    margin-top: 10px;
+  }
+
+  &.coalitions-create {
+    &.coalitions-create-form {
+      display: flex;
+      width: 400px;
+      flex-direction: column;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    &.coalitions-create-wrapper {
+      display: flex;
+      flex-direction: row;
+      justify-content: space-between;
+      align-items: center;
+      margin-right: 10px;
+    }
+
+    &.coalitions-create-color {
+      margin-left: 10px;
+    }
+  }
+}

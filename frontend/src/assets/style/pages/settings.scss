@@ -5,8 +5,8 @@
     padding: 10px;
     background-color: variables.$color-background-paper;
     border-radius: 10px;
-    height: 335px;
-    max-height: 335px;
+    height: 300px;
+    max-height: 300px;
     display: flex;
     flex-direction: column;
     overflow-y: scroll;
@@ -18,7 +18,6 @@
   &.settings-content {
     display: flex;
     justify-content: space-around;
-    border-bottom: solid 1px variables.$color-divider;
   }
 
   &.settings-general {

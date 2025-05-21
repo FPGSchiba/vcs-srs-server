@@ -1,7 +1,7 @@
 import React from "react";
 import {IconButton} from "@mui/material";
 import CloseIcon from '@mui/icons-material/Close';
-import MinimizeIcon from '@mui/icons-material/Minimize';
+import RemoveIcon from '@mui/icons-material/Remove';
 import VCSIcon from "../assets/images/logo-universal.png";
 import {Quit, WindowMinimise} from "../../wailsjs/runtime";
 
@@ -12,7 +12,7 @@ function Header() {
                 <img src={VCSIcon} alt="VCS Server icon" className="header header-icon header-icon-image" />
             </div>
             <div className="header header-action header-action-container">
-                <IconButton onClick={WindowMinimise} className="header header-action header-action-minimize"><MinimizeIcon /></IconButton>
+                <IconButton onClick={WindowMinimise} className="header header-action header-action-minimize"><RemoveIcon /></IconButton>
                 <IconButton onClick={Quit} className="header header-action header-action-close"><CloseIcon /></IconButton>
             </div>
         </header>

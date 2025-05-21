@@ -101,6 +101,7 @@ const ServerControls: () => JSX.Element = () => {
                         variant="contained"
                         onClick={handleServerToggle}
                         disabled={isLoading}
+                        color={isRunning ? 'error' : 'primary'}
                         className={`control control-button ${isRunning ? 'running' : 'stopped'}`}
                     >
                         {isLoading ? 'Processing...' : isRunning ? 'Stop Servers' : 'Start Servers'}

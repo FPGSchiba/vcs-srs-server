@@ -1,0 +1,18 @@
+.notification {
+  &.notification-paper {
+    margin-top: 20px;
+    margin-bottom: 10px;
+
+    .MuiAlert-message {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+  }
+
+  &.notification-body {
+    &.notification-body-wrapper {
+      margin-top: 5px;
+    }
+  }
+}

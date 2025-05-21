@@ -11,7 +11,7 @@ servers:
 coalitions:
   - name: coalition1
     description: Coalition 1
-    color: #FF0000
+    color: "#FF0000"
     password: password1
 frequencies:
   testFrequencies:
