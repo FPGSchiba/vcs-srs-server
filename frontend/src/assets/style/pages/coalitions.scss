@@ -16,8 +16,10 @@
   }
 
   &.coalitions-add {
+    display: flex;
     width: 180px;
     margin-top: 10px;
+    margin-left: auto;
   }
 
   &.coalitions-create {
@@ -40,6 +42,55 @@
 
     &.coalitions-create-color {
       margin-left: 10px;
+    }
+  }
+
+  &.coalitions-entry {
+    &.coalitions-entry-paper {
+      background-color: variables.$color-background;
+      padding: 10px;
+      margin-bottom: 10px;
+      display: flex;
+    }
+
+    &.coalitions-entry-header {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+    }
+
+    &.coalitions-entry-content {
+      flex-grow: 1;
+    }
+
+    &.coalitions-entry-actions {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: flex-start;
+      margin-left: 10px;
+    }
+
+    &.coalitions-entry-button {
+      margin-top: 10px;
+      width: 6rem;
+    }
+
+    &.coalitions-entry-color {
+      margin-right: 10px;
+      width: 8rem;
+    }
+
+    &.coalitions-entry-name {
+      border-radius: 5px;
+      padding: 11px 10px;
+      margin-top: 3.5px;
+      width: 300px;
+      margin-bottom: 8px;
+    }
+
+    &.coalitions-entry-password {
+      width: 28.6rem;
     }
   }
 }

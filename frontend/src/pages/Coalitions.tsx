@@ -5,7 +5,7 @@ import {Controller, useForm} from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {MuiColorInput} from "mui-color-input";
-import {AddCoalition, GetCoalitions} from "../../wailsjs/go/app/App";
+import {AddCoalition, GetCoalitions, RemoveCoalition} from "../../wailsjs/go/app/App";
 import {EventsOn} from "../../wailsjs/runtime";
 import {state} from "../../wailsjs/go/models";
 
@@ -86,6 +86,7 @@ function CoalitionFormComponent({onSubmit, onCancel }: { onSubmit: (data: Coalit
 
 function CoalitionsPage() {
     const [deleteOpen, setDeleteOpen] = React.useState(false);
+    const [deleteItem, setDeleteFor] = React.useState<state.Coalition | null>(null);
     const [createOpen, setCreateOpen] = React.useState(false);
     const [coalitions, setCoalitions] = React.useState<state.Coalition[]>([]);
 
@@ -108,7 +109,10 @@ function CoalitionsPage() {
             <Paper className="coalitions coalitions-paper">
                 <Box className="coalitions coalitions-list">
                     {coalitions.map((coalition, index) => (
-                        <CoalitionEntry key={index} coalition={coalition} />
+                        <CoalitionEntry key={index} coalition={coalition} openDeleteDialog={() => {
+                            setDeleteFor(coalition);
+                            setDeleteOpen(true);
+                        }} />
                     ))}
                 </Box>
             </Paper>
@@ -127,7 +131,15 @@ function CoalitionsPage() {
                 </DialogContent>
                 <DialogActions>
                     <Button onClick={() => {setDeleteOpen(false)}} variant="contained">Cancel</Button>
-                    <Button onClick={() => {setDeleteOpen(false)}} variant="contained" autoFocus color="error">Delete</Button>
+                    <Button onClick={() => {
+                        if (deleteItem) {
+                            RemoveCoalition(deleteItem)
+                            setDeleteOpen(false);
+                        } else {
+                            console.error("No coalition selected for deletion");
+                            setDeleteOpen(false);
+                        }
+                    }} variant="contained" autoFocus color="error">Delete</Button>
                 </DialogActions>
             </Dialog>
             <Dialog
