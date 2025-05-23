@@ -33,7 +33,7 @@ func (a *App) startHTTPServer() {
 		r := gin.Default()
 		// Configure your gin routes and socket.io here
 
-		a.SettingsState.RLock()
+		a.SettingsState.Lock()
 
 		a.httpServer = &http.Server{
 			Addr:    fmt.Sprintf("%s:%d", a.SettingsState.Servers.HTTP.Host, a.SettingsState.Servers.HTTP.Port),
@@ -44,7 +44,7 @@ func (a *App) startHTTPServer() {
 			IdleTimeout:  60 * time.Second,
 		}
 
-		a.SettingsState.RUnlock()
+		a.SettingsState.Unlock()
 
 		// Update status
 		a.AdminState.Lock()
@@ -132,8 +132,10 @@ func (a *App) startVoiceServer() {
 		a.AdminState.VoiceStatus.Error = ""
 		a.AdminState.Unlock()
 
-		a.SettingsState.RLock()
-		if err := voiceServer.Listen(fmt.Sprintf("%s:%d", a.SettingsState.Servers.Voice.Host, a.SettingsState.Servers.Voice.Port), stopChan); err != nil {
+		a.SettingsState.Lock()
+		serverHost := fmt.Sprintf("%s:%d", a.SettingsState.Servers.Voice.Host, a.SettingsState.Servers.Voice.Port)
+		a.SettingsState.Unlock()
+		if err := voiceServer.Listen(serverHost, stopChan); err != nil {
 			a.AdminState.Lock()
 			a.AdminState.VoiceStatus.Error = err.Error()
 			a.AdminState.VoiceStatus.IsRunning = false
@@ -142,7 +144,7 @@ func (a *App) startVoiceServer() {
 			a.Notify(events.NewNotification("voice server error", "Could not start Voice server", "error"))
 			a.logger.Error("voice server error", zap.Error(err))
 		}
-		a.SettingsState.RUnlock()
+
 	}()
 
 	runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
@@ -200,8 +202,10 @@ func (a *App) startControlServer() {
 	controlServer := control.NewServer(a.ServerState, a.logger)
 	a.controlServer = controlServer
 
-	a.SettingsState.RLock()
-	if err := controlServer.Start(fmt.Sprintf("%s:%d", a.SettingsState.Servers.Control.Host, a.SettingsState.Servers.Control.Port), stopChan); err != nil {
+	a.SettingsState.Lock()
+	serverHost := fmt.Sprintf("%s:%d", a.SettingsState.Servers.Control.Host, a.SettingsState.Servers.Control.Port)
+	a.SettingsState.Unlock()
+	if err := controlServer.Start(serverHost, stopChan); err != nil {
 		a.logger.Error("Failed to start control server", zap.Error(err))
 		a.AdminState.Lock()
 		a.AdminState.ControlStatus.Error = err.Error()
@@ -210,7 +214,6 @@ func (a *App) startControlServer() {
 		a.Notify(events.NewNotification("Control server error", "Could not start Control server", "error"))
 		return
 	}
-	a.SettingsState.RUnlock()
 
 	a.AdminState.Lock()
 	a.AdminState.ControlStatus.IsRunning = true
