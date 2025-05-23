@@ -14,15 +14,15 @@ const settingsSchema = z.object({
     Servers: z.object({
         HTTP: z.object({
             Port: z.number().min(1, "Required"),
-            Host: z.string().min(1, "Required"),
+            Host: z.string(),
         }),
         Voice: z.object({
             Port: z.number().min(1, "Required"),
-            Host: z.string().min(1, "Required"),
+            Host: z.string(),
         }),
         Control: z.object({
             Port: z.number().min(1, "Required"),
-            Host: z.string().min(1, "Required"),
+            Host: z.string(),
         }),
     }),
 });
@@ -126,6 +126,7 @@ function SettingsPage() {
                                         variant="outlined"
                                         error={!!fieldState.error}
                                         helperText={fieldState.error?.message}
+                                        onChange={e => field.onChange(e.target.value === "" ? "" : Number(e.target.value))}
                                     />
                                 )}
                             />

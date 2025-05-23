@@ -72,6 +72,14 @@ func GetSettingsState(file string) (*SettingsState, error) {
 						Port: defaultPort,
 					},
 				},
+				Coalitions: make([]Coalition, 0),
+				Frequencies: FrequencySettings{
+					TestFrequencies:   make([]float64, 0),
+					GlobalFrequencies: make([]float64, 0),
+				},
+				General: GeneralSettings{
+					MaxRadiosPerUser: 20,
+				},
 			}
 			err = settings.Save()
 			if err != nil {
