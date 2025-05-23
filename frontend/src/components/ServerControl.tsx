@@ -1,4 +1,4 @@
-import { GetServerStatus, StartServer, StopServer, GetSettings } from '../../wailsjs/go/app/App'
+import {GetServerStatus, StartServer, StopServer, GetSettings, GetClients} from '../../wailsjs/go/app/App'
 import {useState, useEffect, JSX} from 'react'
 import {Box, Button, Chip, Paper, Typography} from "@mui/material";
 import {state} from "../../wailsjs/go/models";
@@ -29,6 +29,12 @@ const ServerControls: () => JSX.Element = () => {
         }
     }
 
+    const fetchNumClients = async () => {
+        const clients = await GetClients();
+        const numClients = Object.keys(clients.Clients).length;
+        setNumClients(numClients);
+    }
+
     const handleStatusChange = async (status: state.AdminState) => {
         setStatus(status);
     }
@@ -39,6 +45,10 @@ const ServerControls: () => JSX.Element = () => {
 
     EventsOn("admin/changed", handleStatusChange);
     EventsOn("settings/changed", handleSettingsChange);
+    EventsOn("clients/changed", (clients: Record<string, state.ClientState>) => {
+        const numClients = Object.keys(clients).length;
+        setNumClients(numClients);
+    })
 
     useEffect(() => {
         if (settings === null) {
@@ -47,6 +57,9 @@ const ServerControls: () => JSX.Element = () => {
         }
         if (status === null) {
             fetchStatus();
+        }
+        if (numClients === 0) {
+            fetchNumClients();
         }
     }, []);
 

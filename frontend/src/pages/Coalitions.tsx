@@ -5,9 +5,9 @@ import {Controller, useForm} from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {MuiColorInput} from "mui-color-input";
-import {AddCoalition, GetCoalitions, RemoveCoalition} from "../../wailsjs/go/app/App";
+import {AddCoalition, GetCoalitions, Notify, RemoveCoalition} from "../../wailsjs/go/app/App";
 import {EventsOn} from "../../wailsjs/runtime";
-import {state} from "../../wailsjs/go/models";
+import {events, state} from "../../wailsjs/go/models";
 
 const coalitionSchema = z.object({
     Name: z.string().min(1, "Name is required"),
@@ -136,7 +136,11 @@ function CoalitionsPage() {
                             RemoveCoalition(deleteItem)
                             setDeleteOpen(false);
                         } else {
-                            console.error("No coalition selected for deletion");
+                            Notify(new events.Notification({
+                                Title: "No coalition selected",
+                                Message: `No coalition selected for deletion`,
+                                Type: "error",
+                            }));
                             setDeleteOpen(false);
                         }
                     }} variant="contained" autoFocus color="error">Delete</Button>

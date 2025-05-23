@@ -15,6 +15,12 @@ const (
 )
 
 const (
+	RadioClientsChanged  = "clients/radio/changed"
+	ClientsChanged       = "clients/changed"
+	BannedClientsChanged = "clients/banned/changed"
+)
+
+const (
 	NotificationEvent = "notification"
 )
 

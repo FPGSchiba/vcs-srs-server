@@ -459,8 +459,7 @@ func (x *ServerAction) GetDuration() int64 {
 // Initial client connection request
 type ClientConnectRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	ClientGuid    string                 `protobuf:"bytes,1,opt,name=client_guid,json=clientGuid,proto3" json:"client_guid,omitempty"`
-	Version       string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
+	Version       string                 `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -495,13 +494,6 @@ func (*ClientConnectRequest) Descriptor() ([]byte, []int) {
 	return file_srs_proto_rawDescGZIP(), []int{5}
 }
 
-func (x *ClientConnectRequest) GetClientGuid() string {
-	if x != nil {
-		return x.ClientGuid
-	}
-	return ""
-}
-
 func (x *ClientConnectRequest) GetVersion() string {
 	if x != nil {
 		return x.Version
@@ -514,6 +506,7 @@ type ServerConnectResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
 	ErrorMessage  string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	ClientGuid    *string                `protobuf:"bytes,3,opt,name=client_guid,json=clientGuid,proto3,oneof" json:"client_guid,omitempty"` // Server sets the Client GUID
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -562,12 +555,19 @@ func (x *ServerConnectResponse) GetErrorMessage() string {
 	return ""
 }
 
+func (x *ServerConnectResponse) GetClientGuid() string {
+	if x != nil && x.ClientGuid != nil {
+		return *x.ClientGuid
+	}
+	return ""
+}
+
 // Client information
 type ClientInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ClientGuid    string                 `protobuf:"bytes,1,opt,name=client_guid,json=clientGuid,proto3" json:"client_guid,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Coalition     int32                  `protobuf:"varint,3,opt,name=coalition,proto3" json:"coalition,omitempty"`
+	Coalition     string                 `protobuf:"bytes,3,opt,name=coalition,proto3" json:"coalition,omitempty"`
 	LastUpdate    int64                  `protobuf:"varint,4,opt,name=last_update,json=lastUpdate,proto3" json:"last_update,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -617,11 +617,11 @@ func (x *ClientInfo) GetName() string {
 	return ""
 }
 
-func (x *ClientInfo) GetCoalition() int32 {
+func (x *ClientInfo) GetCoalition() string {
 	if x != nil {
 		return x.Coalition
 	}
-	return 0
+	return ""
 }
 
 func (x *ClientInfo) GetLastUpdate() int64 {
@@ -637,6 +637,7 @@ type RadioInfo struct {
 	ClientGuid    string                 `protobuf:"bytes,1,opt,name=client_guid,json=clientGuid,proto3" json:"client_guid,omitempty"`
 	LastUpdate    int64                  `protobuf:"varint,2,opt,name=last_update,json=lastUpdate,proto3" json:"last_update,omitempty"`
 	Radios        []*Radio               `protobuf:"bytes,3,rep,name=radios,proto3" json:"radios,omitempty"`
+	Muted         bool                   `protobuf:"varint,4,opt,name=muted,proto3" json:"muted,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -690,6 +691,13 @@ func (x *RadioInfo) GetRadios() []*Radio {
 		return x.Radios
 	}
 	return nil
+}
+
+func (x *RadioInfo) GetMuted() bool {
+	if x != nil {
+		return x.Muted
+	}
+	return false
 }
 
 type Radio struct {
@@ -1170,28 +1178,30 @@ const file_srs_proto_rawDesc = "" +
 	"\x04MUTE\x10\x03\x12\n" +
 	"\n" +
 	"\x06UNMUTE\x10\x04B\v\n" +
-	"\t_duration\"Q\n" +
-	"\x14ClientConnectRequest\x12\x1f\n" +
-	"\vclient_guid\x18\x01 \x01(\tR\n" +
-	"clientGuid\x12\x18\n" +
-	"\aversion\x18\x02 \x01(\tR\aversion\"V\n" +
+	"\t_duration\"0\n" +
+	"\x14ClientConnectRequest\x12\x18\n" +
+	"\aversion\x18\x01 \x01(\tR\aversion\"\x8c\x01\n" +
 	"\x15ServerConnectResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
-	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\"\x80\x01\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\x12$\n" +
+	"\vclient_guid\x18\x03 \x01(\tH\x00R\n" +
+	"clientGuid\x88\x01\x01B\x0e\n" +
+	"\f_client_guid\"\x80\x01\n" +
 	"\n" +
 	"ClientInfo\x12\x1f\n" +
 	"\vclient_guid\x18\x01 \x01(\tR\n" +
 	"clientGuid\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1c\n" +
-	"\tcoalition\x18\x03 \x01(\x05R\tcoalition\x12\x1f\n" +
+	"\tcoalition\x18\x03 \x01(\tR\tcoalition\x12\x1f\n" +
 	"\vlast_update\x18\x04 \x01(\x03R\n" +
-	"lastUpdate\"s\n" +
+	"lastUpdate\"\x89\x01\n" +
 	"\tRadioInfo\x12\x1f\n" +
 	"\vclient_guid\x18\x01 \x01(\tR\n" +
 	"clientGuid\x12\x1f\n" +
 	"\vlast_update\x18\x02 \x01(\x03R\n" +
 	"lastUpdate\x12$\n" +
-	"\x06radios\x18\x03 \x03(\v2\f.srspb.RadioR\x06radios\"c\n" +
+	"\x06radios\x18\x03 \x03(\v2\f.srspb.RadioR\x06radios\x12\x14\n" +
+	"\x05muted\x18\x04 \x01(\bR\x05muted\"c\n" +
 	"\x05Radio\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x05R\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1c\n" +
@@ -1315,6 +1325,7 @@ func file_srs_proto_init() {
 	}
 	file_srs_proto_msgTypes[3].OneofWrappers = []any{}
 	file_srs_proto_msgTypes[4].OneofWrappers = []any{}
+	file_srs_proto_msgTypes[6].OneofWrappers = []any{}
 	file_srs_proto_msgTypes[11].OneofWrappers = []any{
 		(*ServerSetting_StringValue)(nil),
 		(*ServerSetting_BoolValue)(nil),

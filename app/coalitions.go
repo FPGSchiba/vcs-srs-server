@@ -15,6 +15,17 @@ func (a *App) GetCoalitions() []state.Coalition {
 	return a.SettingsState.Coalitions
 }
 
+func (a *App) GetCoalitionByName(name string) *state.Coalition {
+	a.SettingsState.Lock()
+	defer a.SettingsState.Unlock()
+	for _, coalition := range a.SettingsState.Coalitions {
+		if coalition.Name == name {
+			return &coalition
+		}
+	}
+	return nil
+}
+
 func (a *App) AddCoalition(coalition state.Coalition) {
 	a.SettingsState.Lock()
 	defer a.SettingsState.Unlock()

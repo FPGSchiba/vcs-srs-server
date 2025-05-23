@@ -30,10 +30,6 @@ type App struct {
 
 // NewApp creates a new App application struct
 func NewApp(logger *zap.Logger, configFilePath string) *App {
-	serverState := &state.ServerState{
-		Clients: make(map[string]*state.ClientState),
-	}
-
 	settingsState, err := state.GetSettingsState(configFilePath)
 	if err != nil {
 		logger.Error("Failed to load settings", zap.Error(err))
@@ -49,6 +45,25 @@ func NewApp(logger *zap.Logger, configFilePath string) *App {
 			IsRunning: false,
 			Error:     "",
 		},
+	}
+
+	bannedState, err := state.GetBannedState()
+	if err != nil {
+		logger.Error("Failed to load banned clients", zap.Error(err))
+		bannedState = &state.BannedState{
+			BannedClients: make([]state.BannedClient, 0),
+		}
+		err = bannedState.Save()
+		if err != nil {
+			logger.Error("Failed to initialize Banned Clients file", zap.Error(err))
+			panic(err)
+		}
+	}
+
+	serverState := &state.ServerState{
+		Clients:      make(map[string]*state.ClientState),
+		RadioClients: make(map[string]*state.RadioState),
+		BannedState:  *bannedState,
 	}
 
 	return &App{

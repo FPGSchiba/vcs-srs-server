@@ -1,0 +1,30 @@
+@use "../variables.module" as variables;
+
+.ban {
+  &.ban-paper {
+    padding: 30px 20px 10px 20px;
+    overflow-y: scroll;
+    overflow-x: hidden;
+    scrollbar-width: thin;
+    scrollbar-color: variables.$color-primary-main variables.$color-background-paper;
+    height: 325px;
+  }
+
+  &.ban-entry {
+    &.ban-entry-paper {
+      background-color: variables.$color-background;
+      padding: 10px 20px;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+    }
+
+    &.ban-entry-actions {
+      display: flex;
+      flex-direction: row;
+      justify-content: center;
+      align-items: flex-start;
+      margin-left: auto;
+    }
+  }
+}

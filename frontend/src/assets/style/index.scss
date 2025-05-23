@@ -31,4 +31,7 @@ body {
   // Pages
   @include meta.load-css('pages/settings');
   @include meta.load-css('pages/coalitions');
+  @include meta.load-css('pages/clients');
+  @include meta.load-css('pages/ban');
+  @include meta.load-css('pages/frequencies');
 }

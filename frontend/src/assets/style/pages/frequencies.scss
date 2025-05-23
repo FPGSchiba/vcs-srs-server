@@ -1,0 +1,39 @@
+@use "../variables.module" as variables;
+
+.frequencies {
+  &.frequencies-paper {
+    padding: 30px 20px 10px 20px;
+    overflow-y: scroll;
+    overflow-x: hidden;
+    scrollbar-width: thin;
+    scrollbar-color: variables.$color-primary-main variables.$color-background-paper;
+    height: 280px;
+    display: flex;
+    flex-direction: row;
+  }
+
+  &.frequencies-actions {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  &.frequencies-action {
+    width: 160px;
+    height: 40px;
+    font-size: 15px;
+    margin-top: 10px;
+  }
+
+  &.frequencies-list {
+    &.frequencies-list-global {
+      width: 100%;
+      border-right: 1px solid variables.$color-divider;
+    }
+
+    &.frequencies-list-test {
+      width: 100%;
+    }
+  }
+}

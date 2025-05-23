@@ -5,3 +5,4 @@ log/
 **/wailsjs/go/**
 .idea/
 config.yaml
+banned_clients.json
