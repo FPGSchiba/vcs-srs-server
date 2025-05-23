@@ -120,6 +120,7 @@ function FrequencyForm({ onSubmit, onCancel, }: Readonly<{
                         fullWidth
                         error={!!errors.frequencyType}
                         native
+                        label="Frequency Type"
                         className="frequencies frequencies-create frequencies-create-type"
                     >
                         <option value="global">Global</option>

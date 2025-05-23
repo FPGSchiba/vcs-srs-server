@@ -45,6 +45,10 @@ func NewApp(logger *zap.Logger, configFilePath string) *App {
 			IsRunning: false,
 			Error:     "",
 		},
+		ControlStatus: state.ServiceStatus{
+			IsRunning: false,
+			Error:     "",
+		},
 	}
 
 	bannedState, err := state.GetBannedState()
