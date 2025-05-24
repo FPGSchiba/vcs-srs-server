@@ -27,11 +27,13 @@ func main() {
 	}(logger)
 
 	var configFilepath string
+	var autoStartServers bool
 	flag.StringVar(&configFilepath, "config", "config.yaml", "The Path to the config file")
+	flag.BoolVar(&autoStartServers, "autostart", false, "Automatically start the servers on startup") // For console only applications
 	flag.Parse()
 
 	// Create an instance of the app structure
-	gui := app.NewApp(logger, configFilepath)
+	gui := app.NewApp(logger, configFilepath, autoStartServers)
 
 	adaptedLogger := utils.NewZapLoggerAdapter(logger)
 

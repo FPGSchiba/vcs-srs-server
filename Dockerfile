@@ -32,4 +32,4 @@ ENV GIN_MODE=release
 
 USER nonroot:nonroot
 
-ENTRYPOINT ["/usr/bin/vcs-server", "--config=etc/vcs-server/config.yaml"]
+ENTRYPOINT ["/usr/bin/vcs-server", "--config=/etc/vcs-server/config.yaml", "--autostart"]

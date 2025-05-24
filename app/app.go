@@ -22,6 +22,7 @@ type App struct {
 	SettingsState *state.SettingsState
 	AdminState    *state.AdminState
 	logger        *zap.Logger
+	autoStart     bool
 	httpServer    *http.Server
 	voiceServer   *voice.Server
 	controlServer *control.Server // Add this
@@ -29,7 +30,7 @@ type App struct {
 }
 
 // NewApp creates a new App application struct
-func NewApp(logger *zap.Logger, configFilePath string) *App {
+func NewApp(logger *zap.Logger, configFilePath string, autoStartServers bool) *App {
 	settingsState, err := state.GetSettingsState(configFilePath)
 	if err != nil {
 		logger.Error("Failed to load settings", zap.Error(err))
@@ -76,6 +77,7 @@ func NewApp(logger *zap.Logger, configFilePath string) *App {
 		AdminState:    adminState,
 		logger:        logger,
 		StopSignals:   make(map[string]chan struct{}),
+		autoStart:     autoStartServers,
 	}
 }
 
@@ -85,6 +87,9 @@ func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
 	hwnd := win.FindWindow(nil, syscall.StringToUTF16Ptr("vcs-server"))
 	win.SetWindowLong(hwnd, win.GWL_EXSTYLE, win.GetWindowLong(hwnd, win.GWL_EXSTYLE)|win.WS_EX_LAYERED)
+	if a.autoStart {
+		a.StartServer()
+	}
 }
 
 // StartServer starts the HTTP and Voice servers

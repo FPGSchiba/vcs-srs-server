@@ -31,3 +31,12 @@ protoc --go_out=./srs --go_opt=paths=source_relative srs.proto
 ## Building
 
 To build a redistributable, production mode package, use `wails build`.
+
+## Running
+
+The built application can be found in the `build/bin` directory. You can run it by executing the binary file.
+
+### Flags
+You can pass flags to the application by using the `--` separator. Following Flags are available:
+- `--config /path/to/config.yaml` - Path to the config file. Default is `./config.yaml`
+- `--autostart` - If the servers should be started automatically. Default is `false`
