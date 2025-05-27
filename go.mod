@@ -5,7 +5,7 @@ go 1.23.0
 toolchain go1.23.4
 
 require (
-	github.com/gin-gonic/gin v1.10.0
+	github.com/gin-gonic/gin v1.10.1
 	github.com/google/uuid v1.6.0
 	github.com/lxn/win v0.0.0-20210218163916-a377121e959e
 	github.com/wailsapp/wails/v2 v2.10.1
