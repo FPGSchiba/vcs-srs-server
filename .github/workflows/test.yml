@@ -19,23 +19,11 @@ jobs:
         with:
           go-version: '1.24'
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      # Needed for Wails Bindings and embed files
+      - name: Build Wails app
+        uses: dAppServer/wails-build-action@v3
         with:
-          node-version: 20
-
-      - name: Install Go dependencies
-        run: go mod download
-
-      - name: Install Node.js dependencies
-        run: |
-          cd frontend
-          npm install
-
-      - name: Build frontend
-        run: |
-          cd frontend
-          npm run build
+          package: false
 
       - name: Run tests
         run: go test -v -coverprofile=coverage.out ./...
