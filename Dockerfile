@@ -11,7 +11,7 @@ COPY . .
 RUN find . -type f -name "*_test.go" -delete
 
 # Headless build for production
-RUN CGO_ENABLED=0 GOOS=linux go build -tags desktop,production -ldflags "-w -s" -o build/bin/vcs-server-headless
+RUN CGO_ENABLED=0 GOOS=linux go build -tags headless,production -ldflags "-w -s" -o build/bin/vcs-server-headless
 RUN mkdir /dist
 RUN mv /app/build/bin/vcs-server /dist/vcs-server
 

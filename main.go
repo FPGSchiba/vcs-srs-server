@@ -1,7 +1,6 @@
 package main
 
 import (
-	"embed"
 	"flag"
 	"github.com/FPGSchiba/vcs-srs-server/app"
 	"github.com/FPGSchiba/vcs-srs-server/utils"
@@ -13,8 +12,11 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 )
 
-//go:embed all:frontend/dist
-var assets embed.FS
+func isAssetsFSAvailable() bool {
+	// Try to read the root of the assets FS
+	_, err := assets.Open("index.html")
+	return err == nil
+}
 
 func main() {
 	logger := utils.CreateLogger()
@@ -38,29 +40,46 @@ func main() {
 	adaptedLogger := utils.NewZapLoggerAdapter(logger)
 
 	// Create application with options
-	err := wails.Run(&options.App{
-		Title:  "vcs-server",
-		Width:  1080,
-		Height: 800,
-		Logger: adaptedLogger,
-		AssetServer: &assetserver.Options{
-			Assets: assets,
-		},
-		BackgroundColour: &options.RGBA{R: 0, G: 0, B: 0, A: 0},
-		OnStartup:        gui.Startup,
-		Bind: []interface{}{
-			gui,
-		},
-		Frameless:     true,
-		DisableResize: true,
-		Debug: options.Debug{
-			OpenInspectorOnStartup: true,
-		},
-		Windows: &windows.Options{
-			WebviewIsTransparent: true,
-			WindowIsTranslucent:  false,
-		},
-	})
+	var appOptions *options.App
+
+	if isAssetsFSAvailable() {
+		// Normal mode with UI
+		appOptions = &options.App{
+			Title:  "vcs-server",
+			Width:  1080,
+			Height: 800,
+			Logger: adaptedLogger,
+			AssetServer: &assetserver.Options{
+				Assets: assets,
+			},
+			BackgroundColour: &options.RGBA{R: 0, G: 0, B: 0, A: 0},
+			OnStartup:        gui.Startup,
+			Bind: []interface{}{
+				gui,
+			},
+			Frameless:     true,
+			DisableResize: true,
+			Debug: options.Debug{
+				OpenInspectorOnStartup: true,
+			},
+			Windows: &windows.Options{
+				WebviewIsTransparent: true,
+				WindowIsTranslucent:  false,
+			},
+		}
+	} else {
+		// Headless mode - no UI components
+		appOptions = &options.App{
+			Logger:    adaptedLogger,
+			OnStartup: gui.Startup,
+			Bind: []interface{}{
+				gui,
+			},
+		}
+	}
+
+	// Run the application
+	err := wails.Run(appOptions)
 
 	if err != nil {
 		println("Error:", err.Error())
