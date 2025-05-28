@@ -6,11 +6,9 @@ import (
 	"github.com/FPGSchiba/vcs-srs-server/events"
 	"github.com/FPGSchiba/vcs-srs-server/state"
 	"github.com/FPGSchiba/vcs-srs-server/voice"
-	"github.com/lxn/win"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"go.uber.org/zap"
 	"net/http"
-	"syscall"
 )
 
 const Version = "v0.1.0"
@@ -85,8 +83,7 @@ func NewApp(logger *zap.Logger, configFilePath string, autoStartServers bool) *A
 // so we can call the runtime methods
 func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
-	hwnd := win.FindWindow(nil, syscall.StringToUTF16Ptr("vcs-server"))
-	win.SetWindowLong(hwnd, win.GWL_EXSTYLE, win.GetWindowLong(hwnd, win.GWL_EXSTYLE)|win.WS_EX_LAYERED)
+	a.setupWindow()
 	if a.autoStart {
 		a.StartServer()
 	}
