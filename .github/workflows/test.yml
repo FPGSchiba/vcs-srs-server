@@ -21,9 +21,10 @@ jobs:
 
       # Needed for Wails Bindings and embed files
       - name: Build Wails app
-        uses: dAppServer/wails-build-action@v3
+        uses: dAppServer/wails-build-action@main
         with:
           package: false
+          wails-version: "v2.9.0"
 
       - name: Run tests
         run: go test -v -coverprofile=coverage.out ./...
