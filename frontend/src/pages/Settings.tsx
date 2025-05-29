@@ -1,11 +1,12 @@
 import React, { useEffect } from 'react';
 import { Box, Button, FormControl, FormLabel, Paper, TextField, Typography } from "@mui/material";
-import { GetSettings, SaveGeneralSettings, SaveServerSettings } from "../../wailsjs/go/app/App";
+import { GetSettings, SaveGeneralSettings, SaveServerSettings } from "../../bindings/github.com/FPGSchiba/vcs-srs-server/services/settingsservice";
 import { useForm, Controller } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
-import {state} from "../../wailsjs/go/models";
-import {EventsOn} from "../../wailsjs/runtime";
+import { SettingsState } from "../../bindings/github.com/FPGSchiba/vcs-srs-server/state";
+import { Events } from "@wailsio/runtime";
+import { WailsEvent } from "@wailsio/runtime/types/events";
 
 const settingsSchema = z.object({
     General: z.object({
@@ -45,7 +46,10 @@ function SettingsPage() {
     const fetchSettings = async () => {
         try {
             const newSettings = await GetSettings();
-            // Convert string/number fields as needed
+            if (!newSettings) {
+                console.error('No settings found');
+                return;
+            }
             reset({
                 General: {
                     MaxRadiosPerUser: Number(newSettings.General.MaxRadiosPerUser) || 1,
@@ -73,14 +77,15 @@ function SettingsPage() {
     const onSubmit = async (data: SettingsFormType) => {
         try {
             await SaveGeneralSettings(data.General);
-            await SaveServerSettings({ ...data.Servers, convertValues: () => {} });
+            await SaveServerSettings({ ...data.Servers });
             await fetchSettings();
         } catch (error) {
             console.error('Failed to save settings:', error);
         }
     };
 
-    const handleSettingsChange = async (settings: state.SettingsState) => {
+    const handleSettingsChange = async (event: WailsEvent) => {
+        const settings = event.data[0] as SettingsState;
         reset({
             General: {
                 MaxRadiosPerUser: Number(settings.General.MaxRadiosPerUser) || 1,
@@ -102,10 +107,9 @@ function SettingsPage() {
         })
     }
 
-    EventsOn("settings/changed", handleSettingsChange);
-
     useEffect(() => {
         fetchSettings();
+        Events.On("settings/changed", handleSettingsChange);
     }, []);
 
     return (

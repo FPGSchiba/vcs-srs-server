@@ -1,13 +1,16 @@
-import {Box, Button, Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle, Paper, TextField, Typography} from "@mui/material";
+import {Box, Button, Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle, Paper, TextField} from "@mui/material";
 import React, {useEffect} from "react";
 import CoalitionEntry from "../components/CoalitionEntry";
 import {Controller, useForm} from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {MuiColorInput} from "mui-color-input";
-import {AddCoalition, GetCoalitions, Notify, RemoveCoalition} from "../../wailsjs/go/app/App";
-import {EventsOn} from "../../wailsjs/runtime";
-import {events, state} from "../../wailsjs/go/models";
+import {AddCoalition, GetCoalitions,  RemoveCoalition} from "../../bindings/github.com/FPGSchiba/vcs-srs-server/services/coalitionservice";
+import { Notify } from "../../bindings/github.com/FPGSchiba/vcs-srs-server/services/notificationservice"
+import {Events} from "@wailsio/runtime";
+import {Notification} from "../../bindings/github.com/FPGSchiba/vcs-srs-server/events"
+import { Coalition } from "../../bindings/github.com/FPGSchiba/vcs-srs-server/state";
+import {WailsEvent} from "@wailsio/runtime/types/events";
 
 const coalitionSchema = z.object({
     Name: z.string().min(1, "Name is required"),
@@ -86,9 +89,9 @@ function CoalitionFormComponent({onSubmit, onCancel }: { onSubmit: (data: Coalit
 
 function CoalitionsPage() {
     const [deleteOpen, setDeleteOpen] = React.useState(false);
-    const [deleteItem, setDeleteFor] = React.useState<state.Coalition | null>(null);
+    const [deleteItem, setDeleteFor] = React.useState<Coalition | null>(null);
     const [createOpen, setCreateOpen] = React.useState(false);
-    const [coalitions, setCoalitions] = React.useState<state.Coalition[]>([]);
+    const [coalitions, setCoalitions] = React.useState<Coalition[]>([]);
 
     const fetchCoalitions = async () => {
         const data = await GetCoalitions();
@@ -96,8 +99,8 @@ function CoalitionsPage() {
     }
 
     useEffect(() => {
-        EventsOn("settings/coalitions/changed", (data: state.Coalition[]) => {
-            setCoalitions(data);
+        Events.On("settings/coalitions/changed", (event: WailsEvent) => {
+            setCoalitions(event.data[0] as Coalition[]);
         });
         if (coalitions.length === 0) {
             fetchCoalitions();
@@ -136,10 +139,10 @@ function CoalitionsPage() {
                             RemoveCoalition(deleteItem)
                             setDeleteOpen(false);
                         } else {
-                            Notify(new events.Notification({
-                                Title: "No coalition selected",
-                                Message: `No coalition selected for deletion`,
-                                Type: "error",
+                            Notify(new Notification({
+                                title: "No coalition selected",
+                                message: `No coalition selected for deletion`,
+                                level: "error",
                             }));
                             setDeleteOpen(false);
                         }

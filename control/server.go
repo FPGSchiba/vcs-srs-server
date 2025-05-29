@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 	"github.com/FPGSchiba/vcs-srs-server/state"
-	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"log/slog"
 	"net"
 	"sync"
 )
@@ -16,13 +16,13 @@ type Server struct {
 	mu          sync.RWMutex
 	grpcServer  *grpc.Server
 	listener    net.Listener
-	logger      *zap.Logger
+	logger      *slog.Logger
 	serverState *state.ServerState
 	isRunning   bool
 	stopOnce    sync.Once // Add this to ensure we only stop once
 }
 
-func NewServer(serverState *state.ServerState, logger *zap.Logger) *Server {
+func NewServer(serverState *state.ServerState, logger *slog.Logger) *Server {
 	return &Server{
 		serverState: serverState,
 		logger:      logger,
@@ -61,10 +61,10 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 
 	// Start server
 	go func() {
-		s.logger.Info("Starting gRPC server", zap.String("address", address))
+		s.logger.Info("Starting gRPC server", "address", address)
 		if err := s.grpcServer.Serve(s.listener); err != nil {
 			if err != grpc.ErrServerStopped {
-				s.logger.Error("gRPC server error", zap.Error(err))
+				s.logger.Error("gRPC server error", "error", err)
 			}
 			s.mu.Lock()
 			s.isRunning = false
@@ -117,15 +117,15 @@ func (s *Server) IsRunning() bool {
 // Logging interceptor for debugging
 func (s *Server) loggingInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 	s.logger.Debug("gRPC request",
-		zap.String("method", info.FullMethod),
-		zap.Any("request", req))
+		"method", info.FullMethod,
+		"request", req)
 
 	resp, err := handler(ctx, req)
 
 	if err != nil {
 		s.logger.Error("gRPC error",
-			zap.String("method", info.FullMethod),
-			zap.Error(err))
+			"method", info.FullMethod,
+			"error", err)
 	}
 
 	return resp, err

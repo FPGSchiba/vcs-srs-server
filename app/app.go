@@ -1,37 +1,48 @@
 package app
 
 import (
-	"context"
 	"github.com/FPGSchiba/vcs-srs-server/control"
 	"github.com/FPGSchiba/vcs-srs-server/events"
 	"github.com/FPGSchiba/vcs-srs-server/state"
 	"github.com/FPGSchiba/vcs-srs-server/voice"
-	"github.com/wailsapp/wails/v2/pkg/runtime"
-	"go.uber.org/zap"
+	"github.com/wailsapp/wails/v3/pkg/application"
 	"net/http"
 )
 
 const Version = "v0.1.0"
 
-// App struct
-type App struct {
-	ctx           context.Context
+// VCSApplication struct
+type VCSApplication struct {
 	ServerState   *state.ServerState
 	SettingsState *state.SettingsState
 	AdminState    *state.AdminState
-	logger        *zap.Logger
 	autoStart     bool
 	httpServer    *http.Server
 	voiceServer   *voice.Server
 	controlServer *control.Server // Add this
 	StopSignals   map[string]chan struct{}
+	App           *application.App
 }
 
-// NewApp creates a new App application struct
-func NewApp(logger *zap.Logger, configFilePath string, autoStartServers bool) *App {
+// New creates a new App application struct
+func New() *VCSApplication {
+	return &VCSApplication{
+		ServerState:   &state.ServerState{},
+		SettingsState: &state.SettingsState{},
+		AdminState:    &state.AdminState{},
+		autoStart:     false,
+		httpServer:    nil,
+		voiceServer:   nil,
+		controlServer: nil, // Initialize control server
+		StopSignals:   make(map[string]chan struct{}),
+		App:           nil,
+	}
+}
+
+func (a *VCSApplication) StartUp(app *application.App, configFilePath string, autoStartServers bool) {
 	settingsState, err := state.GetSettingsState(configFilePath)
 	if err != nil {
-		logger.Error("Failed to load settings", zap.Error(err))
+		app.Logger.Error("Failed to load settings", "error", err)
 		panic(err) // Without settings, we can't run
 	}
 
@@ -52,13 +63,13 @@ func NewApp(logger *zap.Logger, configFilePath string, autoStartServers bool) *A
 
 	bannedState, err := state.GetBannedState()
 	if err != nil {
-		logger.Error("Failed to load banned clients", zap.Error(err))
+		app.Logger.Error("Failed to load banned clients", "error", err)
 		bannedState = &state.BannedState{
 			BannedClients: make([]state.BannedClient, 0),
 		}
 		err = bannedState.Save()
 		if err != nil {
-			logger.Error("Failed to initialize Banned Clients file", zap.Error(err))
+			app.Logger.Error("Failed to initialize Banned Clients file", "error", err)
 			panic(err)
 		}
 	}
@@ -69,28 +80,19 @@ func NewApp(logger *zap.Logger, configFilePath string, autoStartServers bool) *A
 		BannedState:  *bannedState,
 	}
 
-	return &App{
-		ServerState:   serverState,
-		SettingsState: settingsState,
-		AdminState:    adminState,
-		logger:        logger,
-		StopSignals:   make(map[string]chan struct{}),
-		autoStart:     autoStartServers,
-	}
-}
+	a.ServerState = serverState
+	a.SettingsState = settingsState
+	a.AdminState = adminState
+	a.autoStart = autoStartServers
+	a.App = app
 
-// Startup is called when the app starts. The context is saved
-// so we can call the runtime methods
-func (a *App) Startup(ctx context.Context) {
-	a.ctx = ctx
-	a.setupWindow()
-	if a.autoStart {
+	if autoStartServers {
 		a.StartServer()
 	}
 }
 
 // StartServer starts the HTTP and Voice servers
-func (a *App) StartServer() {
+func (a *VCSApplication) StartServer() {
 	a.AdminState.Lock()
 	if a.AdminState.HTTPStatus.IsRunning ||
 		a.AdminState.VoiceStatus.IsRunning ||
@@ -108,7 +110,7 @@ func (a *App) StartServer() {
 }
 
 // StopServer starts the HTTP and Voice servers
-func (a *App) StopServer() {
+func (a *VCSApplication) StopServer() {
 	a.AdminState.RLock()
 	if !a.AdminState.HTTPStatus.IsRunning &&
 		!a.AdminState.VoiceStatus.IsRunning &&
@@ -126,17 +128,17 @@ func (a *App) StopServer() {
 }
 
 // GetServerStatus returns the status of the HTTP and Voice servers
-func (a *App) GetServerStatus() *state.AdminState {
+func (a *VCSApplication) GetServerStatus() *state.AdminState {
 	a.AdminState.RLock()
 	defer a.AdminState.RUnlock()
 	return a.AdminState
 }
 
-func (a *App) GetServerVersion() string {
+func (a *VCSApplication) GetServerVersion() string {
 	return Version
 }
 
-func (a *App) Notify(notification events.Notification) {
-	runtime.EventsEmit(a.ctx, events.NotificationEvent, notification)
-	a.logger.Info("Notification", zap.String("title", notification.Title), zap.String("message", notification.Message), zap.String("level", notification.Level))
+func (a *VCSApplication) Notify(notification events.Notification) {
+	a.App.EmitEvent(events.NotificationEvent, notification)
+	a.App.Logger.Info("Notification", "title", notification.Title, "message", notification.Message, "level", notification.Level)
 }

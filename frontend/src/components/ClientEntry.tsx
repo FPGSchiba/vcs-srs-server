@@ -1,13 +1,16 @@
 import * as React from 'react';
-import {events, state} from "../../wailsjs/go/models";
+import {ClientState, RadioState, Coalition} from "../../bindings/github.com/FPGSchiba/vcs-srs-server/state";
+import {Notification} from "../../bindings/github.com/FPGSchiba/vcs-srs-server/events";
 import {Box, Button, Paper, Typography} from "@mui/material";
 import CircleIcon from "@mui/icons-material/Circle";
-import {GetCoalitionByName, IsClientMuted, MuteClient, Notify, UnmuteClient} from "../../wailsjs/go/app/App";
-import {EventsOn} from "../../wailsjs/runtime";
+import {GetCoalitionByName,} from "../../bindings/github.com/FPGSchiba/vcs-srs-server/services/coalitionservice";
+import {Notify} from "../../bindings/github.com/FPGSchiba/vcs-srs-server/services/notificationservice";
+import {IsClientMuted, MuteClient, UnmuteClient} from "../../bindings/github.com/FPGSchiba/vcs-srs-server/services/clientservice"
+import {Events} from "@wailsio/runtime";
 
-function ClientEntry(props: Readonly<{ client: state.ClientState, clientId: string, handleBan: (clientId: string) => void, handleKick: (clientId: string) => void }>) {
+function ClientEntry(props: Readonly<{ client: ClientState, clientId: string, handleBan: (clientId: string) => void, handleKick: (clientId: string) => void }>) {
     const { client, clientId, handleBan, handleKick } = props;
-    const [coalition, setCoalition] = React.useState<state.Coalition | null>(null);
+    const [coalition, setCoalition] = React.useState<Coalition | null>(null);
     const [muted, setMuted] = React.useState<boolean>(false);
 
     const fetchRadioClient = async () => {
@@ -17,20 +20,21 @@ function ClientEntry(props: Readonly<{ client: state.ClientState, clientId: stri
 
     React.useEffect(() => {
         if (client.Coalition) {
-            GetCoalitionByName(client.Coalition).then((coalition?: state.Coalition) => {
+            GetCoalitionByName(client.Coalition).then((coalition) => {
                 if (coalition) {
                     setCoalition(coalition);
                 } else {
-                    Notify(new events.Notification({
-                        Title: "Client Coalition not found",
-                        Message: `Client ${client.Name} has no valid coalition`,
-                        Type: "warning",
+                    Notify(new Notification({
+                        title: "Client Coalition not found",
+                        message: `Client ${client.Name} has no valid coalition`,
+                        level: "warning",
                     }));
                 }
             });
         }
         fetchRadioClient()
-        EventsOn("clients/radio/changed", (clients: Record<string, state.RadioState>) => {
+        Events.On("clients/radio/changed", (event) => {
+            const clients = event.data[0] as Record<string, RadioState>;
             if (clients[clientId]) {
                 setMuted(clients[clientId].Muted);
             }

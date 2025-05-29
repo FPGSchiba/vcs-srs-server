@@ -3,10 +3,10 @@ import {Alert} from "@mui/material";
 import Typography from "@mui/material/Typography";
 import IconButton from "@mui/material/IconButton";
 import CloseIcon from '@mui/icons-material/Close';
-import { events } from "../../wailsjs/go/models";
+import {Notification} from "../../bindings/github.com/FPGSchiba/vcs-srs-server/events";
 import {useEffect} from "react";
 
-export function ClosingAlert(props: Readonly<{ notification: events.Notification, closeNotification: (id: string) => void }>) {
+export function ClosingAlert(props: Readonly<{ notification: Notification, closeNotification: (id: string) => void }>) {
     const {notification, closeNotification} = props;
 
     useEffect(() => {

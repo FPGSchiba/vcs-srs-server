@@ -1,13 +1,13 @@
 import * as React from 'react';
-import {state} from "../../wailsjs/go/models";
+import {Coalition} from "../../bindings/github.com/FPGSchiba/vcs-srs-server/state";
 import {Box, Button, Paper, TextField, Typography} from "@mui/material";
 import {MuiColorInput} from "mui-color-input";
 import {Controller, useForm} from "react-hook-form";
 import {zodResolver} from "@hookform/resolvers/zod";
 import {z} from "zod";
-import {UpdateCoalition} from "../../wailsjs/go/app/App";
+import {UpdateCoalition} from "../../bindings/github.com/FPGSchiba/vcs-srs-server/services/coalitionservice";
 
-function CoalitionEntry(props: Readonly<{ coalition: state.Coalition, openDeleteDialog: () => void }>) {
+function CoalitionEntry(props: Readonly<{ coalition: Coalition, openDeleteDialog: () => void }>) {
     const { coalition, openDeleteDialog } = props;
 
     const coalitionSchema = z.object({

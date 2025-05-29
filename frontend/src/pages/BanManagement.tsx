@@ -1,11 +1,11 @@
 import React from "react";
 import {Box, Button, Paper, Typography} from "@mui/material";
-import {state} from "../../wailsjs/go/models";
-import {GetBannedClients, UnbanClient} from "../../wailsjs/go/app/App";
-import {EventsOn} from "../../wailsjs/runtime";
+import {BannedClient} from "../../bindings/github.com/FPGSchiba/vcs-srs-server/state";
+import {GetBannedClients, UnbanClient} from "../../bindings/github.com/FPGSchiba/vcs-srs-server/services/clientservice";
+import {Events} from "@wailsio/runtime";
 
 function BanManagement() {
-    const [bannedClients, setBannedClients] = React.useState<state.BannedClient[]>([]);
+    const [bannedClients, setBannedClients] = React.useState<BannedClient[]>([]);
 
     const fetchBannedClients = async () => {
         const bannedClients = await GetBannedClients();
@@ -14,7 +14,8 @@ function BanManagement() {
 
     React.useEffect(() => {
         fetchBannedClients();
-        EventsOn("clients/banned/changed", (bannedClients: state.BannedClient[]) => {
+        Events.On("clients/banned/changed", (event) => {
+            const bannedClients = event.data[0] as BannedClient[]
             setBannedClients(bannedClients);
         });
     }, []);

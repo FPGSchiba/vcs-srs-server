@@ -1,15 +1,18 @@
-import {GetServerStatus, StartServer, StopServer, GetSettings, GetClients} from '../../wailsjs/go/app/App'
+import {GetServerStatus, StartServer, StopServer} from '../../bindings/github.com/FPGSchiba/vcs-srs-server/services/controlservice'
+import {GetClients} from '../../bindings/github.com/FPGSchiba/vcs-srs-server/services/clientservice'
+import {GetSettings} from '../../bindings/github.com/FPGSchiba/vcs-srs-server/services/settingsservice'
 import {useState, useEffect, JSX} from 'react'
 import {Box, Button, Chip, Paper, Typography} from "@mui/material";
-import {state} from "../../wailsjs/go/models";
-import {EventsOn} from "../../wailsjs/runtime";
+import {AdminState, SettingsState, ClientState} from "../../bindings/github.com/FPGSchiba/vcs-srs-server/state";
+import {Events} from "@wailsio/runtime";
+import {WailsEvent} from "@wailsio/runtime/types/events";
 
 
 const ServerControls: () => JSX.Element = () => {
-    const [status, setStatus] = useState<state.AdminState | null>(null);
+    const [status, setStatus] = useState<AdminState | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [numClients , setNumClients] = useState(0);
-    const [settings, setSettings] = useState<state.SettingsState | null>(null);
+    const [settings, setSettings] = useState<SettingsState | null>(null);
 
     const fetchStatus = async () => {
         try {
@@ -35,20 +38,15 @@ const ServerControls: () => JSX.Element = () => {
         setNumClients(numClients);
     }
 
-    const handleStatusChange = async (status: state.AdminState) => {
+    const handleStatusChange = async (event: WailsEvent) => {
+        const status = event.data[0] as AdminState;
         setStatus(status);
     }
 
-    const handleSettingsChange = async (settings: state.SettingsState) => {
+    const handleSettingsChange = async (event: WailsEvent) => {
+        const settings = event.data[0] as SettingsState;
         setSettings(settings);
     }
-
-    EventsOn("admin/changed", handleStatusChange);
-    EventsOn("settings/changed", handleSettingsChange);
-    EventsOn("clients/changed", (clients: Record<string, state.ClientState>) => {
-        const numClients = Object.keys(clients).length;
-        setNumClients(numClients);
-    })
 
     useEffect(() => {
         if (settings === null) {
@@ -61,6 +59,13 @@ const ServerControls: () => JSX.Element = () => {
         if (numClients === 0) {
             fetchNumClients();
         }
+        Events.On("admin/changed", handleStatusChange);
+        Events.On("settings/changed", handleSettingsChange);
+        Events.On("clients/changed", (event: WailsEvent) => {
+            const clients = event.data[0] as Record<string, ClientState>
+            const numClients = Object.keys(clients).length;
+            setNumClients(numClients);
+        })
     }, []);
 
     const handleServerToggle = async () => {

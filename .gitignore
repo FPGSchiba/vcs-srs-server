@@ -3,6 +3,7 @@ node_modules
 frontend/dist
 log/
 **/wailsjs/go/**
+**/bindings/
 .idea/
 config.yaml
 banned_clients.json
