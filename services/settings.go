@@ -29,7 +29,7 @@ func (s *SettingsService) SaveGeneralSettings(newSettings *state.GeneralSettings
 	s.App.SettingsState.General = *newSettings
 	err := s.App.SettingsState.Save()
 	if err != nil {
-		s.App.App.Logger.Error(fmt.Sprintf("Failed to save settings: %v", err))
+		s.App.Logger.Error(fmt.Sprintf("Failed to save settings: %v", err))
 		s.App.Notify(events.NewNotification("Failed to save settings", "Failed to save settings", "error"))
 		return
 	}
@@ -43,7 +43,7 @@ func (s *SettingsService) SaveServerSettings(newSettings *state.ServerSettings) 
 	s.App.SettingsState.Servers = *newSettings
 	err := s.App.SettingsState.Save()
 	if err != nil {
-		s.App.App.Logger.Error(fmt.Sprintf("Failed to save settings: %v", err))
+		s.App.Logger.Error(fmt.Sprintf("Failed to save settings: %v", err))
 		s.App.Notify(events.NewNotification("Failed to save settings", "Failed to save settings", "error"))
 		return
 	}
@@ -57,7 +57,7 @@ func (s *SettingsService) SaveFrequencySettings(newSettings *state.FrequencySett
 	s.App.SettingsState.Frequencies = *newSettings
 	err := s.App.SettingsState.Save()
 	if err != nil {
-		s.App.App.Logger.Error(fmt.Sprintf("Failed to save settings: %v", err))
+		s.App.Logger.Error(fmt.Sprintf("Failed to save settings: %v", err))
 		s.App.Notify(events.NewNotification("Failed to save settings", "Failed to save settings", "error"))
 		return
 	}

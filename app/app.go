@@ -6,6 +6,7 @@ import (
 	"github.com/FPGSchiba/vcs-srs-server/state"
 	"github.com/FPGSchiba/vcs-srs-server/voice"
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"log/slog"
 	"net/http"
 )
 
@@ -17,11 +18,13 @@ type VCSApplication struct {
 	SettingsState *state.SettingsState
 	AdminState    *state.AdminState
 	autoStart     bool
+	headlessMode  bool
 	httpServer    *http.Server
 	voiceServer   *voice.Server
 	controlServer *control.Server // Add this
 	StopSignals   map[string]chan struct{}
 	App           *application.App
+	Logger        *slog.Logger // Optional Logger, only used in headless mode
 }
 
 // New creates a new App application struct
@@ -39,7 +42,7 @@ func New() *VCSApplication {
 	}
 }
 
-func (a *VCSApplication) StartUp(app *application.App, configFilePath string, autoStartServers bool) {
+func (a *VCSApplication) StartUp(app *application.App, configFilePath, bannedFilePath string, autoStartServers bool) {
 	settingsState, err := state.GetSettingsState(configFilePath)
 	if err != nil {
 		app.Logger.Error("Failed to load settings", "error", err)
@@ -61,7 +64,7 @@ func (a *VCSApplication) StartUp(app *application.App, configFilePath string, au
 		},
 	}
 
-	bannedState, err := state.GetBannedState()
+	bannedState, err := state.GetBannedState(bannedFilePath)
 	if err != nil {
 		app.Logger.Error("Failed to load banned clients", "error", err)
 		bannedState = &state.BannedState{
@@ -84,11 +87,62 @@ func (a *VCSApplication) StartUp(app *application.App, configFilePath string, au
 	a.SettingsState = settingsState
 	a.AdminState = adminState
 	a.autoStart = autoStartServers
+	a.Logger = app.Logger
 	a.App = app
+	a.headlessMode = false
 
 	if autoStartServers {
 		a.StartServer()
 	}
+}
+
+func (a *VCSApplication) HeadlessStartup(logger *slog.Logger, configFilePath, bannedFilePath string) {
+	settingsState, err := state.GetSettingsState(configFilePath)
+	if err != nil {
+		panic(err) // Without settings, we can't run
+	}
+
+	adminState := &state.AdminState{
+		HTTPStatus: state.ServiceStatus{
+			IsRunning: false,
+			Error:     "",
+		},
+		VoiceStatus: state.ServiceStatus{
+			IsRunning: false,
+			Error:     "",
+		},
+		ControlStatus: state.ServiceStatus{
+			IsRunning: false,
+			Error:     "",
+		},
+	}
+
+	bannedState, err := state.GetBannedState(bannedFilePath)
+	if err != nil {
+		bannedState = &state.BannedState{
+			BannedClients: make([]state.BannedClient, 0),
+		}
+		err = bannedState.Save()
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	serverState := &state.ServerState{
+		Clients:      make(map[string]*state.ClientState),
+		RadioClients: make(map[string]*state.RadioState),
+		BannedState:  *bannedState,
+	}
+
+	a.ServerState = serverState
+	a.SettingsState = settingsState
+	a.AdminState = adminState
+	a.autoStart = true
+	a.headlessMode = true
+	a.Logger = logger
+	a.App = nil // No application context in headless mode
+
+	a.StartServer()
 }
 
 // StartServer starts the HTTP and Voice servers
@@ -139,6 +193,15 @@ func (a *VCSApplication) GetServerVersion() string {
 }
 
 func (a *VCSApplication) Notify(notification events.Notification) {
-	a.App.EmitEvent(events.NotificationEvent, notification)
-	a.App.Logger.Info("Notification", "title", notification.Title, "message", notification.Message, "level", notification.Level)
+	a.EmitEvent(events.Event{
+		Name: events.NotificationEvent,
+		Data: notification,
+	})
+	a.Logger.Info("Notification", "title", notification.Title, "message", notification.Message, "level", notification.Level)
+}
+
+func (a *VCSApplication) EmitEvent(event events.Event) {
+	if !a.headlessMode { // Only emit events if not in headless mode
+		a.App.EmitEvent(event.Name, event.Data)
+	}
 }

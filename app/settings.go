@@ -18,7 +18,7 @@ func (a *VCSApplication) SaveGeneralSettings(newSettings *state.GeneralSettings)
 	a.SettingsState.General = *newSettings
 	err := a.SettingsState.Save()
 	if err != nil {
-		a.App.Logger.Error(fmt.Sprintf("Failed to save settings: %v", err))
+		a.Logger.Error(fmt.Sprintf("Failed to save settings: %v", err))
 		a.Notify(events.NewNotification("Failed to save settings", "Failed to save settings", "error"))
 		return
 	}
@@ -32,7 +32,7 @@ func (a *VCSApplication) SaveServerSettings(newSettings *state.ServerSettings) {
 	a.SettingsState.Servers = *newSettings
 	err := a.SettingsState.Save()
 	if err != nil {
-		a.App.Logger.Error(fmt.Sprintf("Failed to save settings: %v", err))
+		a.Logger.Error(fmt.Sprintf("Failed to save settings: %v", err))
 		a.Notify(events.NewNotification("Failed to save settings", "Failed to save settings", "error"))
 		return
 	}
@@ -46,7 +46,7 @@ func (a *VCSApplication) SaveFrequencySettings(newSettings *state.FrequencySetti
 	a.SettingsState.Frequencies = *newSettings
 	err := a.SettingsState.Save()
 	if err != nil {
-		a.App.Logger.Error(fmt.Sprintf("Failed to save settings: %v", err))
+		a.Logger.Error(fmt.Sprintf("Failed to save settings: %v", err))
 		a.Notify(events.NewNotification("Failed to save settings", "Failed to save settings", "error"))
 		return
 	}

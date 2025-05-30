@@ -51,7 +51,7 @@ func (a *VCSApplication) BanClient(clientId string, reason string) { // TODO: Im
 	client, ok := a.ServerState.Clients[clientId]
 	if !ok {
 		a.Notify(events.NewNotification("Ban failed", "Client not found", "error"))
-		a.App.Logger.Error("Failed to ban client", zap.String("clientId", clientId), zap.String("reason", reason))
+		a.Logger.Error("Failed to ban client", zap.String("clientId", clientId), zap.String("reason", reason))
 		return
 	}
 	a.ServerState.BannedState.BannedClients = append(a.ServerState.BannedState.BannedClients, state.BannedClient{
@@ -63,14 +63,20 @@ func (a *VCSApplication) BanClient(clientId string, reason string) { // TODO: Im
 	err := a.ServerState.BannedState.Save()
 	if err != nil {
 		a.Notify(events.NewNotification("Ban failed", "Failed to save banned clients", "error"))
-		a.App.Logger.Error("Failed to save banned clients", "error", err)
+		a.Logger.Error("Failed to save banned clients", "error", err)
 		return
 	}
 	delete(a.ServerState.Clients, clientId)
-	a.App.EmitEvent(events.ClientsChanged, a.ServerState.Clients)
-	a.App.EmitEvent(events.BannedClientsChanged, a.ServerState.BannedState.BannedClients)
+	a.EmitEvent(events.Event{
+		Name: events.ClientsChanged,
+		Data: a.ServerState.Clients,
+	})
+	a.EmitEvent(events.Event{
+		Name: events.BannedClientsChanged,
+		Data: a.ServerState.BannedState.BannedClients,
+	})
 	a.Notify(events.NewNotification("Ban succeeded", "Client banned successfully", "success"))
-	a.App.Logger.Info("Client banned", "clientId", clientId, "reason", reason)
+	a.Logger.Info("Client banned", "clientId", clientId, "reason", reason)
 }
 
 func (a *VCSApplication) UnbanClient(clientId string) {
@@ -86,16 +92,19 @@ func (a *VCSApplication) UnbanClient(clientId string) {
 	}
 	if !success {
 		a.Notify(events.NewNotification("Unban failed", "Client not found", "error"))
-		a.App.Logger.Error("Failed to unban client", "clientId", clientId)
+		a.Logger.Error("Failed to unban client", "clientId", clientId)
 		return
 	}
 	err := a.ServerState.BannedState.Save()
 	if err != nil {
 		a.Notify(events.NewNotification("Unban failed", "Failed to save banned clients", "error"))
-		a.App.Logger.Error("Failed to save banned clients", "error", err)
+		a.Logger.Error("Failed to save banned clients", "error", err)
 		return
 	}
-	a.App.EmitEvent(events.BannedClientsChanged, a.ServerState.BannedState.BannedClients)
+	a.EmitEvent(events.Event{
+		Name: events.BannedClientsChanged,
+		Data: a.ServerState.BannedState.BannedClients,
+	})
 	a.Notify(events.NewNotification("Unban succeeded", "Client successfully unbanned", "success"))
 }
 
@@ -103,9 +112,12 @@ func (a *VCSApplication) KickClient(clientId string, reason string) { // TODO: I
 	a.ServerState.Lock()
 	defer a.ServerState.Unlock()
 	delete(a.ServerState.Clients, clientId)
-	a.App.EmitEvent(events.ClientsChanged, a.ServerState.Clients)
+	a.EmitEvent(events.Event{
+		Name: events.ClientsChanged,
+		Data: a.ServerState.Clients,
+	})
 	a.Notify(events.NewNotification("Kick succeeded", "Client kicked successfully", "success"))
-	a.App.Logger.Info("Client kicked", "clientId", clientId, "reason", reason)
+	a.Logger.Info("Client kicked", "clientId", clientId, "reason", reason)
 }
 
 func (a *VCSApplication) MuteClient(clientId string) { // TODO: Implement Backend Logic to mute a client and notify the Client
@@ -114,14 +126,17 @@ func (a *VCSApplication) MuteClient(clientId string) { // TODO: Implement Backen
 	client, ok := a.ServerState.RadioClients[clientId]
 	if !ok {
 		a.Notify(events.NewNotification("Mute failed", "Client not found", "error"))
-		a.App.Logger.Error("Failed to mute client", "clientId", clientId)
+		a.Logger.Error("Failed to mute client", "clientId", clientId)
 		return
 	}
 	client.Muted = true
 	a.ServerState.RadioClients[clientId] = client
-	a.App.EmitEvent(events.RadioClientsChanged, a.ServerState.RadioClients)
+	a.EmitEvent(events.Event{
+		Name: events.RadioClientsChanged,
+		Data: a.ServerState.RadioClients,
+	})
 	a.Notify(events.NewNotification("Mute succeeded", "Client muted successfully", "success"))
-	a.App.Logger.Info("Client muted", "clientId", clientId)
+	a.Logger.Info("Client muted", "clientId", clientId)
 }
 
 func (a *VCSApplication) UnmuteClient(clientId string) { // TODO: Implement Backend Logic to unmute a client and notify the Client
@@ -130,14 +145,17 @@ func (a *VCSApplication) UnmuteClient(clientId string) { // TODO: Implement Back
 	client, ok := a.ServerState.RadioClients[clientId]
 	if !ok {
 		a.Notify(events.NewNotification("Unmute failed", "Client not found", "error"))
-		a.App.Logger.Error("Failed to unmute client", "clientId", clientId)
+		a.Logger.Error("Failed to unmute client", "clientId", clientId)
 		return
 	}
 	client.Muted = false
 	a.ServerState.RadioClients[clientId] = client
-	a.App.EmitEvent(events.RadioClientsChanged, a.ServerState.RadioClients)
+	a.EmitEvent(events.Event{
+		Name: events.RadioClientsChanged,
+		Data: a.ServerState.RadioClients,
+	})
 	a.Notify(events.NewNotification("Unmute succeeded", "Client unmuted successfully", "success"))
-	a.App.Logger.Info("Client unmuted", "clientId", clientId)
+	a.Logger.Info("Client unmuted", "clientId", clientId)
 }
 
 func (a *VCSApplication) IsClientMuted(clientId string) bool {
@@ -146,7 +164,7 @@ func (a *VCSApplication) IsClientMuted(clientId string) bool {
 	client, ok := a.ServerState.RadioClients[clientId]
 	if !ok {
 		a.Notify(events.NewNotification("Client not Found", "Could not check if client is muted or not", "warning"))
-		a.App.Logger.Error("Failed to check if client is muted", "clientId", clientId)
+		a.Logger.Error("Failed to check if client is muted", "clientId", clientId)
 		return false
 	}
 	return client.Muted
