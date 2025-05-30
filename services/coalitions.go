@@ -41,7 +41,7 @@ func (c *CoalitionService) AddCoalition(coalition state.Coalition) {
 	c.App.SettingsState.Coalitions = append(c.App.SettingsState.Coalitions, coalition)
 	err := c.App.SettingsState.Save()
 	if err != nil {
-		c.App.Notify(events.NewNotification("Coalition failed to save", fmt.Sprintf("Coalition %s could not be saved!"), "error"))
+		c.App.Notify(events.NewNotification("Coalition failed to save", fmt.Sprintf("Coalition %s could not be saved!", coalition.Name), "error"))
 		c.App.Logger.Error("Failed to save settings", "error", err)
 		return
 	}
@@ -55,7 +55,7 @@ func (c *CoalitionService) RemoveCoalition(coalition state.Coalition) {
 	c.App.SettingsState.Coalitions = utils.Remove(c.App.SettingsState.Coalitions, coalition)
 	err := c.App.SettingsState.Save()
 	if err != nil {
-		c.App.Notify(events.NewNotification("Coalition failed to save", fmt.Sprintf("Coalition %s could not be saved!"), "error"))
+		c.App.Notify(events.NewNotification("Coalition failed to save", fmt.Sprintf("Coalition %s could not be saved!", coalition.Name), "error"))
 		c.App.Logger.Error("Failed to save settings", "error", err)
 		return
 	}

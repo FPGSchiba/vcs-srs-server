@@ -4,7 +4,6 @@ import (
 	"github.com/FPGSchiba/vcs-srs-server/events"
 	"github.com/FPGSchiba/vcs-srs-server/state"
 	"github.com/FPGSchiba/vcs-srs-server/utils"
-	"go.uber.org/zap"
 )
 
 // Clients is a workaround struct for wails to generate the wanted bindings
@@ -51,7 +50,7 @@ func (a *VCSApplication) BanClient(clientId string, reason string) { // TODO: Im
 	client, ok := a.ServerState.Clients[clientId]
 	if !ok {
 		a.Notify(events.NewNotification("Ban failed", "Client not found", "error"))
-		a.Logger.Error("Failed to ban client", zap.String("clientId", clientId), zap.String("reason", reason))
+		a.Logger.Error("Failed to ban client", "clientId", clientId, "reason", reason)
 		return
 	}
 	a.ServerState.BannedState.BannedClients = append(a.ServerState.BannedState.BannedClients, state.BannedClient{
