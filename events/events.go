@@ -31,6 +31,11 @@ type Notification struct {
 	Id      string `json:"id"`    // unique id for the notification
 }
 
+type Event struct {
+	Name string // Name of the event
+	Data interface{}
+}
+
 func NewNotification(title, message, level string) Notification {
 	return Notification{
 		Title:   title,

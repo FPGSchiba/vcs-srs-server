@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build:dev": "vite build --minify false --mode development",
+    "build": "vite build --mode production",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -14,6 +15,7 @@
     "@mui/icons-material": "^7.1.0",
     "@mui/lab": "^7.0.0-beta.12",
     "@mui/material": "^7.1.0",
+    "@wailsio/runtime": "^3.0.0-alpha.66",
     "mui-color-input": "^7.0.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

@@ -13,13 +13,13 @@ jobs:
         include:
           - os: ubuntu-latest
             build_cmd: wails build
-            headless_cmd: go build -tags desktop,production -ldflags "-w -s" -o build/bin/vcs-server-headless
+            headless_cmd: go build -tags production,headless -trimpath -buildvcs=false -ldflags="-w -s" -o bin/vcs-server-headless
           - os: windows-latest
             build_cmd: wails build
-            headless_cmd: go build -tags desktop,production -ldflags "-w -s -H windowsgui" -o build/bin/vcs-server-headless.exe
+            headless_cmd: go build -tags production,headless -trimpath -buildvcs=false -ldflags="-w -s" -o bin/vcs-server-headless.exe
           - os: macos-latest
             build_cmd: wails build
-            headless_cmd: go build -tags desktop,production -ldflags "-w -s" -o build/bin/vcs-server-headless.app
+            headless_cmd: go build -tags production,headless -trimpath -buildvcs=false -ldflags="-w -s" -o bin/vcs-server-headless.app
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -30,7 +30,17 @@ jobs:
           go-version: '1.24'
 
       - name: Install Wails
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+        run: go install -v github.com/wailsapp/wails/v3/cmd/wails3@latest
+
+      - name: Install Dependencies
+        run: |
+          if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
+            sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev webkit2gtk-4.1
+          elif [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            choco install gtk-runtime --version 3.24.30
+          elif [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            brew install gtk+3 webkit2gtk-4.1
+          fi
 
       - name: Build (Normal)
         run: ${{ matrix.build_cmd }}
@@ -42,7 +52,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.os }}-binaries
-          path: build/bin/*
+          path: bin/*
 
   release:
     needs: build
@@ -70,8 +80,8 @@ jobs:
           draft: false
           prerelease: false
           files: ./artifacts/**/*.*
+
   docker:
-    needs: build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code

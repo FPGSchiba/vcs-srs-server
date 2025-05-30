@@ -1,15 +1,16 @@
 import * as React from 'react';
 import {ClosingAlert} from "./ClosingAlert";
 import { Snackbar } from '@mui/material';
-import { events } from "../../wailsjs/go/models";
-import {EventsOn} from "../../wailsjs/runtime";
+import { Notification } from "../../bindings/github.com/FPGSchiba/vcs-srs-server/events";
+import {Events} from "@wailsio/runtime";
 import {useEffect} from "react";
 
 function MessageWrapper() {
-    const [notifications, setNotifications] = React.useState<{ notification: events.Notification, timestamp: Date }[]>([]);
+    const [notifications, setNotifications] = React.useState<{ notification: Notification, timestamp: Date }[]>([]);
 
     useEffect(() => {
-        EventsOn("notification", (notification: events.Notification) => {
+        Events.On("notification", (event) => {
+            const notification = event.data[0] as Notification;
             setNotifications((prev) => {
                 if (prev.findIndex((n) => n.notification.id === notification.id) === -1) {
                     return [...prev, {notification, timestamp: new Date()}];

@@ -1,6 +1,6 @@
 import { Typography } from "@mui/material";
 import React, {useEffect, useState} from "react";
-import {GetServerVersion} from "../../wailsjs/go/app/App";
+import {GetServerVersion} from "../../bindings/github.com/FPGSchiba/vcs-srs-server/services/controlservice";
 
 function Footer() {
     const [version, setVersion] = useState("loading...");

@@ -1,12 +1,15 @@
 import React from "react";
 import {Box, Button, Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle, Paper, TextField} from "@mui/material";
-import {events, state} from "../../wailsjs/go/models";
-import {BanClient, GetClients, KickClient, Notify} from "../../wailsjs/go/app/App";
-import {EventsOn} from "../../wailsjs/runtime";
+import {ClientState} from "../../bindings/github.com/FPGSchiba/vcs-srs-server/state";
+import {Notification} from "../../bindings/github.com/FPGSchiba/vcs-srs-server/events";
+import {BanClient, GetClients, KickClient} from "../../bindings/github.com/FPGSchiba/vcs-srs-server/services/clientservice";
+import {Notify} from "../../bindings/github.com/FPGSchiba/vcs-srs-server/services/notificationservice";
+import {Events} from "@wailsio/runtime";
 import ClientEntry from "../components/ClientEntry";
+import {WailsEvent} from "@wailsio/runtime/types/events";
 
 function ClientListPage() {
-    const [clients, setClients] = React.useState<Record<string, state.ClientState> | null>(null);
+    const [clients, setClients] = React.useState<Record<string, ClientState> | null>(null);
     const [banOpen, setBanOpen] = React.useState(false);
     const [banItem, setBanItem] = React.useState<string | null>(null);
     const [banReason, setBanReason] = React.useState<string>("");
@@ -31,7 +34,8 @@ function ClientListPage() {
 
     React.useEffect(() => {
         fetchClients();
-        EventsOn("clients/changed", (clients: Record<string, state.ClientState>) => {
+        Events.On("clients/changed", (event: WailsEvent) => {
+            const clients = event.data[0] as Record<string, ClientState>
             setClients(clients);
         });
     }, []);
@@ -78,10 +82,10 @@ function ClientListPage() {
                             setBanItem(null);
                             setBanReason("");
                         } else {
-                            Notify(new events.Notification({
-                                Title: "No client selected",
-                                Message: `No client selected for ban`,
-                                Type: "error",
+                            Notify(new Notification({
+                                title: "No client selected",
+                                message: `No client selected for ban`,
+                                level: "error",
                             }));
                             setBanItem(null);
                             setBanReason("");
@@ -123,10 +127,10 @@ function ClientListPage() {
                             setKickItem(null);
                             setKickReason("");
                         } else {
-                            Notify(new events.Notification({
-                                Title: "No client selected",
-                                Message: `No client selected for kick`,
-                                Type: "error",
+                            Notify(new Notification({
+                                title: "No client selected",
+                                message: `No client selected for kick`,
+                                level: "error",
                             }));
                             setKickItem(null);
                             setKickReason("");

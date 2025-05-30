@@ -6,10 +6,6 @@ import (
 	"sync"
 )
 
-const (
-	banFileName = "banned_clients.json"
-)
-
 type ServerState struct {
 	sync.RWMutex
 	// State holds the current state of the server
@@ -38,6 +34,7 @@ type Radio struct {
 
 type BannedState struct {
 	BannedClients []BannedClient
+	file          string
 }
 
 type BannedClient struct {
@@ -47,10 +44,10 @@ type BannedClient struct {
 	Reason    string `json:"reason"`
 }
 
-func ensureBanFileExists() error {
-	_, err := os.Stat(banFileName)
+func ensureBanFileExists(bannedFile string) error {
+	_, err := os.Stat(bannedFile)
 	if os.IsNotExist(err) {
-		f, createErr := os.Create(banFileName)
+		f, createErr := os.Create(bannedFile)
 		if createErr != nil {
 			return createErr
 		}
@@ -59,16 +56,16 @@ func ensureBanFileExists() error {
 	return err
 }
 
-func getBanFile() (string, error) {
-	err := ensureBanFileExists()
+func getBanFile(bannedFile string) (string, error) {
+	err := ensureBanFileExists(bannedFile)
 	if err != nil {
-		return banFileName, err
+		return bannedFile, err
 	}
-	return banFileName, nil
+	return bannedFile, nil
 }
 
-func GetBannedState() (*BannedState, error) {
-	file, err := getBanFile()
+func GetBannedState(bannedFile string) (*BannedState, error) {
+	file, err := getBanFile(bannedFile)
 	if err != nil {
 		return nil, err
 	}
@@ -83,11 +80,12 @@ func GetBannedState() (*BannedState, error) {
 	if err != nil {
 		return nil, err
 	}
+	bannedState.file = file
 	return &bannedState, nil
 }
 
 func (b *BannedState) Save() error {
-	file, err := getBanFile()
+	file, err := getBanFile(b.file)
 	if err != nil {
 		return err
 	}

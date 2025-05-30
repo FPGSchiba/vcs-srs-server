@@ -14,11 +14,12 @@ import {
     Paper
 } from "@mui/material";
 import PodcastsIcon from '@mui/icons-material/Podcasts';
-import {GetSettings, SaveFrequencySettings} from "../../wailsjs/go/app/App";
-import {EventsOn} from "../../wailsjs/runtime";
+import {GetSettings, SaveFrequencySettings} from "../../bindings/github.com/FPGSchiba/vcs-srs-server/services/settingsservice";
+import {Events} from "@wailsio/runtime";
 import CloseIcon from '@mui/icons-material/Close';
-import {state} from "../../wailsjs/go/models";
+import {SettingsState, FrequencySettings} from "../../bindings/github.com/FPGSchiba/vcs-srs-server/state";
 import FrequencyForm from "../components/FrequencyForm";
+import {WailsEvent} from "@wailsio/runtime/types/events";
 
 function formatFrequencyNumber(num: number): string {
     // Convert to string with 3 decimals, remove dot, pad to 6 digits
@@ -33,12 +34,16 @@ function FrequencyPage() {
 
     const fetchFrequencies = async () => {
         const settings = await GetSettings();
+        if (!settings) {
+            console.error("Frequencies settings not found");
+            return;
+        }
         setGlobalFrequencies(settings.Frequencies.GlobalFrequencies);
         setTestFrequencies(settings.Frequencies.TestFrequencies);
     }
 
     const handleSave = async () => {
-        await SaveFrequencySettings(new state.FrequencySettings({
+        await SaveFrequencySettings(new FrequencySettings({
             GlobalFrequencies: globalFrequencies,
             TestFrequencies: testFrequencies,
         }));
@@ -46,7 +51,8 @@ function FrequencyPage() {
 
     React.useEffect(() => {
         fetchFrequencies();
-        EventsOn("settings/changed", (settings: any) => {
+        Events.On("settings/changed", (event: WailsEvent) => {
+            const settings = event.data[0] as SettingsState;
             if (settings.Frequencies) {
                 setGlobalFrequencies(settings.Frequencies.GlobalFrequencies);
                 setTestFrequencies(settings.Frequencies.TestFrequencies);

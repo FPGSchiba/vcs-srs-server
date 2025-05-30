@@ -1,66 +1,75 @@
+//go:build !headless
+
 package main
 
 import (
 	"embed"
-	"flag"
 	"github.com/FPGSchiba/vcs-srs-server/app"
-	"github.com/FPGSchiba/vcs-srs-server/utils"
-	"github.com/wailsapp/wails/v2/pkg/options/windows"
-	"go.uber.org/zap"
-
-	"github.com/wailsapp/wails/v2"
-	"github.com/wailsapp/wails/v2/pkg/options"
-	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/FPGSchiba/vcs-srs-server/services"
+	"github.com/wailsapp/wails/v3/pkg/application"
+	"log/slog"
 )
 
 //go:embed all:frontend/dist
 var assets embed.FS
 
 func main() {
-	logger := utils.CreateLogger()
+	configFilepath, bannedFilePath, autoStartServers, logger := parseFlags()
 
-	defer func(logger *zap.Logger) {
-		err := logger.Sync()
-		if err != nil {
-			println(err.Error())
-		}
-	}(logger)
-
-	var configFilepath string
-	var autoStartServers bool
-	flag.StringVar(&configFilepath, "config", "config.yaml", "The Path to the config file")
-	flag.BoolVar(&autoStartServers, "autostart", false, "Automatically start the servers on startup") // For console only applications
-	flag.Parse()
-
-	// Create an instance of the app structure
-	gui := app.NewApp(logger, configFilepath, autoStartServers)
-
-	adaptedLogger := utils.NewZapLoggerAdapter(logger)
+	vcs := app.New()
 
 	// Create application with options
-	err := wails.Run(&options.App{
-		Title:  "vcs-server",
-		Width:  1080,
-		Height: 800,
-		Logger: adaptedLogger,
-		AssetServer: &assetserver.Options{
-			Assets: assets,
+	appOptions := application.Options{
+		Name:        "vcs-server",
+		Description: "A Voice Communication Server for Vanguard",
+		Logger:      logger,
+		LogLevel:    slog.LevelInfo,
+		Services: []application.Service{
+			application.NewService(services.NewNotificationService(vcs)),
+			application.NewService(services.NewClientService(vcs)),
+			application.NewService(services.NewControlService(vcs)),
+			application.NewService(services.NewCoalitionService(vcs)),
+			application.NewService(services.NewSettingsService(vcs)),
 		},
-		BackgroundColour: &options.RGBA{R: 0, G: 0, B: 0, A: 0},
-		OnStartup:        gui.Startup,
-		Bind: []interface{}{
-			gui,
+	}
+
+	// Normal mode with UI
+	appOptions.Assets = application.AssetOptions{
+		Handler: application.AssetFileServerFS(assets),
+	}
+
+	wails := application.New(appOptions)
+	vcs.StartUp(wails, configFilepath, bannedFilePath, autoStartServers)
+
+	wails.NewWebviewWindowWithOptions(application.WebviewWindowOptions{
+		Title:          "VCS Server",
+		Width:          1080,
+		Height:         800,
+		MaxHeight:      800,
+		MaxWidth:       1080,
+		MinHeight:      800,
+		MinWidth:       1080,
+		BackgroundType: application.BackgroundTypeTransparent,
+		Frameless:      true,
+		Mac: application.MacWindow{
+			InvisibleTitleBarHeight: 50,
+			Backdrop:                application.MacBackdropTransparent,
+			TitleBar:                application.MacTitleBarHiddenInset,
 		},
-		Frameless:     true,
-		DisableResize: true,
-		Debug: options.Debug{
-			OpenInspectorOnStartup: true,
+		Windows: application.WindowsWindow{
+			DisableIcon:                       false,
+			DisableFramelessWindowDecorations: true,
+			WindowMaskDraggable:               true,
 		},
-		Windows: &windows.Options{
-			WebviewIsTransparent: true,
-			WindowIsTranslucent:  false,
+		Linux: application.LinuxWindow{
+			WindowIsTranslucent: true,
 		},
+		BackgroundColour: application.NewRGBA(0, 0, 0, 0),
+		URL:              "/",
 	})
+
+	// Run the application
+	err := wails.Run()
 
 	if err != nil {
 		println("Error:", err.Error())

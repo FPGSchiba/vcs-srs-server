@@ -8,13 +8,11 @@ import (
 	"github.com/FPGSchiba/vcs-srs-server/events"
 	"github.com/FPGSchiba/vcs-srs-server/voice"
 	"github.com/gin-gonic/gin"
-	"github.com/wailsapp/wails/v2/pkg/runtime"
-	"go.uber.org/zap"
 	"net/http"
 	"time"
 )
 
-func (a *App) startHTTPServer() {
+func (a *VCSApplication) startHTTPServer() {
 	a.AdminState.Lock()
 	if a.AdminState.HTTPStatus.IsRunning {
 		a.AdminState.Unlock()
@@ -52,25 +50,28 @@ func (a *App) startHTTPServer() {
 		a.AdminState.HTTPStatus.Error = ""
 		a.AdminState.Unlock()
 
-		a.logger.Info("HTTP server starting")
+		a.Logger.Info("HTTP server starting")
 
 		// Start server
 		if err := a.httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			a.Notify(events.NewNotification("HTTP server error", "Could not start HTTP Server.", "error"))
-			a.logger.Error("HTTP server error", zap.Error(err))
+			a.Logger.Error("HTTP server error", "error", err)
 			a.AdminState.Lock()
 			a.AdminState.HTTPStatus.Error = err.Error()
 			a.AdminState.HTTPStatus.IsRunning = false
 			a.AdminState.Unlock()
 		}
 
-		a.logger.Info("HTTP server stopped listening")
+		a.Logger.Info("HTTP server stopped listening")
 	}()
 
-	runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
+	a.EmitEvent(events.Event{
+		Name: events.AdminChanged,
+		Data: a.AdminState,
+	})
 }
 
-func (a *App) stopHTTPServer() {
+func (a *VCSApplication) stopHTTPServer() {
 	// First mark the server as stopping
 	a.AdminState.Lock()
 	if !a.AdminState.HTTPStatus.IsRunning {
@@ -96,7 +97,10 @@ func (a *App) stopHTTPServer() {
 		a.AdminState.HTTPStatus.Error = err.Error()
 		a.AdminState.Unlock()
 
-		runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
+		a.EmitEvent(events.Event{
+			Name: events.AdminChanged,
+			Data: a.AdminState,
+		})
 		a.Notify(events.NewNotification("HTTP server error", "Could not stop HTTP Server.", "error"))
 		return
 	}
@@ -107,10 +111,13 @@ func (a *App) stopHTTPServer() {
 	a.AdminState.HTTPStatus.Error = ""
 	a.AdminState.Unlock()
 
-	runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
+	a.EmitEvent(events.Event{
+		Name: events.AdminChanged,
+		Data: a.AdminState,
+	})
 }
 
-func (a *App) startVoiceServer() {
+func (a *VCSApplication) startVoiceServer() {
 	a.AdminState.Lock()
 	defer a.AdminState.Unlock()
 
@@ -123,7 +130,7 @@ func (a *App) startVoiceServer() {
 	a.StopSignals["voice"] = stopChan
 
 	go func() {
-		voiceServer := voice.NewServer(a.ServerState, a.logger)
+		voiceServer := voice.NewServer(a.ServerState, a.Logger)
 		a.voiceServer = voiceServer
 
 		// Update status
@@ -142,15 +149,18 @@ func (a *App) startVoiceServer() {
 			a.AdminState.Unlock()
 
 			a.Notify(events.NewNotification("voice server error", "Could not start Voice server", "error"))
-			a.logger.Error("voice server error", zap.Error(err))
+			a.Logger.Error("voice server error", "error", err)
 		}
 
 	}()
 
-	runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
+	a.EmitEvent(events.Event{
+		Name: events.AdminChanged,
+		Data: a.AdminState,
+	})
 }
 
-func (a *App) stopVoiceServer() {
+func (a *VCSApplication) stopVoiceServer() {
 	// First mark the server as stopping
 	a.AdminState.Lock()
 	if !a.AdminState.VoiceStatus.IsRunning {
@@ -181,10 +191,13 @@ func (a *App) stopVoiceServer() {
 	a.AdminState.VoiceStatus.Error = ""
 	a.AdminState.Unlock()
 
-	runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
+	a.EmitEvent(events.Event{
+		Name: events.AdminChanged,
+		Data: a.AdminState,
+	})
 }
 
-func (a *App) startControlServer() {
+func (a *VCSApplication) startControlServer() {
 	a.AdminState.Lock()
 	if a.AdminState.ControlStatus.IsRunning {
 		a.AdminState.Unlock()
@@ -199,14 +212,14 @@ func (a *App) startControlServer() {
 	a.StopSignals["control"] = stopChan
 	a.AdminState.Unlock()
 
-	controlServer := control.NewServer(a.ServerState, a.logger)
+	controlServer := control.NewServer(a.ServerState, a.Logger)
 	a.controlServer = controlServer
 
 	a.SettingsState.Lock()
 	serverHost := fmt.Sprintf("%s:%d", a.SettingsState.Servers.Control.Host, a.SettingsState.Servers.Control.Port)
 	a.SettingsState.Unlock()
 	if err := controlServer.Start(serverHost, stopChan); err != nil {
-		a.logger.Error("Failed to start control server", zap.Error(err))
+		a.Logger.Error("Failed to start control server", "error", err)
 		a.AdminState.Lock()
 		a.AdminState.ControlStatus.Error = err.Error()
 		a.AdminState.ControlStatus.IsRunning = false
@@ -220,10 +233,13 @@ func (a *App) startControlServer() {
 	a.AdminState.ControlStatus.Error = ""
 	a.AdminState.Unlock()
 
-	runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
+	a.EmitEvent(events.Event{
+		Name: events.AdminChanged,
+		Data: a.AdminState,
+	})
 }
 
-func (a *App) stopControlServer() {
+func (a *VCSApplication) stopControlServer() {
 	a.AdminState.Lock()
 	if !a.AdminState.ControlStatus.IsRunning {
 		a.AdminState.Unlock()
@@ -241,7 +257,7 @@ func (a *App) stopControlServer() {
 	if a.controlServer != nil {
 		err := a.controlServer.Stop()
 		if err != nil {
-			a.logger.Error("Failed to stop control server", zap.Error(err))
+			a.Logger.Error("Failed to stop control server", "error", err)
 			a.AdminState.Lock()
 			a.AdminState.ControlStatus.Error = err.Error()
 			a.AdminState.Unlock()
@@ -255,5 +271,8 @@ func (a *App) stopControlServer() {
 	a.AdminState.ControlStatus.Error = ""
 	a.AdminState.Unlock()
 
-	runtime.EventsEmit(a.ctx, events.AdminChanged, a.AdminState)
+	a.EmitEvent(events.Event{
+		Name: events.AdminChanged,
+		Data: a.AdminState,
+	})
 }

@@ -3,11 +3,10 @@ package voice
 import (
 	_ "encoding/binary"
 	"github.com/FPGSchiba/vcs-srs-server/state"
+	"log/slog"
 	"net"
 	"sync"
 	"time"
-
-	"go.uber.org/zap"
 )
 
 const (
@@ -27,12 +26,12 @@ type Server struct {
 	conn      *net.UDPConn
 	clients   map[string]*Client
 	state     *state.ServerState
-	logger    *zap.Logger
+	logger    *slog.Logger
 	isRunning bool
 	stopChan  chan struct{}
 }
 
-func NewServer(state *state.ServerState, logger *zap.Logger) *Server {
+func NewServer(state *state.ServerState, logger *slog.Logger) *Server {
 	return &Server{
 		clients:  make(map[string]*Client),
 		state:    state,
@@ -57,7 +56,7 @@ func (v *Server) Listen(address string, stopChan chan struct{}) error {
 	v.isRunning = true
 	v.Unlock()
 
-	v.logger.Info("Voice server started", zap.String("address", address))
+	v.logger.Info("Voice server started", "address", address)
 
 	// Start the cleanup routine
 	go v.cleanupRoutine()
@@ -78,7 +77,7 @@ func (v *Server) Listen(address string, stopChan chan struct{}) error {
 				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 					continue
 				}
-				v.logger.Error("Error reading UDP", zap.Error(err))
+				v.logger.Error("Error reading UDP", "error", err)
 				continue
 			}
 
@@ -97,7 +96,7 @@ type VoicePacket struct {
 
 func (v *Server) handlePacket(data []byte, addr *net.UDPAddr) {
 	if len(data) < 12 { // Minimum packet size (adjust based on your protocol)
-		v.logger.Warn("Received malformed packet", zap.String("addr", addr.String()))
+		v.logger.Warn("Received malformed packet", "addr", addr.String())
 		return
 	}
 
@@ -115,8 +114,8 @@ func (v *Server) handlePacket(data []byte, addr *net.UDPAddr) {
 		}
 		v.clients[clientID] = client
 		v.logger.Info("New voice client connected",
-			zap.String("id", clientID),
-			zap.String("addr", addr.String()))
+			"id", clientID,
+			"addr", addr.String())
 	}
 	client.LastSeen = time.Now()
 	v.Unlock()
@@ -155,8 +154,8 @@ func (v *Server) broadcastVoice(data []byte, senderID string) {
 			_, err := v.conn.WriteToUDP(data, addr)
 			if err != nil {
 				v.logger.Error("Failed to send voice packet",
-					zap.String("to", addr.String()),
-					zap.Error(err))
+					"to", addr.String(),
+					"error", err)
 			}
 		}(client.Addr)
 	}
@@ -186,8 +185,8 @@ func (v *Server) cleanup() {
 		if client.LastSeen.Before(threshold) {
 			delete(v.clients, id)
 			v.logger.Info("Removed inactive voice client",
-				zap.String("id", id),
-				zap.String("addr", client.Addr.String()))
+				"id", id,
+				"addr", client.Addr.String())
 		}
 	}
 }
@@ -234,8 +233,8 @@ func (v *Server) DisconnectClient(clientID string) {
 		// Optionally send disconnect message to client
 		delete(v.clients, clientID)
 		v.logger.Info("Disconnected voice client",
-			zap.String("id", clientID),
-			zap.String("addr", client.Addr.String()))
+			"id", clientID,
+			"addr", client.Addr.String())
 	}
 }
 
