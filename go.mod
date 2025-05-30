@@ -9,7 +9,6 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/samber/slog-multi v1.4.0
 	github.com/wailsapp/wails/v3 v3.0.0-alpha.9
-	go.uber.org/zap v1.27.0
 	google.golang.org/grpc v1.72.2
 	google.golang.org/protobuf v1.36.6
 	gopkg.in/yaml.v3 v3.0.1
