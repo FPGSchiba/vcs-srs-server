@@ -22,13 +22,13 @@ func parseFlags() (configFilepath, bannedFilePath string, autoStartServers bool,
 
 	if fileLogEnabled {
 		if _, err := os.Stat(logFolder); os.IsNotExist(err) {
-			err := os.Mkdir(logFolder, 0666)
+			err := os.Mkdir(logFolder, 0777)
 			if err != nil {
 				log.Fatalf("error creating log directory: %v", err)
 			}
 		}
 
-		f, err := os.OpenFile(path.Join(logFolder, "vcs-server-log.json"), os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+		f, err := os.OpenFile(path.Join(logFolder, "vcs-server-log.jsonl"), os.O_RDWR|os.O_CREATE|os.O_APPEND, 0777)
 		if err != nil {
 			log.Fatalf("error opening log file: %v", err)
 		}

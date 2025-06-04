@@ -106,7 +106,7 @@ func (settings *SettingsState) Save() error {
 		return err
 	}
 
-	err = os.WriteFile(settings.file, yamlData, 0644)
+	err = os.WriteFile(settings.file, yamlData, 0777)
 	if err != nil {
 		return err
 	}
