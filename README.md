@@ -40,7 +40,9 @@ The built application can be found in the `build/bin` directory. You can run it 
 You can pass flags to the application by using the `--` separator. Following Flags are available:
 - `--config /path/to/config.yaml` - Path to the config file. Default is `./config.yaml`
 - `--autostart` - If the servers should be started automatically. Default is `false`
-
+- `--banned /path/to/banned.json` - Path to the banned users file. Default is `banned_clients.json`
+- `--log-folder /path/to/logs` - Path to the log folder. Default is `log`
+- `--file-log` - If the logs should be written to a file. Default is `true`
 
 ## Improvements
 
