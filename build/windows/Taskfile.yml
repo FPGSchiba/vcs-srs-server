@@ -58,3 +58,27 @@ tasks:
   run:
     cmds:
       - '{{.BIN_DIR}}\\{{.APP_NAME}}.exe --autostart'
+
+  build:headless:
+    summary: Builds the application in headless mode
+    cmds:
+      - go build {{.BUILD_FLAGS}} -o {{.OUTPUT}} -tags headless
+    vars:
+      BUILD_FLAGS: '{{if eq .PRODUCTION "true"}}-tags production,headless -trimpath -buildvcs=false -ldflags="-w -s -H windowsgui"{{else}}-buildvcs=false -gcflags=all="-l"{{end}}'
+      DEFAULT_OUTPUT: '{{.BIN_DIR}}/{{.APP_NAME}}-headless'
+      OUTPUT: '{{ .OUTPUT | default .DEFAULT_OUTPUT }}'
+    env:
+      GOOS: darwin
+      CGO_ENABLED: 1
+      GOARCH: '{{.ARCH | default ARCH}}'
+      CGO_CFLAGS: "-mmacosx-version-min=10.15"
+      CGO_LDFLAGS: "-mmacosx-version-min=10.15"
+      MACOSX_DEPLOYMENT_TARGET: "10.15"
+      PRODUCTION: '{{.PRODUCTION | default "false"}}'
+
+  headless:
+    summary: Runs the application in headless mode
+    deps:
+      - task: build:headless
+    cmds:
+      - '{{.BIN_DIR}}/{{.APP_NAME}}-headless'
