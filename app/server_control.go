@@ -212,7 +212,7 @@ func (a *VCSApplication) startControlServer() {
 	a.StopSignals["control"] = stopChan
 	a.AdminState.Unlock()
 
-	controlServer := control.NewServer(a.ServerState, a.Logger)
+	controlServer := control.NewServer(a.ServerState, a.SettingsState, a.Logger)
 	a.controlServer = controlServer
 
 	a.SettingsState.Lock()
