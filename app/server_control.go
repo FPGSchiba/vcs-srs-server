@@ -28,6 +28,7 @@ func (a *VCSApplication) startHTTPServer() {
 	a.AdminState.Unlock()
 
 	go func() {
+		gin.SetMode(gin.ReleaseMode)
 		r := gin.Default()
 		// Configure your gin routes and socket.io here
 
