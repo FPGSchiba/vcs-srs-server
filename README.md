@@ -25,7 +25,7 @@ The config file is also editable through the Server GUI.
 To build a `*.proto` file, you need to install the `protoc` compiler and the Go plugin for it. You can do this by running:
 
 ```bash
-protoc --go_out=./srspb --go_opt=paths=source_relative srspb.proto
+protoc --go_out=./srspb --go_opt=paths=source_relative --go-grpc_out=./srspb --go-grpc_opt=paths=source_relative srs.proto
 ```
 
 ## Building
