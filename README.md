@@ -40,3 +40,9 @@ The built application can be found in the `build/bin` directory. You can run it 
 You can pass flags to the application by using the `--` separator. Following Flags are available:
 - `--config /path/to/config.yaml` - Path to the config file. Default is `./config.yaml`
 - `--autostart` - If the servers should be started automatically. Default is `false`
+
+
+## Improvements
+
+* Use a Go Module for the Protobuf files / Generated Go code
+  * Use this when the C# Client is finished and the Go Client is ready

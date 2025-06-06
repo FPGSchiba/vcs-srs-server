@@ -3,29 +3,41 @@ package control
 import (
 	"context"
 	"fmt"
+	"github.com/FPGSchiba/vcs-srs-server/srs"
+	pb "github.com/FPGSchiba/vcs-srs-server/srspb"
 	"github.com/FPGSchiba/vcs-srs-server/state"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/reflection"
 	"log/slog"
 	"net"
 	"sync"
+	"time"
+)
+
+var (
+	sleep = time.Second * 5
+
+	system     = ""    // empty string represents the health of the system
+	srsService = "srs" // service name for SRS
 )
 
 type Server struct {
-	mu          sync.RWMutex
-	grpcServer  *grpc.Server
-	listener    net.Listener
-	logger      *slog.Logger
-	serverState *state.ServerState
-	isRunning   bool
-	stopOnce    sync.Once // Add this to ensure we only stop once
+	mu            sync.RWMutex
+	grpcServer    *grpc.Server
+	listener      net.Listener
+	logger        *slog.Logger
+	serverState   *state.ServerState
+	settingsState *state.SettingsState
+	isRunning     bool
+	stopOnce      sync.Once // Add this to ensure we only stop once
 }
 
-func NewServer(serverState *state.ServerState, logger *slog.Logger) *Server {
+func NewServer(serverState *state.ServerState, settingsState *state.SettingsState, logger *slog.Logger) *Server {
 	return &Server{
-		serverState: serverState,
-		logger:      logger,
+		serverState:   serverState,
+		settingsState: settingsState,
+		logger:        logger,
 	}
 }
 
@@ -47,13 +59,31 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 		grpc.UnaryInterceptor(s.loggingInterceptor),
 	)
 
-	// Register your services here
-
-	// pb.RegisterYourServiceServer(s.grpcServer, NewYourServiceServer(s.serverState))
+	// Register services
+	srsServer := srs.NewSimpleRadioServer(s.serverState, s.settingsState, s.logger)
+	pb.RegisterSRSServiceServer(s.grpcServer, srsServer)
 
 	// Register health service
-	healthServer := health.NewServer()
+	healthServer := NewFullHealthServer()
 	healthpb.RegisterHealthServer(s.grpcServer, healthServer)
+
+	go func() {
+		for s.IsRunning() {
+			// Check the health of each Service
+			srsStatus := srsServer.GetServerState()
+			healthServer.SetServingStatus(srsService, srsStatus)
+
+			if srsStatus == healthpb.HealthCheckResponse_SERVING { // Add more services as needed
+				healthServer.SetServingStatus(system, healthpb.HealthCheckResponse_SERVING)
+			} else {
+				healthServer.SetServingStatus(system, healthpb.HealthCheckResponse_NOT_SERVING)
+			}
+
+			time.Sleep(sleep)
+		}
+	}()
+
+	reflection.Register(s.grpcServer)
 
 	s.isRunning = true
 	s.mu.Unlock()
