@@ -30,18 +30,16 @@ func NewServer(serverState *state.ServerState, logger *slog.Logger) *Server {
 }
 
 func (s *Server) Start(address string, stopChan chan struct{}) error {
-	s.mu.Lock()
-	if s.isRunning {
-		s.mu.Unlock()
+	if s.IsRunning() {
 		return fmt.Errorf("server is already running")
 	}
 
 	// Create listener
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
-		s.mu.Unlock()
 		return fmt.Errorf("failed to listen: %v", err)
 	}
+	s.mu.Lock()
 	s.listener = listener
 
 	// Create gRPC server with interceptors
@@ -50,6 +48,7 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 	)
 
 	// Register your services here
+
 	// pb.RegisterYourServiceServer(s.grpcServer, NewYourServiceServer(s.serverState))
 
 	// Register health service
@@ -86,11 +85,10 @@ func (s *Server) Stop() error {
 	var stopErr error
 
 	s.stopOnce.Do(func() {
-		s.mu.Lock()
-		if !s.isRunning {
-			s.mu.Unlock()
+		if !s.IsRunning() {
 			return
 		}
+		s.mu.Lock()
 		s.isRunning = false
 		s.mu.Unlock()
 
