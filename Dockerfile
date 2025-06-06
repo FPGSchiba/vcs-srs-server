@@ -20,8 +20,8 @@ RUN mv /app/bin/vcs-server-headless /dist/vcs-server
 
 # Create lib directory and copy required libraries
 # Copy only non-core libraries
- RUN mkdir -p /dist/lib
- RUN ldd /dist/vcs-server \
+RUN mkdir -p /dist/lib
+RUN ldd /dist/vcs-server \
      | awk '/=>/ && $3 !~ /libc\.so/ && $3 !~ /ld-linux/ {print $3}' \
      | xargs -I {} cp -v {} /dist/lib/ || true
 
