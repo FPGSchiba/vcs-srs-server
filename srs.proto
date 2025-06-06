@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package srspb;
 
-option go_package = "github.com/FPGSchiba/vcs-srs-server/srspb";
+option go_package = "github.com/FPGSchiba/vcs-srspb-server/srspb";
 
 // Service definition
 service SRSService {
