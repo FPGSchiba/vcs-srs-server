@@ -6,6 +6,7 @@ toolchain go1.23.4
 
 require (
 	github.com/gin-gonic/gin v1.11.0
+	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/google/uuid v1.6.0
 	github.com/samber/slog-multi v1.5.0
 	github.com/wailsapp/wails/v3 v3.0.0-alpha.8.3

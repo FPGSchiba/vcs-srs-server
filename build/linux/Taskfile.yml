@@ -122,12 +122,9 @@ tasks:
       DEFAULT_OUTPUT: '{{.BIN_DIR}}/{{.APP_NAME}}-headless'
       OUTPUT: '{{ .OUTPUT | default .DEFAULT_OUTPUT }}'
     env:
-      GOOS: darwin
+      GOOS: linux
       CGO_ENABLED: 1
       GOARCH: '{{.ARCH | default ARCH}}'
-      CGO_CFLAGS: "-mmacosx-version-min=10.15"
-      CGO_LDFLAGS: "-mmacosx-version-min=10.15"
-      MACOSX_DEPLOYMENT_TARGET: "10.15"
       PRODUCTION: '{{.PRODUCTION | default "false"}}'
 
   headless:
