@@ -65,15 +65,12 @@ tasks:
       - go build {{.BUILD_FLAGS}} -o {{.OUTPUT}} -tags headless
     vars:
       BUILD_FLAGS: '{{if eq .PRODUCTION "true"}}-tags production,headless -trimpath -buildvcs=false -ldflags="-w -s -H windowsgui"{{else}}-buildvcs=false -gcflags=all="-l"{{end}}'
-      DEFAULT_OUTPUT: '{{.BIN_DIR}}/{{.APP_NAME}}-headless'
+      DEFAULT_OUTPUT: '{{.BIN_DIR}}/{{.APP_NAME}}-headless.exe'
       OUTPUT: '{{ .OUTPUT | default .DEFAULT_OUTPUT }}'
     env:
-      GOOS: darwin
-      CGO_ENABLED: 1
+      GOOS: windows
+      CGO_ENABLED: 0
       GOARCH: '{{.ARCH | default ARCH}}'
-      CGO_CFLAGS: "-mmacosx-version-min=10.15"
-      CGO_LDFLAGS: "-mmacosx-version-min=10.15"
-      MACOSX_DEPLOYMENT_TARGET: "10.15"
       PRODUCTION: '{{.PRODUCTION | default "false"}}'
 
   headless:
