@@ -102,3 +102,16 @@ func (b *BannedState) Save() error {
 	}
 	return nil
 }
+
+func (s *ServerState) AddClient(clientGuid string, client *ClientState) {
+	s.Lock()
+	defer s.Unlock()
+	if s.Clients == nil {
+		s.Clients = make(map[string]*ClientState)
+	}
+	s.Clients[clientGuid] = client
+	s.RadioClients[clientGuid] = &RadioState{
+		Radios: []Radio{},
+		Muted:  false,
+	}
+}

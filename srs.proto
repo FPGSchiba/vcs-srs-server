@@ -2,7 +2,8 @@ syntax = "proto3";
 
 package srspb;
 
-option go_package = "github.com/FPGSchiba/vcs-srspb-server/srspb";
+option go_package = "github.com/FPGSchiba/vcs-srs-server/srspb";
+option csharp_namespace = "Vanguard.VCS.Client.Network";
 
 // Service definition
 service SRSService {
@@ -39,8 +40,9 @@ message Empty {}
 
 message ClientGuestLoginRequest {
   string name = 1; // Name of the guest client
-  string unit_id = 2; // unit ID for the guest
-  string version = 3; // Version of the client
+  string password = 2; // Password for the guest client
+  string unit_id = 3; // unit ID for the guest
+  string version = 4; // Version of the client
 }
 
 message ClientVanguardLoginRequest {
@@ -66,6 +68,7 @@ message ServerGuestLoginResponse {
 message GuestLoginResult {
   string token = 1; // Token for the guest client after successful login
   string client_guid = 2; // Unique identifier for the guest client
+  string coalition = 3; // Coalition of the guest client
 }
 
 message ServerVanguardLoginResponse {
