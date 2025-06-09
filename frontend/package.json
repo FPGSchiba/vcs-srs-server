@@ -12,18 +12,18 @@
   "dependencies": {
     "@emotion/styled": "^11.11.0",
     "@hookform/resolvers": "^5.0.1",
-    "@mui/icons-material": "^7.1.0",
-    "@mui/lab": "^7.0.0-beta.12",
+    "@mui/icons-material": "^7.1.1",
+    "@mui/lab": "^7.0.0-beta.13",
     "@mui/material": "^7.1.0",
     "@wailsio/runtime": "^3.0.0-alpha.66",
     "mui-color-input": "^7.0.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-router": "^7.6.1",
-    "sass": "^1.88.0",
+    "sass": "^1.89.1",
     "uuid": "^11.1.0",
     "vite-plugin-typed-css-modules": "^0.3.0",
-    "zod": "^3.25.30"
+    "zod": "^3.25.49"
   },
   "devDependencies": {
     "@types/react": "^19.1.6",
