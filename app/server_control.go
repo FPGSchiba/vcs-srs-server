@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/FPGSchiba/vcs-srs-server/control"
 	"github.com/FPGSchiba/vcs-srs-server/events"
+	"github.com/FPGSchiba/vcs-srs-server/rest"
 	"github.com/FPGSchiba/vcs-srs-server/voice"
 	"github.com/gin-gonic/gin"
 	"net/http"
@@ -29,8 +30,7 @@ func (a *VCSApplication) startHTTPServer() {
 
 	go func() {
 		gin.SetMode(gin.ReleaseMode)
-		r := gin.Default()
-		// Configure your gin routes and socket.io here
+		r := rest.GetRouter(a.Logger)
 
 		a.SettingsState.Lock()
 
@@ -51,7 +51,7 @@ func (a *VCSApplication) startHTTPServer() {
 		a.AdminState.HTTPStatus.Error = ""
 		a.AdminState.Unlock()
 
-		a.Logger.Info("HTTP server starting")
+		a.Logger.Info("HTTP server starting", "address", a.httpServer.Addr)
 
 		// Start server
 		if err := a.httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
