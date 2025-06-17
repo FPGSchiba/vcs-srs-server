@@ -3,6 +3,10 @@ package voice
 import (
 	_ "encoding/binary"
 	"github.com/FPGSchiba/vcs-srs-server/state"
+	"github.com/FPGSchiba/vcs-srs-server/voiceontrol"
+	"github.com/google/uuid"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"log/slog"
 	"net"
 	"sync"
@@ -18,29 +22,44 @@ type Client struct {
 	ID       string
 	Addr     *net.UDPAddr
 	LastSeen time.Time
-	Room     string // Optional: for room-based communication
 }
 
 type Server struct {
 	sync.RWMutex
-	conn      *net.UDPConn
-	clients   map[string]*Client
-	state     *state.ServerState
-	logger    *slog.Logger
-	isRunning bool
-	stopChan  chan struct{}
+	conn                *net.UDPConn
+	clients             map[string]*Client
+	state               *state.ServerState
+	logger              *slog.Logger
+	isRunning           bool
+	stopChan            chan struct{}
+	controlClient       *voiceontrol.VoiceControlClient
+	isDistributedServer bool // Indicates if this is a distributed server
+	serverId            string
 }
 
-func NewServer(state *state.ServerState, logger *slog.Logger) *Server {
+func NewServer(state *state.ServerState, logger *slog.Logger, isDistributedServer bool) *Server {
 	return &Server{
-		clients:  make(map[string]*Client),
-		state:    state,
-		logger:   logger,
-		stopChan: make(chan struct{}),
+		clients:             make(map[string]*Client),
+		state:               state,
+		logger:              logger,
+		stopChan:            make(chan struct{}),
+		isDistributedServer: isDistributedServer,
+		serverId:            uuid.New().String(),
 	}
 }
 
 func (v *Server) Listen(address string, stopChan chan struct{}) error {
+	if v.isDistributedServer {
+		// Initialize control client if this is a distributed server
+		v.controlClient = voiceontrol.NewVoiceControlClient(v.serverId, v.logger)
+		if err := v.controlClient.ConnectControlServer("localhost:5002", []grpc.DialOption{
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		}); err != nil {
+			v.logger.Error("Failed to connect to control server", "error", err)
+			return err
+		}
+	}
+
 	addr, err := net.ResolveUDPAddr("udp", address)
 	if err != nil {
 		return err
@@ -70,7 +89,10 @@ func (v *Server) Listen(address string, stopChan chan struct{}) error {
 			return nil
 		default:
 			// Set read deadline to allow checking stop channel
-			v.conn.SetReadDeadline(time.Now().Add(1 * time.Second))
+			err := v.conn.SetReadDeadline(time.Now().Add(1 * time.Second))
+			if err != nil {
+				return err
+			}
 			n, remoteAddr, err := v.conn.ReadFromUDP(buffer)
 
 			if err != nil {
@@ -119,22 +141,6 @@ func (v *Server) handlePacket(data []byte, addr *net.UDPAddr) {
 	}
 	client.LastSeen = time.Now()
 	v.Unlock()
-
-	/* Check if client is banned or muted
-	v.state.RLock()
-	if v.state.Banned[clientID] {
-		v.state.RUnlock()
-		return
-	}
-	isMuted := v.state.Muted[clientID]
-	v.state.RUnlock()
-
-
-	if isMuted {
-		// Optionally send mute notification to client
-		return
-	}
-	*/
 
 	// Broadcast to other clients
 	v.broadcastVoice(data, clientID)

@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"github.com/FPGSchiba/vcs-srs-server/srs"
-	pb "github.com/FPGSchiba/vcs-srs-server/srspb"
+	"github.com/FPGSchiba/vcs-srs-server/srspb"
 	"github.com/FPGSchiba/vcs-srs-server/state"
+	"github.com/FPGSchiba/vcs-srs-server/voicecontrolpb"
+	"github.com/FPGSchiba/vcs-srs-server/voiceontrol"
 	"google.golang.org/grpc"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
@@ -64,10 +66,11 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 
 	// Register services
 	srsServer := srs.NewSimpleRadioServer(s.serverState, s.settingsState, s.logger)
-	pb.RegisterSRSServiceServer(s.grpcServer, srsServer)
+	srspb.RegisterSRSServiceServer(s.grpcServer, srsServer)
 
+	controlServer := voiceontrol.NewVoiceControlServer(s.serverState, s.settingsState, s.logger)
 	if s.isControlServer {
-		// TODO: Register control service if this is a control server
+		voicecontrolpb.RegisterVoiceControlServiceServer(s.grpcServer, controlServer)
 	}
 
 	// Register health service
@@ -80,7 +83,12 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 			srsStatus := srsServer.GetServerState()
 			healthServer.SetServingStatus(srsService, srsStatus)
 
-			if srsStatus == healthpb.HealthCheckResponse_SERVING { // Add more services as needed
+			controlStatus := controlServer.GetServerState()
+			if s.isControlServer {
+				healthServer.SetServingStatus(controlService, controlStatus)
+			}
+
+			if srsStatus == healthpb.HealthCheckResponse_SERVING && controlStatus == healthpb.HealthCheckResponse_SERVING { // Add more services as needed
 				healthServer.SetServingStatus(system, healthpb.HealthCheckResponse_SERVING)
 			} else {
 				healthServer.SetServingStatus(system, healthpb.HealthCheckResponse_NOT_SERVING)
