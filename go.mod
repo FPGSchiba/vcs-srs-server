@@ -10,7 +10,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/samber/slog-multi v1.4.0
 	github.com/wailsapp/wails/v3 v3.0.0-alpha.8.3
-	google.golang.org/grpc v1.72.2
+	google.golang.org/grpc v1.73.0
 	google.golang.org/protobuf v1.36.6
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -74,7 +74,7 @@ require (
 	golang.org/x/sys v0.33.0 // indirect
 	golang.org/x/text v0.25.0 // indirect
 	golang.org/x/tools v0.23.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20250218202821-56aae31c358a // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20250324211829-b45e905df463 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 )
 
