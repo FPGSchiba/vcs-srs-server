@@ -112,34 +112,42 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    subgraph Clients
-        Client1[User/Client 1]
-        Client2[User/Client 2]
-        ClientN[User/Client N]
-    end
+  subgraph Clients
+    Client1[User/Client 1]
+    Client2[User/Client 2]
+    ClientN[User/Client N]
+    AdminUser[Admin User]
+  end
 
-    subgraph VoiceServers
-        VoiceServer1[Voice Server 1]
-        VoiceServer2[Voice Server 2]
-        VoiceServerN[Voice Server N]
-    end
+  subgraph VoiceServers
+    VoiceServer1[Voice Server 1]
+    VoiceServer2[Voice Server 2]
+    VoiceServerN[Voice Server N]
+  end
 
-    subgraph Control
-        ControlServer[Control Server]
-        Frontend[Web Frontend]
-    end
+  subgraph Control
+    ControlServer[Control Server]
+  end
+  
+  subgraph Internet
+    Frontend[Web Frontend]
+  end
 
-    Client1 -- UDP --> VoiceServer1
-    Client2 -- UDP --> VoiceServer2
-    ClientN -- UDP --> VoiceServerN
+  Client1 -- UDP --> VoiceServer1
+  Client2 -- UDP --> VoiceServer2
+  ClientN -- UDP --> VoiceServerN
 
-    VoiceServer1 -- gRPC --> ControlServer
-    VoiceServer2 -- gRPC --> ControlServer
-    VoiceServerN -- gRPC --> ControlServer
+  VoiceServer1 -- gRPC --> ControlServer
+  VoiceServer2 -- gRPC --> ControlServer
+  VoiceServerN -- gRPC --> ControlServer
 
-    Frontend -- REST --> ControlServer
+  Frontend -- REST --> ControlServer
 
-    AdminUser[Admin User] -- gRPC --> ControlServer
+  AdminUser -- gRPC --> ControlServer
+
+  Client1 -- gRPC --> ControlServer
+  Client2 -- gRPC --> ControlServer
+  ClientN -- gRPC --> ControlServer
 ```
 
 #### Distributed Communication
