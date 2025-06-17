@@ -158,10 +158,10 @@ message AssignFrequenciesResponse {
   repeated FrequencyRange accepted_ranges = 3;
 }
 
+// TODO: Make this better with coalitions as well
 message FrequencyRange {
   double start_frequency = 1;
   double end_frequency = 2;
-  string description = 3;
 }
 
 // Admin Actions

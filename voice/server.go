@@ -5,8 +5,6 @@ import (
 	"github.com/FPGSchiba/vcs-srs-server/state"
 	"github.com/FPGSchiba/vcs-srs-server/voiceontrol"
 	"github.com/google/uuid"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"log/slog"
 	"net"
 	"sync"
@@ -52,9 +50,8 @@ func (v *Server) Listen(address string, stopChan chan struct{}) error {
 	if v.isDistributedServer {
 		// Initialize control client if this is a distributed server
 		v.controlClient = voiceontrol.NewVoiceControlClient(v.serverId, v.logger)
-		if err := v.controlClient.ConnectControlServer("localhost:5002", []grpc.DialOption{
-			grpc.WithTransportCredentials(insecure.NewCredentials()),
-		}); err != nil {
+		// TODO: Make Server domain / IP configurable
+		if err := v.controlClient.ConnectControlServer("localhost"); err != nil {
 			v.logger.Error("Failed to connect to control server", "error", err)
 			return err
 		}

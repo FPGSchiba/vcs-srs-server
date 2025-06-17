@@ -1,6 +1,7 @@
 package voiceontrol
 
 import (
+	"context"
 	"github.com/FPGSchiba/vcs-srs-server/state"
 	pb "github.com/FPGSchiba/vcs-srs-server/voicecontrolpb"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
@@ -40,4 +41,19 @@ func (s *VoiceControlServer) EstablishStream(stream pb.VoiceControlService_Estab
 	s.logger.Info("Establishing stream for voice control server")
 	// Handle the stream here
 	return nil
+}
+
+func (s *VoiceControlServer) RegisterVoiceServer(ctx context.Context, req *pb.RegisterVoiceServerRequest) (*pb.RegisterVoiceServerResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.logger.Info("Registering voice server", "serverId", req.ServerId, "address", req.ServerAddress)
+
+	// Here you would typically add the server to a list of registered servers
+	// For now, we just log the registration
+	return &pb.RegisterVoiceServerResponse{
+		Success:             true,
+		Message:             "Voice server registered successfully",
+		AssignedFrequencies: make([]*pb.FrequencyRange, 0),
+	}, nil
 }
