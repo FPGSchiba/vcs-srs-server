@@ -17,7 +17,7 @@ func NewControlService(app *app.VCSApplication) *ControlService {
 
 // StartServer starts the HTTP and Voice servers
 func (c *ControlService) StartServer() {
-	c.App.StartServer()
+	c.App.StartStandaloneServer()
 }
 
 // StopServer starts the HTTP and Voice servers

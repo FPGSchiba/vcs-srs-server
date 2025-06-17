@@ -18,26 +18,29 @@ import (
 var (
 	sleep = time.Second * 5
 
-	system     = ""    // empty string represents the health of the system
-	srsService = "srs" // service name for SRS
+	system         = ""        // empty string represents the health of the system
+	srsService     = "srs"     // service name for SRS
+	controlService = "control" // service name for Control Server
 )
 
 type Server struct {
-	mu            sync.RWMutex
-	grpcServer    *grpc.Server
-	listener      net.Listener
-	logger        *slog.Logger
-	serverState   *state.ServerState
-	settingsState *state.SettingsState
-	isRunning     bool
-	stopOnce      sync.Once // Add this to ensure we only stop once
+	mu              sync.RWMutex
+	grpcServer      *grpc.Server
+	listener        net.Listener
+	logger          *slog.Logger
+	serverState     *state.ServerState
+	settingsState   *state.SettingsState
+	isRunning       bool
+	isControlServer bool      // Add this to indicate if this is a control server
+	stopOnce        sync.Once // Add this to ensure we only stop once
 }
 
-func NewServer(serverState *state.ServerState, settingsState *state.SettingsState, logger *slog.Logger) *Server {
+func NewServer(serverState *state.ServerState, settingsState *state.SettingsState, logger *slog.Logger, isControlServer bool) *Server {
 	return &Server{
-		serverState:   serverState,
-		settingsState: settingsState,
-		logger:        logger,
+		serverState:     serverState,
+		settingsState:   settingsState,
+		logger:          logger,
+		isControlServer: isControlServer,
 	}
 }
 
@@ -62,6 +65,10 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 	// Register services
 	srsServer := srs.NewSimpleRadioServer(s.serverState, s.settingsState, s.logger)
 	pb.RegisterSRSServiceServer(s.grpcServer, srsServer)
+
+	if s.isControlServer {
+		// TODO: Register control service if this is a control server
+	}
 
 	// Register health service
 	healthServer := NewFullHealthServer()

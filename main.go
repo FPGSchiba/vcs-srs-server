@@ -14,7 +14,7 @@ import (
 var assets embed.FS
 
 func main() {
-	configFilepath, bannedFilePath, autoStartServers, logger := parseFlags()
+	configFilepath, bannedFilePath, _, autoStartServers, logger := parseFlags(false)
 
 	vcs := app.New()
 
