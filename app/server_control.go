@@ -131,7 +131,7 @@ func (a *VCSApplication) startVoiceServer() {
 	a.StopSignals["voice"] = stopChan
 
 	go func() {
-		voiceServer := voice.NewServer(a.ServerState, a.Logger)
+		voiceServer := voice.NewServer(a.ServerState, a.Logger, a.DistributionMode == DistributionModeVoice)
 		a.voiceServer = voiceServer
 
 		// Update status
@@ -198,7 +198,7 @@ func (a *VCSApplication) stopVoiceServer() {
 	})
 }
 
-func (a *VCSApplication) startControlServer() {
+func (a *VCSApplication) startGrpcServer() {
 	a.AdminState.Lock()
 	if a.AdminState.ControlStatus.IsRunning {
 		a.AdminState.Unlock()
@@ -213,7 +213,7 @@ func (a *VCSApplication) startControlServer() {
 	a.StopSignals["control"] = stopChan
 	a.AdminState.Unlock()
 
-	controlServer := control.NewServer(a.ServerState, a.SettingsState, a.Logger)
+	controlServer := control.NewServer(a.ServerState, a.SettingsState, a.Logger, a.DistributionMode == DistributionModeControl)
 	a.controlServer = controlServer
 
 	a.SettingsState.Lock()

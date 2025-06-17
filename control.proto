@@ -14,7 +14,7 @@ service VoiceControlService {
   rpc ReportFrequencyChange(FrequencyChangeRequest) returns (FrequencyChangeResponse);
 
   // Stream for control commands (Control -> Voice) with event IDs
-  rpc EstablishStream(stream ControlMessage) returns (stream ControlResponse);
+  rpc EstablishStream(stream ControlResponse) returns (stream ControlMessage);
 }
 
 // Messages from Control Server to Voice Server
@@ -63,7 +63,6 @@ message RegisterVoiceServerRequest {
   string server_id = 1;
   string server_address = 2;
   int32 udp_port = 3;
-  repeated FrequencyRange supported_frequencies = 4;
   ServerCapabilities capabilities = 5;
 }
 
@@ -74,9 +73,7 @@ message RegisterVoiceServerResponse {
 }
 
 message ServerCapabilities {
-  int32 max_concurrent_clients = 1;
-  repeated string supported_codecs = 2;
-  bool supports_encryption = 3;
+  string version = 1; // Version of the voice server
 }
 
 // Heartbeat
