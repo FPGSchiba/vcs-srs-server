@@ -10,7 +10,7 @@ import (
 	"path"
 )
 
-func parseFlags() (configFilepath, bannedFilePath string, autoStartServers bool, logger *slog.Logger) {
+func parseFlags(isHeadless bool) (configFilepath, bannedFilePath, distributionMode string, autoStartServers bool, logger *slog.Logger) {
 	var logFolder string
 	var fileLogEnabled bool
 	flag.StringVar(&configFilepath, "config", "config.yaml", "Path to the configuration file")
@@ -18,6 +18,9 @@ func parseFlags() (configFilepath, bannedFilePath string, autoStartServers bool,
 	flag.StringVar(&logFolder, "log-folder", "log", "Folder to store log files")
 	flag.BoolVar(&autoStartServers, "autostart", false, "Automatically start servers on application startup")
 	flag.BoolVar(&fileLogEnabled, "file-log", true, "Enable file logging")
+	if isHeadless {
+		flag.StringVar(&distributionMode, "mode", "standalone", "Distribution mode (standalone, control, voice)")
+	}
 	flag.Parse()
 
 	if fileLogEnabled {
@@ -46,6 +49,11 @@ func parseFlags() (configFilepath, bannedFilePath string, autoStartServers bool,
 	logger.Info("Using log folder", "logFolder", logFolder)
 	logger.Info("File logging enabled", "fileLogEnabled", fileLogEnabled)
 	logger.Info("Version", "version", app.Version)
+	if isHeadless {
+		logger.Info("Distribution mode", "mode", distributionMode)
+	} else {
+		logger.Info("Running in GUI mode")
+	}
 
 	return
 }
