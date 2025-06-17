@@ -4,6 +4,7 @@ package main
 
 import (
 	"github.com/FPGSchiba/vcs-srs-server/app"
+	"os"
 )
 
 func main() {
@@ -26,6 +27,13 @@ func main() {
 	}
 
 	vcs := app.New()
+
+	defer func() { // Ensure we catch any panics and log them
+		if err := recover(); err != nil { //catch
+			logger.Error("Application panicked", "error", err)
+			os.Exit(1)
+		}
+	}()
 
 	vcs.HeadlessStartup(logger, configFilepath, bannedFilePath, distributionMode)
 

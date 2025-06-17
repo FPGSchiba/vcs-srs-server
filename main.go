@@ -8,6 +8,7 @@ import (
 	"github.com/FPGSchiba/vcs-srs-server/services"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"log/slog"
+	"os"
 )
 
 //go:embed all:frontend/dist
@@ -17,6 +18,13 @@ func main() {
 	configFilepath, bannedFilePath, _, autoStartServers, logger := parseFlags(false)
 
 	vcs := app.New()
+
+	defer func() { // Ensure we catch any panics and log them
+		if err := recover(); err != nil { //catch
+			logger.Error("Application panicked", "error", err)
+			os.Exit(1)
+		}
+	}()
 
 	// Create application with options
 	appOptions := application.Options{

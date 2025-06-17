@@ -161,16 +161,16 @@ func (a *VCSApplication) HeadlessStartup(logger *slog.Logger, configFilePath, ba
 	a.DistributionMode = distributionMode
 	a.Logger = logger
 	a.App = nil // No application context in headless mode
-	
+
 	switch distributionMode {
 	case DistributionModeStandalone:
 		a.StartStandaloneServer()
 		break
 	case DistributionModeControl:
-		// TODO: Implement Control Server startup
+		a.StartControlServer()
 		break
 	case DistributionModeVoice:
-		// TODO: Implement Voice Server startup
+		a.StartVoiceServer()
 		break
 	}
 }
@@ -186,9 +186,36 @@ func (a *VCSApplication) StartStandaloneServer() {
 	}
 	a.AdminState.Unlock()
 
-	a.startControlServer()
+	a.startGrpcServer()
 	a.startVoiceServer()
 	a.startHTTPServer()
+
+	return
+}
+
+func (a *VCSApplication) StartControlServer() {
+	a.AdminState.Lock()
+	if a.AdminState.ControlStatus.IsRunning {
+		a.AdminState.Unlock()
+		return
+	}
+	a.AdminState.Unlock()
+
+	a.startGrpcServer()
+	a.startHTTPServer()
+
+	return
+}
+
+func (a *VCSApplication) StartVoiceServer() {
+	a.AdminState.Lock()
+	if a.AdminState.VoiceStatus.IsRunning {
+		a.AdminState.Unlock()
+		return
+	}
+	a.AdminState.Unlock()
+
+	a.startVoiceServer()
 
 	return
 }
