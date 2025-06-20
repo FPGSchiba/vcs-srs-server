@@ -1,7 +1,6 @@
 package srs
 
 import (
-	"github.com/FPGSchiba/vcs-srs-server/utils"
 	"regexp"
 )
 
@@ -27,12 +26,4 @@ func checkUnitId(unitId string) bool {
 	re := `^[A-Z0-9]{2,4}$`
 	matched, _ := regexp.MatchString(re, unitId)
 	return matched
-}
-
-func checkToken(token string, minRole int32) (bool, error) {
-	success, err := utils.VerifyToken(token, minRole)
-	if err != nil {
-		return false, err
-	}
-	return success, nil
 }
