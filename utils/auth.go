@@ -23,6 +23,17 @@ var (
 	maxTokenExpiration = 24 * time.Hour // Maximum token expiration time
 )
 
+var (
+	SrsServiceRoleMap = map[string]int32{
+		"UpdateClientInfo":   0,
+		"UpdateRadioInfo":    0,
+		"SyncClient":         0,
+		"Disconnect":         0,
+		"GetServerSettings":  0,
+		"SubscribeToUpdates": 0,
+	}
+)
+
 type TokenClaims struct {
 	ClientGuid string `json:"client_guid"`
 	RoleId     int32  `json:"role_id"`
@@ -174,13 +185,13 @@ func getJWTClaims(tokenString string) (*TokenClaims, error) {
 	return nil, errors.New("invalid token")
 }
 
-func VerifyToken(tokenString string, minRole int32) (bool, error) {
+func GetTokenClaims(tokenString string, minRole int32) (*TokenClaims, error) {
 	claims, err := getJWTClaims(tokenString)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	if claims.RoleId < minRole {
-		return false, fmt.Errorf("insufficient role: %d, required: %d", claims.RoleId, minRole)
+		return nil, fmt.Errorf("insufficient role: %d, required: %d", claims.RoleId, minRole)
 	}
-	return true, nil
+	return claims, nil
 }

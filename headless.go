@@ -4,22 +4,23 @@ package main
 
 import (
 	"github.com/FPGSchiba/vcs-srs-server/app"
+	"github.com/FPGSchiba/vcs-srs-server/state"
 	"os"
 )
 
 func main() {
 	// In headless mode, we don't start the Wails application.
 	configFilepath, bannedFilePath, distributionModeFlag, _, logger := parseFlags(true)
-	distributionMode := app.DistributionModeStandalone
+	distributionMode := state.DistributionModeStandalone
 	switch distributionModeFlag {
 	case "standalone":
-		distributionMode = app.DistributionModeStandalone
+		distributionMode = state.DistributionModeStandalone
 		break
 	case "control":
-		distributionMode = app.DistributionModeControl
+		distributionMode = state.DistributionModeControl
 		break
 	case "voice":
-		distributionMode = app.DistributionModeVoice
+		distributionMode = state.DistributionModeVoice
 		break
 	default:
 		logger.Error("Invalid distribution mode specified. Must be one of: standalone, control, voice")

@@ -24,30 +24,36 @@ type Client struct {
 
 type Server struct {
 	sync.RWMutex
-	conn                *net.UDPConn
-	clients             map[string]*Client
-	state               *state.ServerState
-	logger              *slog.Logger
-	isRunning           bool
-	stopChan            chan struct{}
-	controlClient       *voiceontrol.VoiceControlClient
-	isDistributedServer bool // Indicates if this is a distributed server
-	serverId            string
+	conn              *net.UDPConn
+	clients           map[string]*Client
+	state             *state.ServerState
+	distributionState *state.DistributionState
+	logger            *slog.Logger
+	isRunning         bool
+	stopChan          chan struct{}
+	controlClient     *voiceontrol.VoiceControlClient
+	serverId          string
 }
 
-func NewServer(state *state.ServerState, logger *slog.Logger, isDistributedServer bool) *Server {
+func NewServer(state *state.ServerState, logger *slog.Logger, distributionState *state.DistributionState) *Server {
 	return &Server{
-		clients:             make(map[string]*Client),
-		state:               state,
-		logger:              logger,
-		stopChan:            make(chan struct{}),
-		isDistributedServer: isDistributedServer,
-		serverId:            uuid.New().String(),
+		clients:           make(map[string]*Client),
+		state:             state,
+		logger:            logger,
+		stopChan:          make(chan struct{}),
+		distributionState: distributionState,
+		serverId:          uuid.New().String(),
 	}
 }
 
+func (v *Server) isDistributedServer() bool {
+	v.distributionState.RLock()
+	defer v.distributionState.RUnlock()
+	return v.distributionState.DistributionMode == state.DistributionModeVoice
+}
+
 func (v *Server) Listen(address string, stopChan chan struct{}) error {
-	if v.isDistributedServer {
+	if v.isDistributedServer() {
 		// Initialize control client if this is a distributed server
 		v.controlClient = voiceontrol.NewVoiceControlClient(v.serverId, v.logger)
 		// TODO: Make Server domain / IP configurable
