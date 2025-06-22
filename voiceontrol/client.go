@@ -98,6 +98,7 @@ func (v *VoiceControlClient) establishConnection() error {
 			newState := v.conn.GetState()
 			if newState == connectivity.Idle {
 				v.logger.Warn("Voicecontrol connection idle, stopping voice services")
+				// TODO: Implement logic to stop voice services
 				go v.handleReconnection()
 			}
 			lastState = newState
