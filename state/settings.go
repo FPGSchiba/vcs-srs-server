@@ -13,6 +13,7 @@ type SettingsState struct {
 	Coalitions   []Coalition       `yaml:"coalitions"`
 	Frequencies  FrequencySettings `yaml:"frequencies"`
 	General      GeneralSettings   `yaml:"general"`
+	Security     SecuritySettings  `yaml:"security"`
 	file         string            `yaml:"-"`
 }
 
@@ -45,6 +46,32 @@ type FrequencySettings struct {
 type GeneralSettings struct {
 	// GeneralSettings holds the current settings of the general settings
 	MaxRadiosPerUser int `yaml:"maxRadiosPerUser"`
+}
+
+type SecuritySettings struct {
+	VanguardToken      string               `yaml:"vanguardToken"`
+	VanguardApiKey     string               `yaml:"vanguardApiKey"`
+	VanguardApiBaseUrl string               `yaml:"vanguardBaseUrl"`
+	EnableVanguardAuth bool                 `yaml:"enableVanguardAuth"`
+	EnableGuestAuth    bool                 `yaml:"enableGuestAuth"`
+	Token              TokenSettings        `yaml:"token"`
+	VoiceControl       VoiceControlSettings `yaml:"voiceControl"`
+}
+
+type TokenSettings struct {
+	Expiration     int64  `yaml:"expiration"`
+	PrivateKeyFile string `yaml:"privateKeyFile"`
+	PublicKeyFile  string `yaml:"publicKeyFile"`
+	Issuer         string `yaml:"issuer"`
+	Subject        string `yaml:"subject"`
+}
+
+type VoiceControlSettings struct {
+	Port            int    `yaml:"port"`
+	RemoteHost      string `yaml:"remoteHost"`
+	ListenHost      string `yaml:"listenHost"`
+	CertificateFile string `yaml:"certificateFile"`
+	PrivateKeyFile  string `yaml:"privateKeyFile"`
 }
 
 func GetSettingsState(file string) (*SettingsState, error) {
@@ -80,12 +107,35 @@ func GetSettingsState(file string) (*SettingsState, error) {
 				General: GeneralSettings{
 					MaxRadiosPerUser: 20,
 				},
+				Security: SecuritySettings{
+					VanguardToken:      "super-secret-token",
+					VanguardApiKey:     "super-secret-api-key",
+					VanguardApiBaseUrl: "https://profile.vngd.net/_functions/",
+					EnableVanguardAuth: false,
+					EnableGuestAuth:    true,
+					Token: TokenSettings{
+						Expiration:     28800, // 8 hours
+						PrivateKeyFile: "/path/to/ecdsa_key.pem",
+						PublicKeyFile:  "/path/to/ecdsa_pubkey.pem",
+						Issuer:         "https://vcs.vngd.net",
+						Subject:        "vcs.vngd.net",
+					},
+					VoiceControl: VoiceControlSettings{
+						Port:            14448,
+						RemoteHost:      "localhost", // Default remote host is empty
+						ListenHost:      defaultHost,
+						CertificateFile: "/path/to/voicecontrol-cert.pem",
+						PrivateKeyFile:  "/path/to/voicecontrol-private-key.pem",
+					},
+				},
 			}
 			err = settings.Save()
 			if err != nil {
 				return settings, err
 			}
 			return settings, nil
+		} else {
+			return nil, err
 		}
 	}
 	// If the file exists, unmarshal it into the SettingsState struct

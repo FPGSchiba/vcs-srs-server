@@ -16,34 +16,42 @@ import (
 var (
 	privateKey *ecdsa.PrivateKey
 	publicKey  *ecdsa.PublicKey
+)
 
-	privateKeyFile = "ecdsa_key.pem"
-	publicKeyFile  = "ecdsa_pubkey.pem"
-
-	maxTokenExpiration = 24 * time.Hour // Maximum token expiration time
+const (
+	GuestRole uint8 = iota
+	MemberRole
+	OfficerRole
+	AdminRole
 )
 
 var (
-	SrsServiceRoleMap = map[string]int32{
-		"UpdateClientInfo":   0,
-		"UpdateRadioInfo":    0,
-		"SyncClient":         0,
-		"Disconnect":         0,
-		"GetServerSettings":  0,
-		"SubscribeToUpdates": 0,
+	SrsServiceMinimumRoleMap = map[string]uint8{
+		"UpdateClientInfo":   GuestRole,
+		"UpdateRadioInfo":    GuestRole,
+		"SyncClient":         GuestRole,
+		"Disconnect":         GuestRole,
+		"GetServerSettings":  GuestRole,
+		"SubscribeToUpdates": GuestRole,
+	}
+	SrsRoleNameMap = map[uint8]string{
+		GuestRole:   "Guest",
+		MemberRole:  "Member",
+		OfficerRole: "Officer",
+		AdminRole:   "Admin",
 	}
 )
 
 type TokenClaims struct {
 	ClientGuid string `json:"client_guid"`
-	RoleId     int32  `json:"role_id"`
+	RoleId     uint8  `json:"role_id"`
 	jwt.RegisteredClaims
 }
 
-func getKeys() (*ecdsa.PrivateKey, *ecdsa.PublicKey, error) {
+func getKeys(privateKeyFile, publicKeyFile string) (*ecdsa.PrivateKey, *ecdsa.PublicKey, error) {
 	if privateKey == nil {
 		var err error
-		privateKey, publicKey, err = generateKey()
+		privateKey, publicKey, err = generateKey(privateKeyFile, publicKeyFile)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -51,8 +59,8 @@ func getKeys() (*ecdsa.PrivateKey, *ecdsa.PublicKey, error) {
 	return privateKey, publicKey, nil
 }
 
-func generateKey() (*ecdsa.PrivateKey, *ecdsa.PublicKey, error) {
-	loadedPublicKey, loadedPrivateKey, err := loadKeyFromFile()
+func generateKey(privateKeyFile, publicKeyFile string) (*ecdsa.PrivateKey, *ecdsa.PublicKey, error) {
+	loadedPublicKey, loadedPrivateKey, err := loadKeyFromFile(privateKeyFile, publicKeyFile)
 	if err == nil {
 		return loadedPublicKey, loadedPrivateKey, nil
 	}
@@ -79,7 +87,7 @@ func generateKey() (*ecdsa.PrivateKey, *ecdsa.PublicKey, error) {
 	return privateKey, publicKey, nil
 }
 
-func loadKeyFromFile() (*ecdsa.PrivateKey, *ecdsa.PublicKey, error) {
+func loadKeyFromFile(privateKeyFile, publicKeyFile string) (*ecdsa.PrivateKey, *ecdsa.PublicKey, error) {
 	if _, err := os.Stat(privateKeyFile); !errors.Is(err, os.ErrNotExist) {
 		if _, err := os.Stat(publicKeyFile); !errors.Is(err, os.ErrNotExist) {
 			pemEncoded, err := os.ReadFile(privateKeyFile)
@@ -136,8 +144,8 @@ func decode(pemEncoded string, pemEncodedPub string) (*ecdsa.PrivateKey, *ecdsa.
 	return privateKey, publicKey, nil
 }
 
-func GenerateToken(clientGuid string, roleId int32) (string, error) {
-	key, _, err := getKeys()
+func GenerateToken(clientGuid string, roleId uint8, issuer, subject string, expiration time.Duration, privateKeyFile, publicKeyFile string) (string, error) {
+	key, _, err := getKeys(privateKeyFile, publicKeyFile)
 	if err != nil {
 		return "", err
 	}
@@ -146,10 +154,10 @@ func GenerateToken(clientGuid string, roleId int32) (string, error) {
 			ClientGuid: clientGuid,
 			RoleId:     roleId,
 			RegisteredClaims: jwt.RegisteredClaims{
-				ExpiresAt: jwt.NewNumericDate(time.Now().Add(maxTokenExpiration)), // Token valid for 24 hours
+				ExpiresAt: jwt.NewNumericDate(time.Now().Add(expiration)), // Token valid for 24 hours
 				IssuedAt:  jwt.NewNumericDate(time.Now()),
-				Issuer:    "vcs.vngd.net",
-				Subject:   "ClientToken",
+				Issuer:    issuer,
+				Subject:   subject,
 				ID:        clientGuid,
 			},
 		})
@@ -161,8 +169,8 @@ func GenerateToken(clientGuid string, roleId int32) (string, error) {
 	return tokenS, nil
 }
 
-func getJWTClaims(tokenString string) (*TokenClaims, error) {
-	_, publicKey, err := getKeys()
+func getJWTClaims(tokenString, privateKeyFile, publicKeyFile string) (*TokenClaims, error) {
+	_, publicKey, err := getKeys(privateKeyFile, publicKeyFile)
 	if err != nil {
 		return nil, err
 	}
@@ -178,15 +186,15 @@ func getJWTClaims(tokenString string) (*TokenClaims, error) {
 	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
 		tokenClaims := &TokenClaims{
 			ClientGuid: claims["client_guid"].(string),
-			RoleId:     claims["role_id"].(int32),
+			RoleId:     claims["role_id"].(uint8),
 		}
 		return tokenClaims, nil
 	}
 	return nil, errors.New("invalid token")
 }
 
-func GetTokenClaims(tokenString string, minRole int32) (*TokenClaims, error) {
-	claims, err := getJWTClaims(tokenString)
+func GetTokenClaims(tokenString string, minRole uint8, privateKeyFile, publicKeyFile string) (*TokenClaims, error) {
+	claims, err := getJWTClaims(tokenString, privateKeyFile, publicKeyFile)
 	if err != nil {
 		return nil, err
 	}
