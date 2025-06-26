@@ -295,7 +295,9 @@ func (s *Server) authInterceptor(ctx context.Context, req interface{}, info *grp
 	token := strings.TrimPrefix(tokens[0], "Bearer ") // Remove "Bearer " prefix if present
 
 	// Placeholder for authentication logic
-	claims, err := utils.GetTokenClaims(token, utils.SrsServiceRoleMap[pathName]) // Replace with actual authentication check
+	s.settingsState.RLock()
+	claims, err := utils.GetTokenClaims(token, utils.SrsServiceMinimumRoleMap[pathName], s.settingsState.Security.Token.PrivateKeyFile, s.settingsState.Security.Token.PublicKeyFile)
+	s.settingsState.RUnlock()
 	if err != nil {
 		s.logger.Error("Authentication error", "method", info.FullMethod, "error", err)
 		return nil, fmt.Errorf("authentication error for %s: %v", info.FullMethod, err)

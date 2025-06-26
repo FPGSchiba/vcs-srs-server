@@ -4,12 +4,6 @@ import (
 	"regexp"
 )
 
-const (
-	GuestRole  = 0
-	MemberRole = 1
-	AdminRole  = 2
-)
-
 func checkVersion(version string) bool {
 	// Check if the version is supported
 	// For now, we assume all versions are supported
