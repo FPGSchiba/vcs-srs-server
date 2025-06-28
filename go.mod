@@ -9,6 +9,8 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/google/uuid v1.6.0
 	github.com/samber/slog-multi v1.5.0
+	github.com/sethvargo/go-diceware v0.5.0
+	github.com/sony/gobreaker/v2 v2.2.0
 	github.com/wailsapp/wails/v3 v3.0.0-alpha.8.3
 	google.golang.org/grpc v1.75.1
 	google.golang.org/protobuf v1.36.9
@@ -70,9 +72,7 @@ require (
 	github.com/samber/lo v1.51.0 // indirect
 	github.com/samber/slog-common v0.19.0 // indirect
 	github.com/sergi/go-diff v1.3.2-0.20230802210424-5b0b94c5c0d3 // indirect
-	github.com/sethvargo/go-diceware v0.5.0 // indirect
 	github.com/skeema/knownhosts v1.3.0 // indirect
-	github.com/sony/gobreaker/v2 v2.1.0 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.0 // indirect
 	github.com/wailsapp/go-webview2 v1.0.19 // indirect
