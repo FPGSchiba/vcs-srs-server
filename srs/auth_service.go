@@ -166,6 +166,7 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.ClientGuestLogi
 		Name:      request.Name,
 		UnitId:    request.UnitId,
 		Coalition: selectedCoalition.Name,
+		Role:      utils.GuestRole,
 	})
 
 	// Return Response
@@ -252,7 +253,6 @@ func (s *AuthServer) VanguardLogin(ctx context.Context, request *pb.ClientVangua
 	}
 
 	s.mu.Lock()
-	// TODO: Remove old clients that are expired
 	s.authenticatingClients = append(s.authenticatingClients, &AuthenticatingClient{
 		ClientId:       clientGuid.String(),
 		Secret:         strings.Join(clientSecret, "-"),
@@ -299,6 +299,86 @@ func (s *AuthServer) VanguardLogin(ctx context.Context, request *pb.ClientVangua
 				AvailableCoalitions: availableCoalitions,
 			},
 		},
+	}, nil
+}
+
+func (s *AuthServer) VanguardUnitSelect(ctx context.Context, request *pb.ClientVanguardUnitSelectRequest) (*pb.ServerVanguardUnitSelectResponse, error) {
+	p, _ := peer.FromContext(ctx)
+	s.logger.Debug("Processing Vanguard Unit Select", "IP", p.Addr.String(), "ClientGuid", request.ClientGuid, "UnitId", request.UnitId)
+
+	// Find the authenticating client
+	authClient := s.getAuthenticatingClientId(request.ClientGuid)
+
+	// Check secret
+	if authClient == nil || authClient.Secret != request.Secret {
+		s.logger.Warn("Authentication failed for Vanguard Unit Select", "ClientGuid", request.ClientGuid, "UnitId", request.UnitId)
+		return &pb.ServerVanguardUnitSelectResponse{
+			Success: false,
+			Result:  &pb.ServerVanguardUnitSelectResponse_ErrorMessage{ErrorMessage: "Problem verifying client"},
+		}, nil
+	}
+
+	// Check if the selected unit is available for the client
+	selectedUnit := getSelectedUnit(authClient, request.UnitId)
+	if selectedUnit == nil {
+		return &pb.ServerVanguardUnitSelectResponse{
+			Success: false,
+			Result:  &pb.ServerVanguardUnitSelectResponse_ErrorMessage{ErrorMessage: "Invalid UnitId"},
+		}, nil
+	}
+
+	// Check if the role is available
+	if !isRoleAvailable(authClient, uint8(request.Role)) {
+		return &pb.ServerVanguardUnitSelectResponse{
+			Success: false,
+			Result:  &pb.ServerVanguardUnitSelectResponse_ErrorMessage{ErrorMessage: "Invalid Role"},
+		}, nil
+	}
+
+	// Check if the coalition is available
+	if !s.isCoalitionAvailable(request.Coalition) {
+		return &pb.ServerVanguardUnitSelectResponse{
+			Success: false,
+			Result:  &pb.ServerVanguardUnitSelectResponse_ErrorMessage{ErrorMessage: "Invalid Coalition"},
+		}, nil
+	}
+
+	s.serverState.AddClient(authClient.ClientId, &state.ClientState{
+		Name:      authClient.Secret,
+		UnitId:    selectedUnit.UnitId,
+		Coalition: request.Coalition,
+		Role:      uint8(request.Role),
+	})
+
+	s.mu.Lock()
+	s.authenticatingClients = utils.Remove(s.authenticatingClients, authClient)
+	s.mu.Unlock()
+
+	s.logger.Info("Vanguard Unit Select succeeded", "ClientGuid", authClient.ClientId, "UnitId", selectedUnit.UnitId)
+
+	// Generate token for the client
+	s.settingsState.RLock()
+	token, err := utils.GenerateToken(
+		request.ClientGuid,
+		uint8(request.Role),
+		s.settingsState.Security.Token.Issuer,
+		s.settingsState.Security.Token.Subject,
+		time.Duration(s.settingsState.Security.Token.Expiration)*time.Second,
+		s.settingsState.Security.Token.PrivateKeyFile,
+		s.settingsState.Security.Token.PublicKeyFile)
+	s.settingsState.RUnlock()
+
+	if err != nil {
+		s.logger.Error("Failed to generate token for guest login", "error", err)
+		return &pb.ServerVanguardUnitSelectResponse{
+			Success: false,
+			Result:  &pb.ServerVanguardUnitSelectResponse_ErrorMessage{ErrorMessage: "Failed to generate token"},
+		}, err
+	}
+
+	return &pb.ServerVanguardUnitSelectResponse{
+		Success: true,
+		Result:  &pb.ServerVanguardUnitSelectResponse_Token{Token: token},
 	}, nil
 }
 
@@ -350,7 +430,6 @@ func (s *AuthServer) WixLogin(email, password string) (*WixLoginResponse, error)
 		s.settingsState.RLock()
 		url := fmt.Sprintf("%svcs_login?key=%s&token=%s", s.settingsState.Security.VanguardApiBaseUrl, s.settingsState.Security.VanguardApiKey, s.settingsState.Security.VanguardToken)
 		s.settingsState.RUnlock()
-		s.logger.Info("Wix login URL", "URL", url, "Body", string(reqBody))
 		req, err := http.NewRequest("POST", url, bytes.NewBuffer(reqBody))
 		if err != nil {
 			return nil, err
@@ -386,4 +465,35 @@ func (s *AuthServer) WixLogin(email, password string) (*WixLoginResponse, error)
 	}
 
 	return result, nil
+}
+
+func (s *AuthServer) getAuthenticatingClientId(clientId string) *AuthenticatingClient {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var authClient *AuthenticatingClient
+	for _, client := range s.authenticatingClients {
+		if client.Expires.Before(time.Now()) {
+			s.logger.Debug("Removing expired authenticating client", "ClientGuid", client.ClientId)
+			s.authenticatingClients = utils.Remove(s.authenticatingClients, client)
+			continue // Skip expired clients
+		}
+		if client.ClientId == clientId {
+			authClient = client
+			break
+		}
+	}
+	return authClient
+}
+
+func (s *AuthServer) isCoalitionAvailable(selectedCoalition string) bool {
+	var coalitionAvailable bool
+	s.settingsState.RLock()
+	defer s.settingsState.RUnlock()
+	for _, coalition := range s.settingsState.Coalitions {
+		if coalition.Name == selectedCoalition {
+			coalitionAvailable = true
+			break
+		}
+	}
+	return coalitionAvailable
 }
