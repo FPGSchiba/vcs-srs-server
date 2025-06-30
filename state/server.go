@@ -18,6 +18,7 @@ type ClientState struct {
 	Name      string
 	UnitId    string
 	Coalition string
+	Role      uint8
 }
 
 type RadioState struct {

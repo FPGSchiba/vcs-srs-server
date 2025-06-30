@@ -21,3 +21,25 @@ func checkUnitId(unitId string) bool {
 	matched, _ := regexp.MatchString(re, unitId)
 	return matched
 }
+
+func getSelectedUnit(authClient *AuthenticatingClient, unitId string) *WixUnitResult {
+	var selectedUnit *WixUnitResult
+	for _, unit := range authClient.AvailableUnits {
+		if unit.UnitId == unitId {
+			selectedUnit = &unit
+			break
+		}
+	}
+	return selectedUnit
+}
+
+func isRoleAvailable(authClient *AuthenticatingClient, selectedRole uint8) bool {
+	var roleAvailable bool
+	for _, role := range authClient.AvailableRoles {
+		if role == selectedRole {
+			roleAvailable = true
+			break
+		}
+	}
+	return roleAvailable
+}
