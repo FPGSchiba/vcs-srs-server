@@ -114,7 +114,7 @@ message CoalitionSelection {
 message ServerVanguardUnitSelectResponse {
   bool success = 1;
   oneof result {
-    string unit_id = 2; // The selected unit ID after successful selection
+    string token = 2; // The selected unit ID after successful selection
     string error_message = 3; // Error message if selection failed
   }
 }
