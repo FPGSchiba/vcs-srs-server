@@ -233,7 +233,7 @@ func (s *AuthServer) VanguardLogin(ctx context.Context, request *pb.ClientVangua
 		}, nil
 	}
 
-	loginResponse, err := s.WixLogin(request.Email, request.Password)
+	loginResponse, err := s.wixLogin(request.Email, request.Password)
 	if err != nil {
 		s.logger.Error("Wix login failed", "Email", request.Email, "Error", err)
 		return &pb.ServerVanguardLoginResponse{
@@ -419,7 +419,7 @@ func (s *AuthServer) GetStringDistributionMode() string {
 	}
 }
 
-func (s *AuthServer) WixLogin(email, password string) (*WixLoginResponse, error) {
+func (s *AuthServer) wixLogin(email, password string) (*WixLoginResponse, error) {
 	s.logger.Debug("Starting Wix login", "Email", email)
 
 	result, err := s.wixCircuitBreaker.Execute(func() (*WixLoginResponse, error) {
@@ -468,13 +468,13 @@ func (s *AuthServer) WixLogin(email, password string) (*WixLoginResponse, error)
 }
 
 func (s *AuthServer) getAuthenticatingClientId(clientId string) *AuthenticatingClient {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	var authClient *AuthenticatingClient
 	for _, client := range s.authenticatingClients {
 		if client.Expires.Before(time.Now()) {
 			s.logger.Debug("Removing expired authenticating client", "ClientGuid", client.ClientId)
+			s.mu.Lock()
 			s.authenticatingClients = utils.Remove(s.authenticatingClients, client)
+			s.mu.Unlock()
 			continue // Skip expired clients
 		}
 		if client.ClientId == clientId {
