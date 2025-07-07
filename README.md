@@ -1,18 +1,68 @@
-# README
+# vcs-srs-server
 
 ## About
 
-This is the official Wails React-TS template.
+This is the official server for the [Vanguard Communication System](). It is a distributed VOIP system that allows users to communicate over digitalized radio frequencies. The server is written in Go and uses gRPC for communication between the different components.
 
-You can configure the project by editing `wails.json`. More information about the project settings can be found
-here: https://wails.io/docs/reference/project-config
+## Installation
 
-## Live Development
+Important: This project uses the [Wails](https://v3alpha.wails.io/) framework, so you need to install it first. You can find the installation instructions on the [Wails website](https://v3alpha.wails.io/getting-started/installation/).
+Be aware that Wails3 is currently in alpha, so you need to install the Wails3 CLI. You can do this by running:
 
-To run in live development mode, run `wails dev` in the project directory. This will run a Vite development
-server that will provide very fast hot reload of your frontend changes. If you want to develop in a browser
-and have access to your Go methods, there is also a dev server that runs on http://localhost:34115. Connect
-to this in your browser, and you can call your Go code from devtools.
+```bash
+go install -v github.com/wailsapp/wails/v3/cmd/wails3@latest
+```
+
+### Note about Wails3
+
+I am currently using Wails3 mainly for the Task file to be able to build the different modes of the server.
+So to run the commands that are mentioned in the Live development section, you need to have Wails3 installed. But you can also run the server without Wails3 by using the commands configured in the `Taskfile.yml` file.
+
+## Development
+
+### Standalone GUI Mode
+
+To run the server in standalone GUI mode, you can use the Wails framework. This allows you to run the server with a graphical user interface (GUI) that provides an easy way to manage the server and its settings.
+
+Use the command: 
+```bash
+wails3 dev
+```
+
+~~Or
+```bash
+wails3 task run
+```
+
+This will start the server in standalone mode with a GUI. The GUI will allow you to manage the server and configure settings.
+
+### Standalone Headless Mode
+
+To run the server in standalone headless mode, you can use the following command:
+
+```bash
+wails3 task headless-standalone
+```
+
+This will start the server without a GUI, allowing you to run it in the background or on a server without a graphical interface. Also it does not need any dependencies related to the GUI, so it is more lightweight and faster to start.
+
+### Distributed Control Server Mode
+
+To run the server in distributed control server mode, you can use the following command:
+
+```bash
+wails3 task headless-control
+```
+
+This will start the server in a mode that allows it to communicate with multiple voice servers. This is useful for larger deployments where you need to manage multiple voice servers and distribute the load across them.
+
+### Distributed Voice Server Mode
+
+To run the server in distributed voice server mode, you can use the following command:
+
+```bash
+wails3 task headless-voice
+```~~
 
 ### Config File
 
@@ -61,35 +111,55 @@ Plugins are in simple terms just gRPC servers that implement the `AuthPlugin` Se
 
 ```mermaid
 sequenceDiagram
-    participant User
-    participant VCS-Server
-    participant Plugin-A
-    participant Plugin-B
-    participant 3rd-Party
+  participant User
+  participant VCS-Server
+  participant Plugin-A
+  participant Plugin-B
+  participant 3rd-Party
 
+  critical PLugin Connection and Configuration
     VCS-Server->>Plugin-A: Connection and Configuration
     VCS-Server->>Plugin-B: Connection and Configuration
+  end
 
-    User->>VCS-Server: Client Initialization
-    VCS-Server->>User: Distribution and Plugin Information
-    
+  User->>VCS-Server: Client Initialization
+  activate VCS-Server
+  VCS-Server-->>User: Distribution and Plugin Information
+  deactivate VCS-Server
+  
+  alt Login
     User->>VCS-Server: Guest Login
+    activate VCS-Server
     VCS-Server->>User: Token (With Guest Role and selected Coalition and Unit)
-
+    deactivate VCS-Server
+  else
     User->>VCS-Server: Login (Using Plugin-A)
+    activate VCS-Server
     VCS-Server->>Plugin-A: Credential forwarding
+    activate Plugin-A
     Plugin-A<<-->>3rd-Party: Credential Verification
-    Plugin-A->>VCS-Server: User Information (Roles and Units)
-    VCS-Server->>User: User Login Information (Roles, Units and Coalitions)
+    Plugin-A-->>VCS-Server: User Infromation (Roles and Units)
+    deactivate Plugin-A
+    VCS-Server-->>User: User Login Information (Roles, Units and Coalitions)
+    deactivate VCS-Server
     User->>VCS-Server: UnitSelection (With Secret from Login)
-    VCS-Server->>User: Token (With selected Role, Unit and Coalition)
-
+    activate VCS-Server
+    VCS-Server-->>User: Token (With selected Role, Unit and Coalition)
+    deactivate VCS-Server
+  else
     User->>VCS-Server: Login (Using Plugin-B)
+    activate VCS-Server
     VCS-Server->>Plugin-B: Credential forwarding
-    Plugin-B->>VCS-Server: User Information (Roles and Units)
-    VCS-Server->>User: User Login Information (Roles, Units and Coalitions)
+    activate Plugin-B
+    Plugin-B-->>VCS-Server: User Information (Roles and Units)
+    deactivate Plugin-B
+    VCS-Server-->>User: User Login Information (Roles, Units and Coalitions)
+    deactivate VCS-Server
     User->>VCS-Server: UnitSelection (With Secret from Login)
-    VCS-Server->>User: Token (With selected Role, Unit and Coalition)
+    activate VCS-Server
+    VCS-Server-->>User: Token (With selected Role, Unit and Coalition)
+    deactivate VCS-Server
+  end
 ```
 
 ## Distributed VOIP System Architecture
