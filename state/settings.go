@@ -124,13 +124,13 @@ func GetSettingsState(file string) (*SettingsState, error) {
 						Issuer:         "https://vcs.vngd.net",
 						Subject:        "vcs.vngd.net",
 					},
-					VoiceControl: VoiceControlSettings{
-						Port:            14448,
-						RemoteHost:      "localhost", // Default remote host is empty
-						ListenHost:      defaultHost,
-						CertificateFile: "/path/to/voicecontrol-cert.pem",
-						PrivateKeyFile:  "/path/to/voicecontrol-private-key.pem",
-					},
+				},
+				VoiceControl: VoiceControlSettings{
+					Port:            14448,
+					RemoteHost:      "localhost", // Default remote host is empty
+					ListenHost:      defaultHost,
+					CertificateFile: "/path/to/voicecontrol-cert.pem",
+					PrivateKeyFile:  "/path/to/voicecontrol-private-key.pem",
 				},
 			}
 			err = settings.Save()
