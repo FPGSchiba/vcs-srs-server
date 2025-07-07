@@ -29,7 +29,7 @@ Use the command:
 wails3 dev
 ```
 
-~~Or
+Or
 ```bash
 wails3 task run
 ```
@@ -62,7 +62,7 @@ To run the server in distributed voice server mode, you can use the following co
 
 ```bash
 wails3 task headless-voice
-```~~
+```
 
 ### Config File
 
