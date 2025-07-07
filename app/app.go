@@ -105,7 +105,7 @@ func (a *VCSApplication) StartUp(app *application.App, configFilePath, bannedFil
 	}
 }
 
-func (a *VCSApplication) HeadlessStartup(logger *slog.Logger, configFilePath, bannedFilePath string, distributionMode int8) {
+func (a *VCSApplication) HeadlessStartup(logger *slog.Logger, configFilePath, bannedFilePath string, distributionMode uint8) {
 	settingsState, err := state.GetSettingsState(configFilePath)
 	if err != nil {
 		panic(err) // Without settings, we can't run

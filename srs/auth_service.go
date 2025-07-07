@@ -1,20 +1,17 @@
 package srs
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	pb "github.com/FPGSchiba/vcs-srs-server/srspb"
 	"github.com/FPGSchiba/vcs-srs-server/state"
 	"github.com/FPGSchiba/vcs-srs-server/utils"
+	authpb "github.com/FPGSchiba/vcs-srs-server/vcsauthpb"
 	"github.com/google/uuid"
 	"github.com/sethvargo/go-diceware/diceware"
-	"github.com/sony/gobreaker/v2"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/peer"
 	"log/slog"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -23,61 +20,59 @@ import (
 type AuthServer struct {
 	pb.UnimplementedAuthServiceServer
 	logger                *slog.Logger
-	mu                    sync.Mutex
 	serverState           *state.ServerState
 	settingsState         *state.SettingsState
 	distributionState     *state.DistributionState
-	wixCircuitBreaker     *gobreaker.CircuitBreaker[*WixLoginResponse]
-	authenticatingClients []*AuthenticatingClient
+	mu                    sync.RWMutex
+	authenticatingClients map[string]*AuthenticatingClient
+	pluginClients         map[string]*PluginClient
 }
 
 type AuthenticatingClient struct {
-	ClientId       string
 	Secret         string
 	Expires        time.Time
 	AvailableRoles []uint8
-	AvailableUnits []WixUnitResult
-}
-
-type WixLoginRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-}
-
-type WixLoginResponse struct {
-	Success bool            `json:"success"`
-	Message string          `json:"message"`
-	Error   interface{}     `json:"error,omitempty"`
-	Data    *WixLoginResult `json:"data,omitempty"`
-}
-
-type WixLoginResult struct {
-	UserId         string          `json:"userId"`
-	DisplayName    string          `json:"displayName"`
-	AvailableUnits []WixUnitResult `json:"availableUnits"`
-	AvailableRoles []uint8         `json:"availableRoles"`
-}
-
-type WixUnitResult struct {
-	UnitId string `json:"unitId"`
-	Name   string `json:"name"`
+	AvailableUnits []*pb.UnitSelection
 }
 
 func NewAuthServer(serverState *state.ServerState, settingsState *state.SettingsState, logger *slog.Logger, distributionState *state.DistributionState) *AuthServer {
 	return &AuthServer{
-		serverState:       serverState,
-		settingsState:     settingsState,
-		logger:            logger,
-		mu:                sync.Mutex{},
-		distributionState: distributionState,
-		wixCircuitBreaker: gobreaker.NewCircuitBreaker[*WixLoginResponse](gobreaker.Settings{
-			Name: "WixLogin",
-			ReadyToTrip: func(counts gobreaker.Counts) bool {
-				failureRatio := float64(counts.TotalFailures) / float64(counts.Requests)
-				return counts.Requests >= 3 && failureRatio >= 0.6
-			},
-		}),
+		serverState:           serverState,
+		settingsState:         settingsState,
+		logger:                logger,
+		mu:                    sync.RWMutex{},
+		distributionState:     distributionState,
+		pluginClients:         initializePluginClients(settingsState, logger),
+		authenticatingClients: make(map[string]*AuthenticatingClient),
 	}
+}
+
+func initializePluginClients(settingsState *state.SettingsState, logger *slog.Logger) map[string]*PluginClient {
+	pluginClients := make(map[string]*PluginClient)
+	for _, plugin := range settingsState.GetAllPluginNames() {
+		var configuration map[string]string
+		var address string
+		var ok bool
+		if configuration, ok = settingsState.GetPluginConfiguration(plugin); !ok || configuration == nil {
+			logger.Warn("Plugin configuration not found or empty", "name", plugin)
+			continue
+		}
+		if address, ok = settingsState.GetPluginAddress(plugin); !ok || address == "" {
+			logger.Warn("Plugin address not found or empty", "name", plugin)
+			continue
+		}
+		client := NewPluginClient(logger, settingsState, plugin, address, configuration)
+		if err := client.ConnectPlugin(); err != nil {
+			logger.Error("Failed to connect to plugin", "name", plugin, "error", err)
+			err := settingsState.SetPluginEnabled(plugin, false)
+			if err != nil {
+				logger.Error("Failed to disable plugin after connection failure", "name", plugin, "error", err)
+			}
+			continue
+		}
+		pluginClients[plugin] = client
+	}
+	return pluginClients
 }
 
 func (s *AuthServer) GetServerState() healthpb.HealthCheckResponse_ServingStatus {
@@ -97,6 +92,43 @@ func (s *AuthServer) isControlServer() bool {
 	return s.distributionState.DistributionMode == state.DistributionModeControl
 }
 
+func (s *AuthServer) InitAuth(ctx context.Context, request *pb.ClientAuthInitRequest) (*pb.ServerAuthInitResponse, error) {
+	p, _ := peer.FromContext(ctx)
+	s.logger.Debug("Initializing Auth", "IP", p.Addr.String(), "Version", request.Capabilities.Version)
+
+	// Check Version
+	if !checkVersion(request.Capabilities.Version) {
+		return &pb.ServerAuthInitResponse{
+			Success:    false,
+			InitResult: &pb.ServerAuthInitResponse_ErrorMessage{ErrorMessage: "Unsupported version"},
+		}, nil
+	}
+
+	// Check Distribution Capabilities
+	if !s.checkDistributionCapabilities(request.Capabilities.SupportedDistributionModes) {
+		return &pb.ServerAuthInitResponse{
+			Success:    false,
+			InitResult: &pb.ServerAuthInitResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("Unsupported distribution capabilities, currently running: %s", s.GetStringDistributionMode())},
+		}, nil
+	}
+
+	clientGuid := uuid.New().String()
+	s.mu.Lock()
+	s.authenticatingClients[clientGuid] = &AuthenticatingClient{}
+	s.mu.Unlock()
+
+	return &pb.ServerAuthInitResponse{
+		Success: true,
+		InitResult: &pb.ServerAuthInitResponse_Result{
+			Result: &pb.AuthInitResult{
+				DistributionMode: s.GetProtoDistributionMode(),
+				AvailablePlugins: s.settingsState.GetAllPluginNames(),
+				ClientGuid:       clientGuid,
+			},
+		},
+	}, nil
+}
+
 func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.ClientGuestLoginRequest) (*pb.ServerGuestLoginResponse, error) {
 	p, _ := peer.FromContext(ctx)
 	s.logger.Debug("Getting Guest Login", "IP", p.Addr.String(), "Name", request.Name, "UnitId", request.UnitId)
@@ -111,21 +143,16 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.ClientGuestLogi
 	}
 	s.settingsState.RUnlock()
 
-	// Check Version
-	if !checkVersion(request.Capabilities.Version) {
+	// Check if client is initialized
+	s.mu.RLock()
+	if _, ok := s.authenticatingClients[request.ClientGuid]; !ok {
+		s.mu.RUnlock()
 		return &pb.ServerGuestLoginResponse{
 			Success:     false,
-			LoginResult: &pb.ServerGuestLoginResponse_ErrorMessage{ErrorMessage: "Unsupported version"},
+			LoginResult: &pb.ServerGuestLoginResponse_ErrorMessage{ErrorMessage: "ClientGuid not found, please initialize first"},
 		}, nil
 	}
-
-	// Check Distribution Capabilities
-	if !s.checkDistributionCapabilities(request.Capabilities.SupportedFeatures) {
-		return &pb.ServerGuestLoginResponse{
-			Success:     false,
-			LoginResult: &pb.ServerGuestLoginResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("Unsupported distribution capabilities, currently running: %s", s.GetStringDistributionMode())},
-		}, nil
-	}
+	s.mu.RUnlock()
 
 	// Check Username
 	if !checkUsername(request.Name) {
@@ -193,89 +220,92 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.ClientGuestLogi
 		Success: true,
 		LoginResult: &pb.ServerGuestLoginResponse_Result{
 			Result: &pb.GuestLoginResult{
-				Token:      token,
-				ClientGuid: clientGuid.String(),
-				Coalition:  selectedCoalition.Name,
+				Token:     token,
+				Coalition: selectedCoalition.Name,
 			},
 		},
 	}
 	return response, nil
 }
 
-func (s *AuthServer) VanguardLogin(ctx context.Context, request *pb.ClientVanguardLoginRequest) (*pb.ServerVanguardLoginResponse, error) {
+func (s *AuthServer) Login(ctx context.Context, request *pb.ClientLoginRequest) (*pb.ServerLoginResponse, error) {
 	p, _ := peer.FromContext(ctx)
-	s.logger.Debug("Getting Vanguard Login", "IP", p.Addr.String(), "Name", request.Email)
+	s.logger.Debug("Getting 3rd Party Plugin Login", "IP", p.Addr.String(), "plugin-name", request.AuthenticationPlugin)
 
 	// Check if This auth type is enabled
 	s.settingsState.RLock()
-	if !s.settingsState.Security.EnableVanguardAuth {
+	if !s.settingsState.Security.EnablePluginAuth {
 		s.settingsState.RUnlock()
-		return &pb.ServerVanguardLoginResponse{
+		return &pb.ServerLoginResponse{
 			Success:     false,
-			LoginResult: &pb.ServerVanguardLoginResponse_ErrorMessage{ErrorMessage: "Vanguard login is disabled"},
+			LoginResult: &pb.ServerLoginResponse_ErrorMessage{ErrorMessage: "Plugin login is disabled"},
 		}, nil
 	}
 	s.settingsState.RUnlock()
 
-	// Check Version
-	if !checkVersion(request.Capabilities.Version) {
-		return &pb.ServerVanguardLoginResponse{
+	// Check if client is initialized
+	s.mu.RLock()
+	if _, ok := s.authenticatingClients[request.ClientGuid]; !ok {
+		s.mu.RUnlock()
+		return &pb.ServerLoginResponse{
 			Success:     false,
-			LoginResult: &pb.ServerVanguardLoginResponse_ErrorMessage{ErrorMessage: "Unsupported version"},
+			LoginResult: &pb.ServerLoginResponse_ErrorMessage{ErrorMessage: "ClientGuid not found, please initialize first"},
 		}, nil
 	}
+	s.mu.RUnlock()
 
-	// Check Distribution Capabilities
-	if !s.checkDistributionCapabilities(request.Capabilities.SupportedFeatures) {
-		return &pb.ServerVanguardLoginResponse{
+	// Check if the plugin is available
+	s.mu.RLock()
+	pluginClient, ok := s.pluginClients[request.AuthenticationPlugin]
+	if !ok {
+		s.mu.RUnlock()
+		s.logger.Warn("Plugin not found", "PluginName", request.AuthenticationPlugin)
+		return &pb.ServerLoginResponse{
 			Success:     false,
-			LoginResult: &pb.ServerVanguardLoginResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("Unsupported distribution capabilities, currently running: %s", s.GetStringDistributionMode())},
+			LoginResult: &pb.ServerLoginResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("Plugin %s not found", request.AuthenticationPlugin)},
 		}, nil
 	}
+	s.mu.RUnlock()
 
-	loginResponse, err := s.wixLogin(request.Email, request.Password)
+	// Call the plugin's login method
+	// This will return an error if the login fails
+	loginResponse, err := pluginClient.Login(request.Credentials)
 	if err != nil {
-		s.logger.Error("Wix login failed", "Email", request.Email, "Error", err)
-		return &pb.ServerVanguardLoginResponse{
+		s.logger.Error("Plugin Login failed", "plugin-name", request.AuthenticationPlugin, "Error", err)
+		return &pb.ServerLoginResponse{
 			Success:     false,
-			LoginResult: &pb.ServerVanguardLoginResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("Wix login failed: %s", err.Error())},
+			LoginResult: &pb.ServerLoginResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("Login failed: %s", err.Error())},
 		}, nil
 	}
 
-	clientGuid := uuid.New()
 	clientSecret, err := diceware.Generate(5)
 	if err != nil {
 		s.logger.Error("Failed to generate client secret", "Error", err)
-		return &pb.ServerVanguardLoginResponse{
+		return &pb.ServerLoginResponse{
 			Success:     false,
-			LoginResult: &pb.ServerVanguardLoginResponse_ErrorMessage{ErrorMessage: "Failed to generate client secret"},
+			LoginResult: &pb.ServerLoginResponse_ErrorMessage{ErrorMessage: "Failed to generate client secret"},
 		}, nil
 	}
-
-	s.mu.Lock()
-	s.authenticatingClients = append(s.authenticatingClients, &AuthenticatingClient{
-		ClientId:       clientGuid.String(),
-		Secret:         strings.Join(clientSecret, "-"),
-		Expires:        time.Now().Add(5 * time.Minute),
-		AvailableRoles: loginResponse.Data.AvailableRoles,
-		AvailableUnits: loginResponse.Data.AvailableUnits,
-	})
-	s.mu.Unlock()
-
-	var availableRoles []*pb.RoleSelection
-	for _, role := range loginResponse.Data.AvailableRoles {
-		availableRoles = append(availableRoles, &pb.RoleSelection{
-			Id:   uint32(role),
-			Name: utils.SrsRoleNameMap[role],
-		})
+	result := loginResponse.LoginResult.(*authpb.ServerLoginResponse_Result)
+	var availableRoles []uint8
+	for _, role := range result.Result.AvailableRoles {
+		availableRoles = append(availableRoles, uint8(role))
 	}
 	var availableUnits []*pb.UnitSelection
-	for _, unit := range loginResponse.Data.AvailableUnits {
+	for _, unit := range result.Result.AvailableUnits {
 		availableUnits = append(availableUnits, &pb.UnitSelection{
 			UnitId:   unit.UnitId,
-			UnitName: unit.Name,
+			UnitName: unit.UnitName,
 		})
 	}
+	s.mu.Lock()
+	s.authenticatingClients[request.ClientGuid] = &AuthenticatingClient{
+		Secret:         strings.Join(clientSecret, "-"),
+		Expires:        time.Now().Add(5 * time.Minute),
+		AvailableRoles: availableRoles,
+		AvailableUnits: availableUnits,
+	}
+	s.mu.Unlock()
 
 	var availableCoalitions []*pb.CoalitionSelection
 	s.settingsState.RLock()
@@ -288,13 +318,20 @@ func (s *AuthServer) VanguardLogin(ctx context.Context, request *pb.ClientVangua
 	}
 	s.settingsState.RUnlock()
 
-	return &pb.ServerVanguardLoginResponse{
+	var builtRoles []*pb.RoleSelection
+	for _, role := range result.Result.AvailableRoles {
+		builtRoles = append(builtRoles, &pb.RoleSelection{
+			Id:   role,
+			Name: utils.SrsRoleNameMap[uint8(role)],
+		})
+	}
+
+	return &pb.ServerLoginResponse{
 		Success: true,
-		LoginResult: &pb.ServerVanguardLoginResponse_Result{
-			Result: &pb.VanguardLoginResult{
+		LoginResult: &pb.ServerLoginResponse_Result{
+			Result: &pb.LoginResult{
 				Secret:              strings.Join(clientSecret, "-"),
-				ClientGuid:          clientGuid.String(),
-				AvailableRoles:      availableRoles,
+				AvailableRoles:      builtRoles,
 				AvailableUnits:      availableUnits,
 				AvailableCoalitions: availableCoalitions,
 			},
@@ -302,48 +339,58 @@ func (s *AuthServer) VanguardLogin(ctx context.Context, request *pb.ClientVangua
 	}, nil
 }
 
-func (s *AuthServer) VanguardUnitSelect(ctx context.Context, request *pb.ClientVanguardUnitSelectRequest) (*pb.ServerVanguardUnitSelectResponse, error) {
+func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.ClientUnitSelectRequest) (*pb.ServerUnitSelectResponse, error) {
 	p, _ := peer.FromContext(ctx)
-	s.logger.Debug("Processing Vanguard Unit Select", "IP", p.Addr.String(), "ClientGuid", request.ClientGuid, "UnitId", request.UnitId)
+	s.logger.Debug("Processing Unit Select", "IP", p.Addr.String(), "ClientGuid", request.ClientGuid, "UnitId", request.UnitId)
 
 	// Find the authenticating client
-	authClient := s.getAuthenticatingClientId(request.ClientGuid)
+	s.mu.RLock()
+	authClient, ok := s.authenticatingClients[request.ClientGuid]
+	if !ok {
+		s.mu.RUnlock()
+		s.logger.Warn("Client not found for Unit Select", "ClientGuid", request.ClientGuid)
+		return &pb.ServerUnitSelectResponse{
+			Success: false,
+			Result:  &pb.ServerUnitSelectResponse_ErrorMessage{ErrorMessage: "ClientGuid not found, please initialize first"},
+		}, nil
+	}
+	s.mu.RUnlock()
 
 	// Check secret
 	if authClient == nil || authClient.Secret != request.Secret {
-		s.logger.Warn("Authentication failed for Vanguard Unit Select", "ClientGuid", request.ClientGuid, "UnitId", request.UnitId)
-		return &pb.ServerVanguardUnitSelectResponse{
+		s.logger.Warn("Authentication failed for Unit Select", "ClientGuid", request.ClientGuid, "UnitId", request.UnitId)
+		return &pb.ServerUnitSelectResponse{
 			Success: false,
-			Result:  &pb.ServerVanguardUnitSelectResponse_ErrorMessage{ErrorMessage: "Problem verifying client"},
+			Result:  &pb.ServerUnitSelectResponse_ErrorMessage{ErrorMessage: "Problem verifying client"},
 		}, nil
 	}
 
 	// Check if the selected unit is available for the client
 	selectedUnit := getSelectedUnit(authClient, request.UnitId)
 	if selectedUnit == nil {
-		return &pb.ServerVanguardUnitSelectResponse{
+		return &pb.ServerUnitSelectResponse{
 			Success: false,
-			Result:  &pb.ServerVanguardUnitSelectResponse_ErrorMessage{ErrorMessage: "Invalid UnitId"},
+			Result:  &pb.ServerUnitSelectResponse_ErrorMessage{ErrorMessage: "Invalid UnitId"},
 		}, nil
 	}
 
 	// Check if the role is available
 	if !isRoleAvailable(authClient, uint8(request.Role)) {
-		return &pb.ServerVanguardUnitSelectResponse{
+		return &pb.ServerUnitSelectResponse{
 			Success: false,
-			Result:  &pb.ServerVanguardUnitSelectResponse_ErrorMessage{ErrorMessage: "Invalid Role"},
+			Result:  &pb.ServerUnitSelectResponse_ErrorMessage{ErrorMessage: "Invalid Role"},
 		}, nil
 	}
 
 	// Check if the coalition is available
 	if !s.isCoalitionAvailable(request.Coalition) {
-		return &pb.ServerVanguardUnitSelectResponse{
+		return &pb.ServerUnitSelectResponse{
 			Success: false,
-			Result:  &pb.ServerVanguardUnitSelectResponse_ErrorMessage{ErrorMessage: "Invalid Coalition"},
+			Result:  &pb.ServerUnitSelectResponse_ErrorMessage{ErrorMessage: "Invalid Coalition"},
 		}, nil
 	}
 
-	s.serverState.AddClient(authClient.ClientId, &state.ClientState{
+	s.serverState.AddClient(request.ClientGuid, &state.ClientState{
 		Name:      authClient.Secret,
 		UnitId:    selectedUnit.UnitId,
 		Coalition: request.Coalition,
@@ -351,10 +398,10 @@ func (s *AuthServer) VanguardUnitSelect(ctx context.Context, request *pb.ClientV
 	})
 
 	s.mu.Lock()
-	s.authenticatingClients = utils.Remove(s.authenticatingClients, authClient)
+	delete(s.authenticatingClients, request.ClientGuid)
 	s.mu.Unlock()
 
-	s.logger.Info("Vanguard Unit Select succeeded", "ClientGuid", authClient.ClientId, "UnitId", selectedUnit.UnitId)
+	s.logger.Info("Vanguard Unit Select succeeded", "ClientGuid", request.ClientGuid, "UnitId", selectedUnit.UnitId)
 
 	// Generate token for the client
 	s.settingsState.RLock()
@@ -370,30 +417,30 @@ func (s *AuthServer) VanguardUnitSelect(ctx context.Context, request *pb.ClientV
 
 	if err != nil {
 		s.logger.Error("Failed to generate token for guest login", "error", err)
-		return &pb.ServerVanguardUnitSelectResponse{
+		return &pb.ServerUnitSelectResponse{
 			Success: false,
-			Result:  &pb.ServerVanguardUnitSelectResponse_ErrorMessage{ErrorMessage: "Failed to generate token"},
+			Result:  &pb.ServerUnitSelectResponse_ErrorMessage{ErrorMessage: "Failed to generate token"},
 		}, err
 	}
 
-	return &pb.ServerVanguardUnitSelectResponse{
+	return &pb.ServerUnitSelectResponse{
 		Success: true,
-		Result:  &pb.ServerVanguardUnitSelectResponse_Token{Token: token},
+		Result:  &pb.ServerUnitSelectResponse_Token{Token: token},
 	}, nil
 }
 
-func (s *AuthServer) checkDistributionCapabilities(features []pb.ClientFeature) bool {
+func (s *AuthServer) checkDistributionCapabilities(features []pb.DistributionMode) bool {
 	s.distributionState.RLock()
 	currentDistributionMode := s.distributionState.DistributionMode
 	s.distributionState.RUnlock()
 	for _, feature := range features {
 		switch feature {
-		case pb.ClientFeature_DISTRIBUTED:
+		case pb.DistributionMode_DISTRIBUTED:
 			if currentDistributionMode == state.DistributionModeControl {
 				return true
 			}
 			continue
-		case pb.ClientFeature_STANDALONE:
+		case pb.DistributionMode_STANDALONE:
 			if currentDistributionMode == state.DistributionModeStandalone {
 				return true
 			}
@@ -419,70 +466,15 @@ func (s *AuthServer) GetStringDistributionMode() string {
 	}
 }
 
-func (s *AuthServer) wixLogin(email, password string) (*WixLoginResponse, error) {
-	s.logger.Debug("Starting Wix login", "Email", email)
-
-	result, err := s.wixCircuitBreaker.Execute(func() (*WixLoginResponse, error) {
-		reqBody, err := json.Marshal(WixLoginRequest{Email: email, Password: password})
-		if err != nil {
-			return nil, err
-		}
-		s.settingsState.RLock()
-		url := fmt.Sprintf("%svcs_login?key=%s&token=%s", s.settingsState.Security.VanguardApiBaseUrl, s.settingsState.Security.VanguardApiKey, s.settingsState.Security.VanguardToken)
-		s.settingsState.RUnlock()
-		req, err := http.NewRequest("POST", url, bytes.NewBuffer(reqBody))
-		if err != nil {
-			return nil, err
-		}
-
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Content-Length", fmt.Sprintf("%d", len(reqBody)))
-		req.Header.Set("Host", "profile.vngd.net")
-		req.Header.Set("User-Agent", "vcs-srs-server/1.0")
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return nil, err
-		}
-
-		var wixResp WixLoginResponse
-		if err := json.NewDecoder(resp.Body).Decode(&wixResp); err != nil {
-			return nil, err
-		}
-
-		return &wixResp, nil
-	})
-	if err != nil {
-		return nil, err
+func (s *AuthServer) GetProtoDistributionMode() pb.DistributionMode {
+	s.distributionState.RLock()
+	defer s.distributionState.RUnlock()
+	// This has to be a control server, so it either is distributed or standalone
+	if s.distributionState.DistributionMode == state.DistributionModeControl {
+		return pb.DistributionMode_DISTRIBUTED
+	} else {
+		return pb.DistributionMode_STANDALONE
 	}
-
-	if !result.Success {
-		return result, fmt.Errorf("wix login failed: %s", result.Message)
-	}
-
-	if result.Data == nil {
-		return result, fmt.Errorf("wix login failed: %s", result.Message)
-	}
-
-	return result, nil
-}
-
-func (s *AuthServer) getAuthenticatingClientId(clientId string) *AuthenticatingClient {
-	var authClient *AuthenticatingClient
-	for _, client := range s.authenticatingClients {
-		if client.Expires.Before(time.Now()) {
-			s.logger.Debug("Removing expired authenticating client", "ClientGuid", client.ClientId)
-			s.mu.Lock()
-			s.authenticatingClients = utils.Remove(s.authenticatingClients, client)
-			s.mu.Unlock()
-			continue // Skip expired clients
-		}
-		if client.ClientId == clientId {
-			authClient = client
-			break
-		}
-	}
-	return authClient
 }
 
 func (s *AuthServer) isCoalitionAvailable(selectedCoalition string) bool {

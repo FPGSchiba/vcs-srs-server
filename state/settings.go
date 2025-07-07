@@ -1,6 +1,7 @@
 package state
 
 import (
+	"fmt"
 	"gopkg.in/yaml.v3"
 	"os"
 	"sync"
@@ -9,12 +10,13 @@ import (
 // SettingsState holds the current state of the settings
 type SettingsState struct {
 	sync.RWMutex `yaml:"-"`
-	Servers      ServerSettings    `yaml:"servers"`
-	Coalitions   []Coalition       `yaml:"coalitions"`
-	Frequencies  FrequencySettings `yaml:"frequencies"`
-	General      GeneralSettings   `yaml:"general"`
-	Security     SecuritySettings  `yaml:"security"`
-	file         string            `yaml:"-"`
+	Servers      ServerSettings       `yaml:"servers"`
+	Coalitions   []Coalition          `yaml:"coalitions"`
+	Frequencies  FrequencySettings    `yaml:"frequencies"`
+	General      GeneralSettings      `yaml:"general"`
+	Security     SecuritySettings     `yaml:"security"`
+	VoiceControl VoiceControlSettings `yaml:"voiceControl"`
+	file         string               `yaml:"-"`
 }
 
 type ServerSettings struct {
@@ -49,13 +51,17 @@ type GeneralSettings struct {
 }
 
 type SecuritySettings struct {
-	VanguardToken      string               `yaml:"vanguardToken"`
-	VanguardApiKey     string               `yaml:"vanguardApiKey"`
-	VanguardApiBaseUrl string               `yaml:"vanguardBaseUrl"`
-	EnableVanguardAuth bool                 `yaml:"enableVanguardAuth"`
-	EnableGuestAuth    bool                 `yaml:"enableGuestAuth"`
-	Token              TokenSettings        `yaml:"token"`
-	VoiceControl       VoiceControlSettings `yaml:"voiceControl"`
+	Plugins          []PluginSettings `yaml:"plugins"`
+	EnablePluginAuth bool             `yaml:"enablePluginAuth"`
+	EnableGuestAuth  bool             `yaml:"enableGuestAuth"`
+	Token            TokenSettings    `yaml:"token"`
+}
+
+type PluginSettings struct {
+	Name          string            `yaml:"name"`
+	Enabled       bool              `yaml:"enabled"`
+	Address       string            `yaml:"address"`
+	Configuration map[string]string `yaml:"configuration"` // Generic configuration for the plugin
 }
 
 type TokenSettings struct {
@@ -108,11 +114,9 @@ func GetSettingsState(file string) (*SettingsState, error) {
 					MaxRadiosPerUser: 20,
 				},
 				Security: SecuritySettings{
-					VanguardToken:      "super-secret-token",
-					VanguardApiKey:     "super-secret-api-key",
-					VanguardApiBaseUrl: "https://profile.vngd.net/_functions/",
-					EnableVanguardAuth: false,
-					EnableGuestAuth:    true,
+					Plugins:          make([]PluginSettings, 0),
+					EnablePluginAuth: false,
+					EnableGuestAuth:  true,
 					Token: TokenSettings{
 						Expiration:     28800, // 8 hours
 						PrivateKeyFile: "/path/to/ecdsa_key.pem",
@@ -149,16 +153,73 @@ func GetSettingsState(file string) (*SettingsState, error) {
 	return settings, nil
 }
 
-func (settings *SettingsState) Save() error {
+func (s *SettingsState) Save() error {
 	// Save the settings to the file
-	yamlData, err := yaml.Marshal(settings)
+	yamlData, err := yaml.Marshal(s)
 	if err != nil {
 		return err
 	}
 
-	err = os.WriteFile(settings.file, yamlData, 0777)
+	err = os.WriteFile(s.file, yamlData, 0777)
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+func (s *SettingsState) GetAllPluginNames() []string {
+	var pluginNames []string
+	s.RLock()
+	defer s.RUnlock()
+	for _, plugin := range s.Security.Plugins {
+		if plugin.Enabled {
+			pluginNames = append(pluginNames, plugin.Name)
+		}
+	}
+	return pluginNames
+}
+
+func (s *SettingsState) GetPluginConfiguration(pluginName string) (map[string]string, bool) {
+	s.RLock()
+	defer s.RUnlock()
+	for _, plugin := range s.Security.Plugins {
+		if plugin.Name == pluginName {
+			return plugin.Configuration, true
+		}
+	}
+	return nil, false
+}
+
+func (s *SettingsState) GetPluginAddress(pluginName string) (string, bool) {
+	s.RLock()
+	defer s.RUnlock()
+	for _, plugin := range s.Security.Plugins {
+		if plugin.Name == pluginName {
+			return plugin.Address, true
+		}
+	}
+	return "", false
+}
+
+func (s *SettingsState) IsPluginEnabled(pluginName string) bool {
+	s.RLock()
+	defer s.RUnlock()
+	for _, plugin := range s.Security.Plugins {
+		if plugin.Name == pluginName {
+			return plugin.Enabled
+		}
+	}
+	return false
+}
+
+func (s *SettingsState) SetPluginEnabled(pluginName string, enabled bool) error {
+	s.Lock()
+	defer s.Unlock()
+	for i, plugin := range s.Security.Plugins {
+		if plugin.Name == pluginName {
+			s.Security.Plugins[i].Enabled = enabled
+			return nil
+		}
+	}
+	return fmt.Errorf("plugin '%s' does not exists", pluginName)
 }
