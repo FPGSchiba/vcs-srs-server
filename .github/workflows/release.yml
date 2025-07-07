@@ -4,6 +4,7 @@ on:
     tags:
       - 'v*.*.*'  # Trigger on version tags
 
+# TODO: Redo this completely, this is all outdated and needs to be redone (Not docker I think)
 jobs:
   build:
     runs-on: ${{ matrix.os }}
