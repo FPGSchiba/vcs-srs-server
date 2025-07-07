@@ -368,12 +368,14 @@ func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.ClientUnitSelec
 	// Check if the selected unit is available for the client
 	selectedUnit := getSelectedUnit(authClient, request.UnitId)
 	if selectedUnit == nil {
+		// Other UnitIds should also be valid, so we check if the UnitId is valid
 		if !checkUnitId(request.UnitId) {
 			return &pb.ServerUnitSelectResponse{
 				Success: false,
 				Result:  &pb.ServerUnitSelectResponse_ErrorMessage{ErrorMessage: "Invalid UnitId"},
 			}, nil
 		}
+		// If the UnitId is not available, we create a new selection as only the UnitId is required
 		selectedUnit = &pb.UnitSelection{
 			UnitId:   request.UnitId,
 			UnitName: fmt.Sprintf("Unit %s", request.UnitId),
