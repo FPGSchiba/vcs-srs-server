@@ -368,10 +368,16 @@ func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.ClientUnitSelec
 	// Check if the selected unit is available for the client
 	selectedUnit := getSelectedUnit(authClient, request.UnitId)
 	if selectedUnit == nil {
-		return &pb.ServerUnitSelectResponse{
-			Success: false,
-			Result:  &pb.ServerUnitSelectResponse_ErrorMessage{ErrorMessage: "Invalid UnitId"},
-		}, nil
+		if !checkUnitId(request.UnitId) {
+			return &pb.ServerUnitSelectResponse{
+				Success: false,
+				Result:  &pb.ServerUnitSelectResponse_ErrorMessage{ErrorMessage: "Invalid UnitId"},
+			}, nil
+		}
+		selectedUnit = &pb.UnitSelection{
+			UnitId:   request.UnitId,
+			UnitName: fmt.Sprintf("Unit %s", request.UnitId),
+		}
 	}
 
 	// Check if the role is available
