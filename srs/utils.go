@@ -1,6 +1,7 @@
 package srs
 
 import (
+	pb "github.com/FPGSchiba/vcs-srs-server/srspb"
 	"regexp"
 )
 
@@ -22,11 +23,11 @@ func checkUnitId(unitId string) bool {
 	return matched
 }
 
-func getSelectedUnit(authClient *AuthenticatingClient, unitId string) *WixUnitResult {
-	var selectedUnit *WixUnitResult
+func getSelectedUnit(authClient *AuthenticatingClient, unitId string) *pb.UnitSelection {
+	var selectedUnit *pb.UnitSelection
 	for _, unit := range authClient.AvailableUnits {
 		if unit.UnitId == unitId {
-			selectedUnit = &unit
+			selectedUnit = unit
 			break
 		}
 	}

@@ -37,17 +37,60 @@ To build a redistributable, production mode package, use `wails build`.
 The built application can be found in the `build/bin` directory. You can run it by executing the binary file.
 
 ### Flags
-You can pass flags to the application by using the `--` separator. Following Flags are available:
+You can pass flags to the application by using the `--` separator. The following Flags are available:
 - `--config /path/to/config.yaml` - Path to the config file. Default is `./config.yaml`
 - `--autostart` - If the servers should be started automatically. Default is `false`
 - `--banned /path/to/banned.json` - Path to the banned users file. Default is `banned_clients.json`
 - `--log-folder /path/to/logs` - Path to the log folder. Default is `log`
-- `--file-log` - If the logs should be written to a file. Default is `true`
+- `--file-log` - If the logs should be written to a file. Default is `true`~~
 
 ## Improvements
 
 * Use a Go Module for the Protobuf files / Generated Go code
   * Use this when the C# Client is finished and the Go Client is ready
+
+## Authentication & Plugin architecture
+
+This project uses a plugin architecture for authentication. The `vcs-vanguard-auth-plugin` is used to authenticate users against the Vanguard Wix platform. The plugin can be extended or replaced with other authentication methods as needed.
+
+For more information on how to create your own plugin, see the [plugin documentation](https://github.com/FPGSchiba/vcs-vanguard-auth-plugin).
+
+### Architecture
+
+Plugins are in simple terms just gRPC servers that implement the `AuthPlugin` Service. The main server will connect to the plugin and use it to authenticate users. The Service is written to be very flexible and can be used with any payloads.
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant VCS-Server
+    participant Plugin-A
+    participant Plugin-B
+    participant 3rd-Party
+
+    VCS-Server->>Plugin-A: Connection and Configuration
+    VCS-Server->>Plugin-B: Connection and Configuration
+
+    User->>VCS-Server: Client Initialization
+    VCS-Server->>User: Distribution and Plugin Information
+    
+    User->>VCS-Server: Guest Login
+    VCS-Server->>User: Token (With Guest Role and selected Coalition and Unit)
+
+    User->>VCS-Server: Login (Using Plugin-A)
+    VCS-Server->>Plugin-A: Credential forwarding
+    Plugin-A<<-->>3rd-Party: Credential Verification
+    Plugin-A->>VCS-Server: User Information (Roles and Units)
+    VCS-Server->>User: User Login Information (Roles, Units and Coalitions)
+    User->>VCS-Server: UnitSelection (With Secret from Login)
+    VCS-Server->>User: Token (With selected Role, Unit and Coalition)
+
+    User->>VCS-Server: Login (Using Plugin-B)
+    VCS-Server->>Plugin-B: Credential forwarding
+    Plugin-B->>VCS-Server: User Information (Roles and Units)
+    VCS-Server->>User: User Login Information (Roles, Units and Coalitions)
+    User->>VCS-Server: UnitSelection (With Secret from Login)
+    VCS-Server->>User: Token (With selected Role, Unit and Coalition)
+```
 
 ## Distributed VOIP System Architecture
 
