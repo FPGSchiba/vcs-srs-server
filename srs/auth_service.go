@@ -96,6 +96,8 @@ func (s *AuthServer) InitAuth(ctx context.Context, request *pb.ClientAuthInitReq
 	p, _ := peer.FromContext(ctx)
 	s.logger.Debug("Initializing Auth", "IP", p.Addr.String(), "Version", request.Capabilities.Version)
 
+	s.removeExpiredAuthenticatingClients()
+
 	// Check Version
 	if !checkVersion(request.Capabilities.Version) {
 		return &pb.ServerAuthInitResponse{
@@ -114,8 +116,12 @@ func (s *AuthServer) InitAuth(ctx context.Context, request *pb.ClientAuthInitReq
 
 	clientGuid := uuid.New().String()
 	s.mu.Lock()
-	s.authenticatingClients[clientGuid] = &AuthenticatingClient{}
+	s.authenticatingClients[clientGuid] = &AuthenticatingClient{
+		Expires: time.Now().Add(20 * time.Minute),
+	}
 	s.mu.Unlock()
+
+	s.logger.Info("Client initialized", "ClientGuid", clientGuid, "IP", p.Addr.String(), "Version", request.Capabilities.Version)
 
 	return &pb.ServerAuthInitResponse{
 		Success: true,
@@ -124,6 +130,7 @@ func (s *AuthServer) InitAuth(ctx context.Context, request *pb.ClientAuthInitReq
 				DistributionMode: s.GetProtoDistributionMode(),
 				AvailablePlugins: s.settingsState.GetAllPluginNames(),
 				ClientGuid:       clientGuid,
+				HasGuestLogin:    s.settingsState.Security.EnableGuestAuth,
 			},
 		},
 	}, nil
@@ -132,6 +139,7 @@ func (s *AuthServer) InitAuth(ctx context.Context, request *pb.ClientAuthInitReq
 func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.ClientGuestLoginRequest) (*pb.ServerGuestLoginResponse, error) {
 	p, _ := peer.FromContext(ctx)
 	s.logger.Debug("Getting Guest Login", "IP", p.Addr.String(), "Name", request.Name, "UnitId", request.UnitId)
+
 	// check if This auth type is enabled
 	s.settingsState.RLock()
 	if !s.settingsState.Security.EnableGuestAuth {
@@ -142,6 +150,8 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.ClientGuestLogi
 		}, nil
 	}
 	s.settingsState.RUnlock()
+
+	s.removeExpiredAuthenticatingClients()
 
 	// Check if client is initialized
 	s.mu.RLock()
@@ -242,6 +252,8 @@ func (s *AuthServer) Login(ctx context.Context, request *pb.ClientLoginRequest) 
 		}, nil
 	}
 	s.settingsState.RUnlock()
+
+	s.removeExpiredAuthenticatingClients()
 
 	// Check if client is initialized
 	s.mu.RLock()
@@ -409,8 +421,6 @@ func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.ClientUnitSelec
 	delete(s.authenticatingClients, request.ClientGuid)
 	s.mu.Unlock()
 
-	s.logger.Info("Vanguard Unit Select succeeded", "ClientGuid", request.ClientGuid, "UnitId", selectedUnit.UnitId)
-
 	// Generate token for the client
 	s.settingsState.RLock()
 	token, err := utils.GenerateToken(
@@ -496,4 +506,15 @@ func (s *AuthServer) isCoalitionAvailable(selectedCoalition string) bool {
 		}
 	}
 	return coalitionAvailable
+}
+
+func (s *AuthServer) removeExpiredAuthenticatingClients() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for clientGuid, authClient := range s.authenticatingClients {
+		if time.Now().After(authClient.Expires) {
+			delete(s.authenticatingClients, clientGuid)
+			s.logger.Info("Removed expired authenticating client", "ClientGuid", clientGuid)
+		}
+	}
 }

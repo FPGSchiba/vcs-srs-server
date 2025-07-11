@@ -60,8 +60,9 @@ message ServerAuthInitResponse {
 
 message AuthInitResult {
   repeated string available_plugins = 1; // List of available authentication plugins
-  DistributionMode distribution_mode = 2; // Distribution mode of the server
-  string client_guid = 3; // Unique identifier for the client
+  bool has_guest_login = 2; // Indicates if guest login is supported
+  DistributionMode distribution_mode = 3; // Distribution mode of the server
+  string client_guid = 4; // Unique identifier for the client
 }
 
 // Authentication messages
