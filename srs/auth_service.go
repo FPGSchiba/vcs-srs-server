@@ -346,6 +346,7 @@ func (s *AuthServer) Login(ctx context.Context, request *pb.ClientLoginRequest) 
 				AvailableRoles:      builtRoles,
 				AvailableUnits:      availableUnits,
 				AvailableCoalitions: availableCoalitions,
+				PlayerName:          result.Result.PlayerName,
 			},
 		},
 	}, nil

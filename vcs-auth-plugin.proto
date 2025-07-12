@@ -35,8 +35,9 @@ message ServerLoginResponse {
 }
 
 message LoginResult {
-  repeated UnitSelection available_units = 4; // List of available unit IDs for the vanguard client
-  repeated uint32 available_roles = 5; // Optional list of roles if the user has permissions to select roles
+  repeated UnitSelection available_units = 1; // List of available unit IDs for the vanguard client
+  repeated uint32 available_roles = 2; // Optional list of roles if the user has permissions to select roles
+  string player_name = 3; // Name of the player after successful login
 }
 
 message UnitSelection {
