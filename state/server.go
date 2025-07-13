@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/json"
+	"github.com/google/uuid"
 	"os"
 	"sync"
 )
@@ -9,8 +10,8 @@ import (
 type ServerState struct {
 	sync.RWMutex
 	// State holds the current state of the server
-	Clients      map[string]*ClientState
-	RadioClients map[string]*RadioState
+	Clients      map[uuid.UUID]*ClientState
+	RadioClients map[uuid.UUID]*RadioState
 	BannedState  BannedState
 }
 
@@ -104,15 +105,60 @@ func (b *BannedState) Save() error {
 	return nil
 }
 
-func (s *ServerState) AddClient(clientGuid string, client *ClientState) {
+func (s *ServerState) AddClient(clientGuid uuid.UUID, client *ClientState) {
 	s.Lock()
 	defer s.Unlock()
 	if s.Clients == nil {
-		s.Clients = make(map[string]*ClientState)
+		s.Clients = make(map[uuid.UUID]*ClientState)
 	}
 	s.Clients[clientGuid] = client
 	s.RadioClients[clientGuid] = &RadioState{
 		Radios: []Radio{},
 		Muted:  false,
 	}
+}
+
+func (s *ServerState) GetAllClients() []struct {
+	ID    uuid.UUID
+	State *ClientState
+} {
+	s.RLock()
+	defer s.RUnlock()
+	clients := make([]struct {
+		ID    uuid.UUID
+		State *ClientState
+	}, 0, len(s.Clients))
+	for id, client := range s.Clients {
+		clients = append(clients, struct {
+			ID    uuid.UUID
+			State *ClientState
+		}{ID: id, State: client})
+	}
+	return clients
+}
+
+func (s *ServerState) GetAllEnabledFrequencies(clientGuid uuid.UUID) []float64 {
+	s.RLock()
+	defer s.RUnlock()
+	if clientState, exists := s.RadioClients[clientGuid]; exists {
+		enabledFrequencies := make([]float64, 0, len(clientState.Radios))
+		for _, radio := range clientState.Radios {
+			if radio.Enabled {
+				enabledFrequencies = append(enabledFrequencies, radio.Frequency)
+			}
+		}
+		return enabledFrequencies
+	}
+	return nil
+}
+
+func (s *ServerState) IsListeningOnFrequency(clientGuid uuid.UUID, frequency float64) bool {
+	if clientState, exists := s.RadioClients[clientGuid]; exists {
+		for _, radio := range clientState.Radios {
+			if radio.Frequency == frequency && radio.Enabled {
+				return true
+			}
+		}
+	}
+	return false
 }

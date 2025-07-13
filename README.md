@@ -162,6 +162,90 @@ sequenceDiagram
   end
 ```
 
+## Voice Communication Protocol
+
+### Overview
+
+The Voice Communication Protocol enables real-time, distributed voice communication over digital radio-like frequencies. It is designed for low-latency, stateless operation, supporting both standalone and distributed deployments.  
+Clients authenticate and receive a session token, then communicate with a Voice Server using compact UDP packets. Each client can listen to multiple frequencies and transmit on one at a time, with all routing and access control managed by the control server.  
+The protocol is codec-agnostic and supports efficient fan-out to all listeners on a given frequency, while keeping the Voice Server stateless and scalable.
+
+---
+
+### Architecture
+
+The communication flow follows a simple pattern: clients first announce their presence and listening frequencies, then exchange voice data in real-time. 
+The Voice Server acts as a stateless relay, forwarding voice packets to all clients listening on the same frequency. 
+Periodic keepalive messages maintain NAT bindings and update frequency subscriptions, while graceful disconnection is handled via BYE packets.
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant VoiceServer
+
+    Client->>VoiceServer: HELLO (SessionID, [freqs])
+    VoiceServer-->>Client: HELLO-ACK (optional)
+
+    loop While PTT is down
+        Client->>VoiceServer: VOICE (SessionID, freq, PTT=1, Opus frame)
+        VoiceServer-->>OtherClients: VOICE (SessionID, freq, PTT=1, Opus frame)
+    end
+
+    Client->>VoiceServer: VOICE (SessionID, freq, PTT=0, Opus frame or empty)
+
+    Note over Client,VoiceServer: Periodic keepalive or frequency change
+    Client->>VoiceServer: KEEPALIVE (SessionID, [freqs])
+
+    Client->>VoiceServer: BYE (SessionID)
+```
+
+#### Communication Flow
+
+1. **Client authenticates** with the control server and receives a Session ID and Voice Server endpoint.
+2. **Client sends HELLO** to the Voice Server, listing the frequencies it wants to monitor.
+3. **Voice Server (optionally) replies with HELLO-ACK**.
+4. **Client transmits VOICE packets** when PTT is active, specifying the frequency and including the Opus audio frame.
+5. **Voice Server fans out VOICE packets** to all other clients listening on the same frequency.
+6. **Client sends KEEPALIVE** packets periodically or when its listening set changes.
+7. **Client sends BYE** when disconnecting.
+
+
+### Protocol Details
+
+#### Packet Types
+
+- **HELLO**: Announces client presence and the set of frequencies to listen to. Sent when connecting or when the listening set changes.
+- **HELLO-ACK**: (Optional) Acknowledgement from the server, may include server time or configuration.
+- **VOICE**: Carries voice data (Opus frames) from the client to the server, and from the server to all other clients listening on the same frequency. Includes a flag indicating whether Push-To-Talk (PTT) is active.
+- **KEEPALIVE**: Sent periodically by the client to maintain NAT bindings and update the server with the current listening frequencies.
+- **BYE**: Indicates client disconnection.
+
+#### Header Structure
+
+| Field        | Size (bytes) | Description                                               |
+|--------------|--------------|-----------------------------------------------------------|
+| Magic        | 3            | Protocol identifier (e.g., `0x564353` for `VCS`) in ASCII |
+| Version/Type | 1            | 4 bits version, 4 bits type                               |
+| Flags        | 1            | 1 bit PTT, rest reserved                                  |
+| Sequence     | 3            | 24-bit sequence number                                    |
+| Frequency    | 3            | 24-bit kHz integer (000001–999999)                        |
+| Session ID   | 16           | Client GUID UUIDv4 (128 bits, RFC 4122)                   |
+| Payload      | variable     | Opus frame(s) or control data                             |
+
+- **Frequency** is encoded as an integer in kHz (e.g., 145.500 MHz → 145500).
+- **Session ID** is a short, random token issued after authentication (not a JWT).
+
+#### Frequency Handling
+
+- Each frequency is a floating-point value from 000.001 to 999.999 MHz, encoded as a 24-bit integer in kHz for compactness and precision.
+- Clients may listen to multiple frequencies but may only transmit on one at a time.
+
+#### Statelessness
+
+- The Voice Server maintains only ephemeral state: a mapping of session IDs to their current listening frequencies.
+- All authentication, coalition membership, and access control are managed by the control server and enforced via the session token.
+
+
 ## Distributed VOIP System Architecture
 
 ### Overview
