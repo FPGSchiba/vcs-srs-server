@@ -5,6 +5,7 @@ import (
 	"github.com/FPGSchiba/vcs-srs-server/events"
 	"github.com/FPGSchiba/vcs-srs-server/state"
 	"github.com/FPGSchiba/vcs-srs-server/voice"
+	"github.com/google/uuid"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"log/slog"
 	"net/http"
@@ -82,8 +83,8 @@ func (a *VCSApplication) StartUp(app *application.App, configFilePath, bannedFil
 	}
 
 	serverState := &state.ServerState{
-		Clients:      make(map[string]*state.ClientState),
-		RadioClients: make(map[string]*state.RadioState),
+		Clients:      make(map[uuid.UUID]*state.ClientState),
+		RadioClients: make(map[uuid.UUID]*state.RadioState),
 		BannedState:  *bannedState,
 	}
 
@@ -141,8 +142,8 @@ func (a *VCSApplication) HeadlessStartup(logger *slog.Logger, configFilePath, ba
 	}
 
 	serverState := &state.ServerState{
-		Clients:      make(map[string]*state.ClientState),
-		RadioClients: make(map[string]*state.RadioState),
+		Clients:      make(map[uuid.UUID]*state.ClientState),
+		RadioClients: make(map[uuid.UUID]*state.RadioState),
 		BannedState:  *bannedState,
 	}
 

@@ -12,12 +12,10 @@ import (
 )
 
 const (
-	MaxPacketSize = 1024 // Adjust based on your voice packet size
-	BufferSize    = 4096 // UDP buffer size
+	BufferSize = 1024 // UDP buffer size
 )
 
 type Client struct {
-	ID       string
 	Addr     *net.UDPAddr
 	LastSeen time.Time
 }
@@ -25,11 +23,11 @@ type Client struct {
 type Server struct {
 	sync.RWMutex
 	conn              *net.UDPConn
-	clients           map[string]*Client
+	clients           map[uuid.UUID]*Client
 	state             *state.ServerState
 	distributionState *state.DistributionState
 	logger            *slog.Logger
-	isRunning         bool
+	running           bool
 	stopChan          chan struct{}
 	controlClient     *voiceontrol.VoiceControlClient
 	serverId          string
@@ -37,7 +35,7 @@ type Server struct {
 
 func NewServer(state *state.ServerState, logger *slog.Logger, distributionState *state.DistributionState) *Server {
 	return &Server{
-		clients:           make(map[string]*Client),
+		clients:           make(map[uuid.UUID]*Client),
 		state:             state,
 		logger:            logger,
 		stopChan:          make(chan struct{}),
@@ -75,7 +73,7 @@ func (v *Server) Listen(address string, stopChan chan struct{}) error {
 
 	v.Lock()
 	v.conn = conn
-	v.isRunning = true
+	v.running = true
 	v.Unlock()
 
 	v.logger.Info("Voice server started", "address", address)
@@ -120,47 +118,116 @@ type VoicePacket struct {
 }
 
 func (v *Server) handlePacket(data []byte, addr *net.UDPAddr) {
-	if len(data) < 12 { // Minimum packet size (adjust based on your protocol)
-		v.logger.Warn("Received malformed packet", "addr", addr.String())
+	if !v.isRunning() {
+		v.logger.Warn("Voice server is not running, ignoring packet")
 		return
 	}
 
-	// Extract client ID from packet (implement based on your protocol)
-	clientID := extractClientID(data) // You'll need to implement this
-
-	v.Lock()
-	client, exists := v.clients[clientID]
-	if !exists {
-		// New client
-		client = &Client{
-			ID:       clientID,
-			Addr:     addr,
-			LastSeen: time.Now(),
-		}
-		v.clients[clientID] = client
-		v.logger.Info("New voice client connected",
-			"id", clientID,
-			"addr", addr.String())
+	packet, err := ParsePacket(data)
+	if err != nil {
+		v.logger.Error("Failed to parse voice packet", "error", err)
+		// Optionally send an error response back to the client
+		return
 	}
+
+	switch packet.Type {
+	case PacketTypeHello:
+		v.handleHelloPacket(packet, addr)
+	case PacketTypeVoice:
+		v.handleVoicePacket(packet, addr)
+	case PacketTypeBye:
+		v.handleGoodbyePacket(packet)
+	case PacketTypeKeepalive:
+		v.handleKeepalivePacket(packet, addr)
+	default:
+		v.logger.Warn("Unknown packet type received", "type", packet.Type)
+	}
+}
+
+func (v *Server) handleHelloPacket(packet *VCSPacket, addr *net.UDPAddr) {
+	v.Lock()
+	v.clients[packet.SenderID] = &Client{
+		Addr:     addr,
+		LastSeen: time.Now(),
+	}
+	v.Unlock()
+	ackPacket := NewVCSHalloAckPacket(packet.SenderID)
+	ackData := ackPacket.SerializePacket()
+	_, err := v.conn.WriteToUDP(ackData, addr)
+	if err != nil {
+		v.logger.Error("Failed to send hello acknowledgment",
+			"to", addr.String(),
+			"error", err)
+		return
+	}
+}
+
+func (v *Server) handleKeepalivePacket(packet *VCSPacket, addr *net.UDPAddr) {
+	v.RLock()
+	client, exists := v.clients[packet.SenderID]
+	v.RUnlock()
+	if !exists {
+		v.logger.Warn("Received keepalive from unknown client", "sender_id", packet.SenderID)
+		return
+	}
+	v.Lock()
+	client.LastSeen = time.Now()
+	v.Unlock()
+	v.logger.Debug("Updated last seen for client", "sender_id", packet.SenderID, "addr", addr.String())
+	ackPacket := NewVCSKeepalivePacket(packet.SenderID)
+	ackData := ackPacket.SerializePacket()
+	_, err := v.conn.WriteToUDP(ackData, addr)
+	if err != nil {
+		v.logger.Error("Failed to send keepalive acknowledgment",
+			"to", addr.String(),
+			"error", err)
+		return
+	}
+}
+
+func (v *Server) handleVoicePacket(packet *VCSPacket, addr *net.UDPAddr) {
+	v.RLock()
+	client, exists := v.clients[packet.SenderID]
+	v.RUnlock()
+	if !exists {
+		v.logger.Warn("Received voice packet from unknown client", "sender_id", packet.SenderID)
+		return
+	}
+
+	// Update last seen time
+	v.Lock()
 	client.LastSeen = time.Now()
 	v.Unlock()
 
-	// Broadcast to other clients
-	v.broadcastVoice(data, clientID)
+	// Broadcast the voice data to other clients
+	v.broadcastVoice(packet, packet.SenderID)
+
+	// Optionally, you can log the received voice packet
+	v.logger.Debug("Received voice packet",
+		"sender_id", packet.SenderID,
+		"from", addr.String(),
+		"size", len(packet.Payload))
 }
 
-func (v *Server) broadcastVoice(data []byte, senderID string) {
+func (v *Server) handleGoodbyePacket(packet *VCSPacket) {
+	v.DisconnectClient(packet.SenderID)
+}
+
+func (v *Server) broadcastVoice(packet *VCSPacket, senderID uuid.UUID) {
 	v.RLock()
 	defer v.RUnlock()
 
-	for id, client := range v.clients {
-		if id == senderID {
+	for _, client := range v.GetListeningClients(packet, senderID) {
+		v.RLock()
+		if client == v.clients[senderID] {
+			v.RUnlock()
 			continue // Skip sender
 		}
+		v.RUnlock()
 
 		// You might want to add room-based filtering here
 		go func(addr *net.UDPAddr) {
-			_, err := v.conn.WriteToUDP(data, addr)
+			_, err := v.conn.WriteToUDP(packet.SerializePacket(), addr)
 			if err != nil {
 				v.logger.Error("Failed to send voice packet",
 					"to", addr.String(),
@@ -204,7 +271,7 @@ func (v *Server) Stop() error {
 	v.Lock()
 	defer v.Unlock()
 
-	if !v.isRunning {
+	if !v.running {
 		return nil
 	}
 
@@ -217,24 +284,23 @@ func (v *Server) Stop() error {
 		}
 	}
 
-	v.isRunning = false
+	v.running = false
 	v.logger.Info("Voice server stopped")
 	return nil
 }
 
-// Helper methods for client management
-func (v *Server) GetConnectedClients() []string {
+func (v *Server) GetConnectedClients() []uuid.UUID {
 	v.RLock()
 	defer v.RUnlock()
 
-	clients := make([]string, 0, len(v.clients))
+	clients := make([]uuid.UUID, 0, len(v.clients))
 	for id := range v.clients {
 		clients = append(clients, id)
 	}
 	return clients
 }
 
-func (v *Server) DisconnectClient(clientID string) {
+func (v *Server) DisconnectClient(clientID uuid.UUID) {
 	v.Lock()
 	defer v.Unlock()
 
@@ -247,12 +313,10 @@ func (v *Server) DisconnectClient(clientID string) {
 	}
 }
 
-// Additional helper methods you might need
-
-func (v *Server) IsRunning() bool {
+func (v *Server) isRunning() bool {
 	v.RLock()
 	defer v.RUnlock()
-	return v.isRunning
+	return v.running
 }
 
 func (v *Server) GetClientCount() int {
@@ -261,9 +325,20 @@ func (v *Server) GetClientCount() int {
 	return len(v.clients)
 }
 
-// You'll need to implement this based on your protocol
-func extractClientID(data []byte) string {
-	// Example implementation - adjust based on your packet format
-	// This assumes the first 8 bytes are the client ID
-	return string(data[:8])
+func (v *Server) GetListeningClients(packet *VCSPacket, senderId uuid.UUID) []*Client {
+	var listeningClients []*Client
+	for _, client := range v.state.GetAllClients() {
+		if client.ID == senderId {
+			continue // Skip the sender
+		}
+		if v.state.IsListeningOnFrequency(client.ID, packet.FrequencyAsFloat64()) {
+			v.RLock()
+			clientData, exists := v.clients[client.ID]
+			v.RUnlock()
+			if exists {
+				listeningClients = append(listeningClients, clientData)
+			}
+		}
+	}
+	return listeningClients
 }
