@@ -199,7 +199,7 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.ClientGuestLogi
 
 	// Add Client to State
 	clientGuid := uuid.New()
-	s.serverState.AddClient(clientGuid.String(), &state.ClientState{
+	s.serverState.AddClient(clientGuid, &state.ClientState{
 		Name:      request.Name,
 		UnitId:    request.UnitId,
 		Coalition: selectedCoalition.Name,
@@ -411,7 +411,16 @@ func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.ClientUnitSelec
 		}, nil
 	}
 
-	s.serverState.AddClient(request.ClientGuid, &state.ClientState{
+	clientGuid, err := uuid.Parse(request.ClientGuid)
+	if err != nil {
+		s.logger.Error("Failed to parse ClientGuid", "ClientGuid", request.ClientGuid, "Error", err)
+		return &pb.ServerUnitSelectResponse{
+			Success: false,
+			Result:  &pb.ServerUnitSelectResponse_ErrorMessage{ErrorMessage: "Invalid ClientGuid"},
+		}, err
+	}
+
+	s.serverState.AddClient(clientGuid, &state.ClientState{
 		Name:      authClient.Secret,
 		UnitId:    selectedUnit.UnitId,
 		Coalition: request.Coalition,

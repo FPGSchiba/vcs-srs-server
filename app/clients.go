@@ -4,6 +4,7 @@ import (
 	"github.com/FPGSchiba/vcs-srs-server/events"
 	"github.com/FPGSchiba/vcs-srs-server/state"
 	"github.com/FPGSchiba/vcs-srs-server/utils"
+	"github.com/google/uuid"
 )
 
 // Clients is a workaround struct for wails to generate the wanted bindings
@@ -22,7 +23,7 @@ func (a *VCSApplication) GetRadioClients() RadioClients {
 	clients := make(map[string]state.RadioState, len(a.ServerState.RadioClients))
 	count := 0
 	for k, v := range a.ServerState.RadioClients {
-		clients[k] = *v
+		clients[k.String()] = *v
 		count++
 	}
 	return RadioClients{RadioClients: clients}
@@ -33,7 +34,7 @@ func (a *VCSApplication) GetClients() Clients {
 	defer a.ServerState.Unlock()
 	clients := make(map[string]state.ClientState, len(a.ServerState.Clients))
 	for k, v := range a.ServerState.Clients {
-		clients[k] = *v
+		clients[k.String()] = *v
 	}
 	return Clients{clients}
 }
@@ -47,7 +48,13 @@ func (a *VCSApplication) GetBannedClients() []state.BannedClient {
 func (a *VCSApplication) BanClient(clientId string, reason string) { // TODO: Implement the Backend Logic to ban a client
 	a.ServerState.Lock()
 	defer a.ServerState.Unlock()
-	client, ok := a.ServerState.Clients[clientId]
+	clientGuid, err := uuid.Parse(clientId)
+	if err != nil {
+		a.Notify(events.NewNotification("Ban failed", "Invalid client ID format", "error"))
+		a.Logger.Error("Failed to parse client ID", "clientId", clientId, "error", err)
+		return
+	}
+	client, ok := a.ServerState.Clients[clientGuid]
 	if !ok {
 		a.Notify(events.NewNotification("Ban failed", "Client not found", "error"))
 		a.Logger.Error("Failed to ban client", "clientId", clientId, "reason", reason)
@@ -59,13 +66,13 @@ func (a *VCSApplication) BanClient(clientId string, reason string) { // TODO: Im
 		Reason:    reason,
 		ID:        clientId,
 	})
-	err := a.ServerState.BannedState.Save()
+	err = a.ServerState.BannedState.Save()
 	if err != nil {
 		a.Notify(events.NewNotification("Ban failed", "Failed to save banned clients", "error"))
 		a.Logger.Error("Failed to save banned clients", "error", err)
 		return
 	}
-	delete(a.ServerState.Clients, clientId)
+	delete(a.ServerState.Clients, clientGuid)
 	a.EmitEvent(events.Event{
 		Name: events.ClientsChanged,
 		Data: a.ServerState.Clients,
@@ -110,7 +117,13 @@ func (a *VCSApplication) UnbanClient(clientId string) {
 func (a *VCSApplication) KickClient(clientId string, reason string) { // TODO: Implement Backend Logic to kick a client
 	a.ServerState.Lock()
 	defer a.ServerState.Unlock()
-	delete(a.ServerState.Clients, clientId)
+	clientGuid, err := uuid.Parse(clientId)
+	if err != nil {
+		a.Notify(events.NewNotification("Kick failed", "Invalid client ID format", "error"))
+		a.Logger.Error("Failed to parse client ID", "clientId", clientId, "error", err)
+		return
+	}
+	delete(a.ServerState.Clients, clientGuid)
 	a.EmitEvent(events.Event{
 		Name: events.ClientsChanged,
 		Data: a.ServerState.Clients,
@@ -122,14 +135,20 @@ func (a *VCSApplication) KickClient(clientId string, reason string) { // TODO: I
 func (a *VCSApplication) MuteClient(clientId string) { // TODO: Implement Backend Logic to mute a client and notify the Client
 	a.ServerState.Lock()
 	defer a.ServerState.Unlock()
-	client, ok := a.ServerState.RadioClients[clientId]
+	clientGuid, err := uuid.Parse(clientId)
+	if err != nil {
+		a.Notify(events.NewNotification("Kick failed", "Invalid client ID format", "error"))
+		a.Logger.Error("Failed to parse client ID", "clientId", clientId, "error", err)
+		return
+	}
+	client, ok := a.ServerState.RadioClients[clientGuid]
 	if !ok {
 		a.Notify(events.NewNotification("Mute failed", "Client not found", "error"))
 		a.Logger.Error("Failed to mute client", "clientId", clientId)
 		return
 	}
 	client.Muted = true
-	a.ServerState.RadioClients[clientId] = client
+	a.ServerState.RadioClients[clientGuid] = client
 	a.EmitEvent(events.Event{
 		Name: events.RadioClientsChanged,
 		Data: a.ServerState.RadioClients,
@@ -141,14 +160,20 @@ func (a *VCSApplication) MuteClient(clientId string) { // TODO: Implement Backen
 func (a *VCSApplication) UnmuteClient(clientId string) { // TODO: Implement Backend Logic to unmute a client and notify the Client
 	a.ServerState.Lock()
 	defer a.ServerState.Unlock()
-	client, ok := a.ServerState.RadioClients[clientId]
+	clientGuid, err := uuid.Parse(clientId)
+	if err != nil {
+		a.Notify(events.NewNotification("Kick failed", "Invalid client ID format", "error"))
+		a.Logger.Error("Failed to parse client ID", "clientId", clientId, "error", err)
+		return
+	}
+	client, ok := a.ServerState.RadioClients[clientGuid]
 	if !ok {
 		a.Notify(events.NewNotification("Unmute failed", "Client not found", "error"))
 		a.Logger.Error("Failed to unmute client", "clientId", clientId)
 		return
 	}
 	client.Muted = false
-	a.ServerState.RadioClients[clientId] = client
+	a.ServerState.RadioClients[clientGuid] = client
 	a.EmitEvent(events.Event{
 		Name: events.RadioClientsChanged,
 		Data: a.ServerState.RadioClients,
@@ -160,9 +185,16 @@ func (a *VCSApplication) UnmuteClient(clientId string) { // TODO: Implement Back
 func (a *VCSApplication) IsClientMuted(clientId string) bool {
 	a.ServerState.Lock()
 	defer a.ServerState.Unlock()
-	client, ok := a.ServerState.RadioClients[clientId]
+	failedEvent := events.NewNotification("Check Mute Status Failed", "Failed to check if client is muted or not", "error")
+	clientGuid, err := uuid.Parse(clientId)
+	if err != nil {
+		a.Notify(failedEvent)
+		a.Logger.Error("Failed to parse client ID", "clientId", clientId, "error", err)
+		return false
+	}
+	client, ok := a.ServerState.RadioClients[clientGuid]
 	if !ok {
-		a.Notify(events.NewNotification("Client not Found", "Could not check if client is muted or not", "warning"))
+		a.Notify(failedEvent)
 		a.Logger.Error("Failed to check if client is muted", "clientId", clientId)
 		return false
 	}
