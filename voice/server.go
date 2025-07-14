@@ -110,13 +110,6 @@ func (v *Server) Listen(address string, stopChan chan struct{}) error {
 	}
 }
 
-type VoicePacket struct {
-	ClientID  string
-	Timestamp int64
-	VoiceData []byte
-	// Add other necessary fields (e.g., sequence number, room ID, etc.)
-}
-
 func (v *Server) handlePacket(data []byte, addr *net.UDPAddr) {
 	if !v.isRunning() {
 		v.logger.Warn("Voice server is not running, ignoring packet")

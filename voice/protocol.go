@@ -44,7 +44,7 @@ type VCSPacket struct {
 	Magic     [3]byte    // Protocol identifier (VCS)
 	Version   uint8      // Protocol version (4 bits)
 	Type      PacketType // Packet type (4 bits)
-	Flags     uint8      // Flags (1 bit PTT, 7 bits reserved)
+	Flags     uint8      // Flags (1. bit PTT, 2. bit Intercom, 6 bits reserved)
 	Sequence  uint32     // 24-bit sequence number
 	Frequency uint32     // 24-bit frequency in kHz
 	SenderID  uuid.UUID  // UUIDv4 session identifier
@@ -107,6 +107,20 @@ func (p *VCSPacket) SetPTT(active bool) {
 		p.Flags |= 0x01
 	} else {
 		p.Flags &= 0xFE
+	}
+}
+
+// IsIntercom returns true if the Intercom flag is set
+func (p *VCSPacket) IsIntercom() bool {
+	return (p.Flags & 0x02) != 0
+}
+
+// SetIntercom sets or clears the Intercom flag
+func (p *VCSPacket) SetIntercom(active bool) {
+	if active {
+		p.Flags |= 0x02
+	} else {
+		p.Flags &= 0xFD
 	}
 }
 

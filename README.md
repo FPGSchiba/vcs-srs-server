@@ -226,7 +226,7 @@ sequenceDiagram
 |--------------|--------------|-----------------------------------------------------------|
 | Magic        | 3            | Protocol identifier (e.g., `0x564353` for `VCS`) in ASCII |
 | Version/Type | 1            | 4 bits version, 4 bits type                               |
-| Flags        | 1            | 1 bit PTT, rest reserved                                  |
+| Flags        | 1            | 1 Byte Flags described below                              |
 | Sequence     | 3            | 24-bit sequence number                                    |
 | Frequency    | 3            | 24-bit kHz integer (000001–999999)                        |
 | Session ID   | 16           | Client GUID UUIDv4 (128 bits, RFC 4122)                   |
@@ -234,6 +234,10 @@ sequenceDiagram
 
 - **Frequency** is encoded as an integer in kHz (e.g., 145.500 MHz → 145500).
 - **Session ID** is a short, random token issued after authentication (not a JWT).
+
+**Flags**:
+- **PTT**: Indicates if the client is currently transmitting (1) or not (0).
+- **Intercom**: Indicates if the packet is an intercom message (1) or a regular voice packet (0). This is used for special communication modes.
 
 #### Frequency Handling
 
