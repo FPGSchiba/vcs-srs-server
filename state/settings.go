@@ -41,8 +41,8 @@ type Coalition struct {
 
 type FrequencySettings struct {
 	// FrequencySettings holds the current settings of the frequency
-	TestFrequencies   []float64 `yaml:"testFrequencies"`
-	GlobalFrequencies []float64 `yaml:"globalFrequencies"`
+	TestFrequencies   []float32 `yaml:"testFrequencies"`
+	GlobalFrequencies []float32 `yaml:"globalFrequencies"`
 }
 
 type GeneralSettings struct {
@@ -107,8 +107,8 @@ func GetSettingsState(file string) (*SettingsState, error) {
 				},
 				Coalitions: make([]Coalition, 0),
 				Frequencies: FrequencySettings{
-					TestFrequencies:   make([]float64, 0),
-					GlobalFrequencies: make([]float64, 0),
+					TestFrequencies:   make([]float32, 0),
+					GlobalFrequencies: make([]float32, 0),
 				},
 				General: GeneralSettings{
 					MaxRadiosPerUser: 20,
@@ -222,4 +222,15 @@ func (s *SettingsState) SetPluginEnabled(pluginName string, enabled bool) error 
 		}
 	}
 	return fmt.Errorf("plugin '%s' does not exists", pluginName)
+}
+
+func (s *SettingsState) DoesCoalitionExist(coalitionName string) bool {
+	s.RLock()
+	defer s.RUnlock()
+	for _, coalition := range s.Coalitions {
+		if coalition.Name == coalitionName {
+			return true
+		}
+	}
+	return false
 }

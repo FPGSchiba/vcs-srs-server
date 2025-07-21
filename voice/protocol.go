@@ -223,6 +223,6 @@ func (p *VCSPacket) String() string {
 		string(p.Magic[:]), p.Version, p.Type, p.IsPTTActive(), p.Sequence, p.FrequencyMHz(), p.SenderID, len(p.Payload))
 }
 
-func (p *VCSPacket) FrequencyAsFloat64() float64 {
-	return float64(p.Frequency) / 1000.0
+func (p *VCSPacket) FrequencyAsFloat32() float32 {
+	return float32(p.Frequency) / 1000.0
 }

@@ -24,7 +24,7 @@ type AuthServer struct {
 	settingsState         *state.SettingsState
 	distributionState     *state.DistributionState
 	mu                    sync.RWMutex
-	authenticatingClients map[string]*AuthenticatingClient
+	authenticatingClients map[uuid.UUID]*AuthenticatingClient
 	pluginClients         map[string]*PluginClient
 }
 
@@ -43,7 +43,7 @@ func NewAuthServer(serverState *state.ServerState, settingsState *state.Settings
 		mu:                    sync.RWMutex{},
 		distributionState:     distributionState,
 		pluginClients:         initializePluginClients(settingsState, logger),
-		authenticatingClients: make(map[string]*AuthenticatingClient),
+		authenticatingClients: make(map[uuid.UUID]*AuthenticatingClient),
 	}
 }
 
@@ -114,7 +114,7 @@ func (s *AuthServer) InitAuth(ctx context.Context, request *pb.ClientAuthInitReq
 		}, nil
 	}
 
-	clientGuid := uuid.New().String()
+	clientGuid := uuid.New()
 	s.mu.Lock()
 	s.authenticatingClients[clientGuid] = &AuthenticatingClient{
 		Expires: time.Now().Add(20 * time.Minute),
@@ -129,7 +129,7 @@ func (s *AuthServer) InitAuth(ctx context.Context, request *pb.ClientAuthInitReq
 			Result: &pb.AuthInitResult{
 				DistributionMode: s.GetProtoDistributionMode(),
 				AvailablePlugins: s.settingsState.GetAllPluginNames(),
-				ClientGuid:       clientGuid,
+				ClientGuid:       clientGuid.String(),
 				HasGuestLogin:    s.settingsState.Security.EnableGuestAuth,
 			},
 		},
@@ -154,8 +154,16 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.ClientGuestLogi
 	s.removeExpiredAuthenticatingClients()
 
 	// Check if client is initialized
+	clientGuid, err := uuid.Parse(request.ClientGuid)
+	if err != nil {
+		s.logger.Error("Failed to parse ClientGuid", "ClientGuid", request.ClientGuid, "Error", err)
+		return &pb.ServerGuestLoginResponse{
+			Success:     false,
+			LoginResult: &pb.ServerGuestLoginResponse_ErrorMessage{ErrorMessage: "Invalid ClientGuid"},
+		}, err
+	}
 	s.mu.RLock()
-	if _, ok := s.authenticatingClients[request.ClientGuid]; !ok {
+	if _, ok := s.authenticatingClients[clientGuid]; !ok {
 		s.mu.RUnlock()
 		return &pb.ServerGuestLoginResponse{
 			Success:     false,
@@ -198,7 +206,6 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.ClientGuestLogi
 	}
 
 	// Add Client to State
-	clientGuid := uuid.New()
 	s.serverState.AddClient(clientGuid, &state.ClientState{
 		Name:      request.Name,
 		UnitId:    request.UnitId,
@@ -225,7 +232,7 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.ClientGuestLogi
 		}, err
 	}
 
-	s.logger.Info("guest login succeeded for ", "Guest Name", request.Name, "UnitId", request.UnitId, "Coalition", selectedCoalition.Name, "ClientGuid", clientGuid.String())
+	s.logger.Info("guest login succeeded for ", "Guest Name", request.Name, "UnitId", request.UnitId, "Coalition", selectedCoalition.Name, "ClientGuid", clientGuid)
 	response := &pb.ServerGuestLoginResponse{
 		Success: true,
 		LoginResult: &pb.ServerGuestLoginResponse_Result{
@@ -256,8 +263,16 @@ func (s *AuthServer) Login(ctx context.Context, request *pb.ClientLoginRequest) 
 	s.removeExpiredAuthenticatingClients()
 
 	// Check if client is initialized
+	clientGuid, err := uuid.Parse(request.ClientGuid)
+	if err != nil {
+		s.logger.Error("Failed to parse ClientGuid", "ClientGuid", request.ClientGuid, "Error", err)
+		return &pb.ServerLoginResponse{
+			Success:     false,
+			LoginResult: &pb.ServerLoginResponse_ErrorMessage{ErrorMessage: "Invalid ClientGuid"},
+		}, err
+	}
 	s.mu.RLock()
-	if _, ok := s.authenticatingClients[request.ClientGuid]; !ok {
+	if _, ok := s.authenticatingClients[clientGuid]; !ok {
 		s.mu.RUnlock()
 		return &pb.ServerLoginResponse{
 			Success:     false,
@@ -311,7 +326,7 @@ func (s *AuthServer) Login(ctx context.Context, request *pb.ClientLoginRequest) 
 		})
 	}
 	s.mu.Lock()
-	s.authenticatingClients[request.ClientGuid] = &AuthenticatingClient{
+	s.authenticatingClients[clientGuid] = &AuthenticatingClient{
 		Secret:         strings.Join(clientSecret, "-"),
 		Expires:        time.Now().Add(5 * time.Minute),
 		AvailableRoles: availableRoles,
@@ -357,8 +372,16 @@ func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.ClientUnitSelec
 	s.logger.Debug("Processing Unit Select", "IP", p.Addr.String(), "ClientGuid", request.ClientGuid, "UnitId", request.UnitId)
 
 	// Find the authenticating client
+	clientGuid, err := uuid.Parse(request.ClientGuid)
+	if err != nil {
+		s.logger.Error("Failed to parse ClientGuid", "ClientGuid", request.ClientGuid, "Error", err)
+		return &pb.ServerUnitSelectResponse{
+			Success: false,
+			Result:  &pb.ServerUnitSelectResponse_ErrorMessage{ErrorMessage: "Invalid ClientGuid"},
+		}, err
+	}
 	s.mu.RLock()
-	authClient, ok := s.authenticatingClients[request.ClientGuid]
+	authClient, ok := s.authenticatingClients[clientGuid]
 	if !ok {
 		s.mu.RUnlock()
 		s.logger.Warn("Client not found for Unit Select", "ClientGuid", request.ClientGuid)
@@ -411,15 +434,6 @@ func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.ClientUnitSelec
 		}, nil
 	}
 
-	clientGuid, err := uuid.Parse(request.ClientGuid)
-	if err != nil {
-		s.logger.Error("Failed to parse ClientGuid", "ClientGuid", request.ClientGuid, "Error", err)
-		return &pb.ServerUnitSelectResponse{
-			Success: false,
-			Result:  &pb.ServerUnitSelectResponse_ErrorMessage{ErrorMessage: "Invalid ClientGuid"},
-		}, err
-	}
-
 	s.serverState.AddClient(clientGuid, &state.ClientState{
 		Name:      authClient.Secret,
 		UnitId:    selectedUnit.UnitId,
@@ -428,7 +442,7 @@ func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.ClientUnitSelec
 	})
 
 	s.mu.Lock()
-	delete(s.authenticatingClients, request.ClientGuid)
+	delete(s.authenticatingClients, clientGuid)
 	s.mu.Unlock()
 
 	// Generate token for the client
