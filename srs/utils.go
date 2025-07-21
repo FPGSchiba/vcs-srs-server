@@ -2,6 +2,8 @@ package srs
 
 import (
 	pb "github.com/FPGSchiba/vcs-srs-server/srspb"
+	"github.com/FPGSchiba/vcs-srs-server/state"
+	"github.com/FPGSchiba/vcs-srs-server/utils"
 	"regexp"
 )
 
@@ -43,4 +45,65 @@ func isRoleAvailable(authClient *AuthenticatingClient, selectedRole uint8) bool 
 		}
 	}
 	return roleAvailable
+}
+
+func convertRadios(radio []state.Radio) []*pb.Radio {
+	var pbRadios []*pb.Radio
+	for _, r := range radio {
+		pbRadios = append(pbRadios, convertSingleRadio(&r))
+	}
+	return pbRadios
+}
+
+func convertSingleRadio(r *state.Radio) *pb.Radio {
+	return &pb.Radio{
+		Id:        r.ID,
+		Name:      r.Name,
+		Frequency: r.Frequency,
+		Enabled:   r.Enabled,
+	}
+}
+
+func ptrInt64(v int64) *int64 {
+	return &v
+}
+
+func canSwapRoles(client *state.ClientState, roleId uint8) bool {
+	// Guests cannot swap roles (Maybe this should be configurable in the future, so guests can swap roles)
+	if roleId == utils.GuestRole {
+		return false
+	}
+
+	// If the client has a higher role than the requested role, they can swap
+	if client.Role > roleId {
+		return true
+	}
+
+	// If the client has the requested role, they can swap
+	if client.Role == roleId {
+		return true
+	}
+
+	// If the client has a lower role than the requested role, they cannot swap
+	return false
+}
+
+func convertRadioInfo(radio *pb.RadioInfo) *state.RadioState {
+	var radios []state.Radio
+	for _, r := range radio.Radios {
+		radios = append(radios, convertSingleRadioState(r))
+	}
+	return &state.RadioState{
+		Radios: radios,
+		Muted:  radio.Muted,
+	}
+}
+
+func convertSingleRadioState(r *pb.Radio) state.Radio {
+	return state.Radio{
+		ID:        r.Id,
+		Name:      r.Name,
+		Frequency: r.Frequency,
+		Enabled:   r.Enabled,
+	}
 }

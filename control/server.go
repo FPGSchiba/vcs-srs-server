@@ -307,12 +307,7 @@ func (s *Server) authInterceptor(ctx context.Context, req interface{}, info *grp
 		return nil, fmt.Errorf("unauthenticated request to %s", info.FullMethod)
 	}
 
-	md.Append("client_id", claims.ClientGuid)
-	md.Append("role_id", fmt.Sprintf("%d", claims.RoleId))
-	err = grpc.SetTrailer(ctx, md)
-	if err != nil {
-		return nil, fmt.Errorf("failed to set trailer: %v", err)
-	}
+	ctx = context.WithValue(ctx, "client_id", claims.ClientGuid)
 
 	return handler(ctx, req)
 }

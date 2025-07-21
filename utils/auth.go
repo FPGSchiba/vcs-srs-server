@@ -186,7 +186,7 @@ func getJWTClaims(tokenString, privateKeyFile, publicKeyFile string) (*TokenClai
 	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
 		tokenClaims := &TokenClaims{
 			ClientGuid: claims["client_guid"].(string),
-			RoleId:     claims["role_id"].(uint8),
+			RoleId:     uint8(claims["role_id"].(float64)),
 		}
 		return tokenClaims, nil
 	}

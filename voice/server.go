@@ -127,7 +127,7 @@ func (v *Server) handlePacket(data []byte, addr *net.UDPAddr) {
 	case PacketTypeHello:
 		v.handleHelloPacket(packet, addr)
 	case PacketTypeVoice:
-		v.handleVoicePacket(packet, addr)
+		v.handleVoicePacket(packet)
 	case PacketTypeBye:
 		v.handleGoodbyePacket(packet)
 	case PacketTypeKeepalive:
@@ -138,6 +138,13 @@ func (v *Server) handlePacket(data []byte, addr *net.UDPAddr) {
 }
 
 func (v *Server) handleHelloPacket(packet *VCSPacket, addr *net.UDPAddr) {
+	v.logger.Info("Received hello packet", "sender_id", packet.SenderID, "addr", addr.String())
+	if !v.state.DoesClientExist(packet.SenderID) {
+		v.logger.Warn("Client with hello, that does not exist", "sender_id", packet.SenderID)
+		// Ignore hello from unknown client
+		return
+	}
+
 	v.Lock()
 	v.clients[packet.SenderID] = &Client{
 		Addr:     addr,
@@ -178,7 +185,7 @@ func (v *Server) handleKeepalivePacket(packet *VCSPacket, addr *net.UDPAddr) {
 	}
 }
 
-func (v *Server) handleVoicePacket(packet *VCSPacket, addr *net.UDPAddr) {
+func (v *Server) handleVoicePacket(packet *VCSPacket) {
 	v.RLock()
 	client, exists := v.clients[packet.SenderID]
 	v.RUnlock()
@@ -198,7 +205,7 @@ func (v *Server) handleVoicePacket(packet *VCSPacket, addr *net.UDPAddr) {
 	// Optionally, you can log the received voice packet
 	v.logger.Debug("Received voice packet",
 		"sender_id", packet.SenderID,
-		"from", addr.String(),
+		"frequency", packet.FrequencyAsFloat32(),
 		"size", len(packet.Payload))
 }
 
@@ -207,20 +214,12 @@ func (v *Server) handleGoodbyePacket(packet *VCSPacket) {
 }
 
 func (v *Server) broadcastVoice(packet *VCSPacket, senderID uuid.UUID) {
-	v.RLock()
-	defer v.RUnlock()
-
-	for _, client := range v.GetListeningClients(packet, senderID) {
-		v.RLock()
-		if client == v.clients[senderID] {
-			v.RUnlock()
-			continue // Skip sender
-		}
-		v.RUnlock()
-
-		// You might want to add room-based filtering here
+	for _, client := range v.GetListeningClients(packet, senderID) { // Already a lot of logic is done in GetListeningClients
 		go func(addr *net.UDPAddr) {
+			v.Lock()
 			_, err := v.conn.WriteToUDP(packet.SerializePacket(), addr)
+			v.Unlock()
+			v.logger.Info("Sent packet to client", "sender_id", packet.SenderID, "receiver_addr", addr.String())
 			if err != nil {
 				v.logger.Error("Failed to send voice packet",
 					"to", addr.String(),
@@ -294,16 +293,17 @@ func (v *Server) GetConnectedClients() []uuid.UUID {
 }
 
 func (v *Server) DisconnectClient(clientID uuid.UUID) {
-	v.Lock()
-	defer v.Unlock()
-
+	v.RLock()
 	if client, exists := v.clients[clientID]; exists {
-		// Optionally send disconnect message to client
+		v.RUnlock()
+		v.Lock()
 		delete(v.clients, clientID)
+		v.Unlock()
 		v.logger.Info("Disconnected voice client",
 			"id", clientID,
 			"addr", client.Addr.String())
 	}
+	v.RUnlock()
 }
 
 func (v *Server) isRunning() bool {
@@ -324,7 +324,7 @@ func (v *Server) GetListeningClients(packet *VCSPacket, senderId uuid.UUID) []*C
 		if client.ID == senderId {
 			continue // Skip the sender
 		}
-		if v.state.IsListeningOnFrequency(client.ID, packet.FrequencyAsFloat64()) {
+		if v.state.IsListeningOnFrequency(client.ID, packet.FrequencyAsFloat32()) {
 			v.RLock()
 			clientData, exists := v.clients[client.ID]
 			v.RUnlock()

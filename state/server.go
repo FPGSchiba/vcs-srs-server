@@ -5,6 +5,7 @@ import (
 	"github.com/google/uuid"
 	"os"
 	"sync"
+	"time"
 )
 
 type ServerState struct {
@@ -16,10 +17,11 @@ type ServerState struct {
 }
 
 type ClientState struct {
-	Name      string
-	UnitId    string
-	Coalition string
-	Role      uint8
+	Name       string
+	UnitId     string
+	Coalition  string
+	Role       uint8
+	LastUpdate time.Time
 }
 
 type RadioState struct {
@@ -28,10 +30,11 @@ type RadioState struct {
 }
 
 type Radio struct {
-	ID        int32
-	Name      string
-	Frequency float64
-	Enabled   bool
+	ID         uint32
+	Name       string
+	Frequency  float32
+	Enabled    bool
+	IsIntercom bool
 }
 
 type BannedState struct {
@@ -137,11 +140,30 @@ func (s *ServerState) GetAllClients() []struct {
 	return clients
 }
 
-func (s *ServerState) GetAllEnabledFrequencies(clientGuid uuid.UUID) []float64 {
+func (s *ServerState) GetAllRadios() []struct {
+	ID    uuid.UUID
+	State *RadioState
+} {
+	s.RLock()
+	defer s.RUnlock()
+	radios := make([]struct {
+		ID    uuid.UUID
+		State *RadioState
+	}, 0, len(s.RadioClients))
+	for id, radio := range s.RadioClients {
+		radios = append(radios, struct {
+			ID    uuid.UUID
+			State *RadioState
+		}{ID: id, State: radio})
+	}
+	return radios
+}
+
+func (s *ServerState) GetAllEnabledFrequencies(clientGuid uuid.UUID) []float32 {
 	s.RLock()
 	defer s.RUnlock()
 	if clientState, exists := s.RadioClients[clientGuid]; exists {
-		enabledFrequencies := make([]float64, 0, len(clientState.Radios))
+		var enabledFrequencies []float32
 		for _, radio := range clientState.Radios {
 			if radio.Enabled {
 				enabledFrequencies = append(enabledFrequencies, radio.Frequency)
@@ -152,13 +174,23 @@ func (s *ServerState) GetAllEnabledFrequencies(clientGuid uuid.UUID) []float64 {
 	return nil
 }
 
-func (s *ServerState) IsListeningOnFrequency(clientGuid uuid.UUID, frequency float64) bool {
+func (s *ServerState) IsListeningOnFrequency(clientGuid uuid.UUID, frequency float32) bool {
 	if clientState, exists := s.RadioClients[clientGuid]; exists {
 		for _, radio := range clientState.Radios {
-			if radio.Frequency == frequency && radio.Enabled {
-				return true
+			if radio.Frequency == frequency {
+				return radio.Enabled
 			}
 		}
 	}
 	return false
+}
+
+func (s *ServerState) DoesClientExist(clientGuid uuid.UUID) bool {
+	s.RLock()
+	defer s.RUnlock()
+	_, exists := s.Clients[clientGuid]
+	if !exists {
+		return false
+	}
+	return true
 }
