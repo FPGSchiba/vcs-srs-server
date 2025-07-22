@@ -219,7 +219,7 @@ func (v *Server) broadcastVoice(packet *VCSPacket, senderID uuid.UUID) {
 			v.Lock()
 			_, err := v.conn.WriteToUDP(packet.SerializePacket(), addr)
 			v.Unlock()
-			v.logger.Info("Sent packet to client", "sender_id", packet.SenderID, "receiver_addr", addr.String())
+			v.logger.Debug("Sent packet to client", "sender_id", packet.SenderID, "receiver_addr", addr.String())
 			if err != nil {
 				v.logger.Error("Failed to send voice packet",
 					"to", addr.String(),
@@ -302,6 +302,7 @@ func (v *Server) DisconnectClient(clientID uuid.UUID) {
 		v.logger.Info("Disconnected voice client",
 			"id", clientID,
 			"addr", client.Addr.String())
+		return
 	}
 	v.RUnlock()
 }
