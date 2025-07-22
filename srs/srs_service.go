@@ -2,14 +2,12 @@ package srs
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	pb "github.com/FPGSchiba/vcs-srs-server/srspb"
 	"github.com/FPGSchiba/vcs-srs-server/state"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
-	"google.golang.org/grpc/metadata"
 	"log/slog"
 	"strings"
 	"sync"
@@ -26,13 +24,15 @@ type SimpleRadioServer struct {
 }
 
 func NewSimpleRadioServer(serverState *state.ServerState, settingsState *state.SettingsState, logger *slog.Logger) *SimpleRadioServer {
-	return &SimpleRadioServer{
+	server := SimpleRadioServer{
 		serverState:   serverState,
 		settingsState: settingsState,
 		logger:        logger,
 		mu:            sync.Mutex{},
 		streams:       make(map[uuid.UUID]grpc.ServerStreamingServer[pb.ServerUpdate]),
 	}
+	server.StartCleanupRoutine(time.Second*15, time.Minute*10)
+	return &server
 }
 
 func (s *SimpleRadioServer) GetServerState() healthpb.HealthCheckResponse_ServingStatus {
@@ -99,16 +99,7 @@ func (s *SimpleRadioServer) GetServerSettings(_ context.Context, _ *pb.Empty) (*
 }
 
 func (s *SimpleRadioServer) Disconnect(ctx context.Context, _ *pb.Empty) (*pb.ServerResponse, error) {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		s.logger.Error("Disconnect failed: no metadata found in context")
-		return &pb.ServerResponse{
-			Success:      false,
-			ErrorMessage: "Internal error, please try logging in again.",
-		}, nil
-	}
-
-	clientID, err := uuid.Parse(md.Get("client_id")[0])
+	clientID, err := uuid.Parse(ctx.Value("client_id").(string))
 	if err != nil {
 		s.logger.Error("Disconnect failed: invalid client ID", "error", err)
 		return &pb.ServerResponse{
@@ -131,10 +122,7 @@ func (s *SimpleRadioServer) Disconnect(ctx context.Context, _ *pb.Empty) (*pb.Se
 	}
 
 	s.logger.Info("Disconnecting client", "client_id", clientID, "client_name", client.Name)
-	s.serverState.Lock()
-	delete(s.serverState.Clients, clientID)
-	delete(s.serverState.RadioClients, clientID)
-	s.serverState.Unlock()
+	s.cleanupClientState(clientID)
 
 	return &pb.ServerResponse{
 		Success:      true,
@@ -143,16 +131,7 @@ func (s *SimpleRadioServer) Disconnect(ctx context.Context, _ *pb.Empty) (*pb.Se
 }
 
 func (s *SimpleRadioServer) UpdateClientInfo(ctx context.Context, req *pb.ClientInfo) (*pb.ServerResponse, error) {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		s.logger.Error("UpdateClientInfo failed: no metadata found in context")
-		return &pb.ServerResponse{
-			Success:      false,
-			ErrorMessage: "Internal error, please try logging in again.",
-		}, nil
-	}
-
-	clientID, err := uuid.Parse(md.Get("client_id")[0])
+	clientID, err := uuid.Parse(ctx.Value("client_id").(string))
 	if err != nil {
 		s.logger.Error("UpdateClientInfo failed: invalid client ID", "error", err)
 		return &pb.ServerResponse{
@@ -232,7 +211,7 @@ func (s *SimpleRadioServer) UpdateClientInfo(ctx context.Context, req *pb.Client
 func (s *SimpleRadioServer) UpdateRadioInfo(ctx context.Context, req *pb.RadioInfo) (*pb.ServerResponse, error) {
 	clientID, err := uuid.Parse(ctx.Value("client_id").(string))
 	if err != nil {
-		s.logger.Error("UpdateClientInfo failed: invalid client ID", "error", err)
+		s.logger.Error("UpdateRadioInfo failed: invalid client ID", "error", err)
 		return &pb.ServerResponse{
 			Success:      false,
 			ErrorMessage: "Internal error, please try logging in again.",
@@ -262,12 +241,7 @@ func (s *SimpleRadioServer) UpdateRadioInfo(ctx context.Context, req *pb.RadioIn
 }
 
 func (s *SimpleRadioServer) SubscribeToUpdates(_ *pb.Empty, stream grpc.ServerStreamingServer[pb.ServerUpdate]) error {
-	md, ok := metadata.FromIncomingContext(stream.Context())
-	if !ok {
-		s.logger.Error("SubscribeToUpdates failed: no metadata found in context")
-		return errors.New("internal error, please try logging in again")
-	}
-	clientID, err := uuid.Parse(md.Get("client_id")[0])
+	clientID, err := uuid.Parse(stream.Context().Value("client_id").(string))
 	if err != nil {
 		s.logger.Error("SubscribeToUpdates failed: invalid client ID", "error", err)
 		return err
@@ -321,4 +295,29 @@ func (s *SimpleRadioServer) cleanupClientState(clientID uuid.UUID) {
 	if _, exists := s.serverState.RadioClients[clientID]; exists {
 		delete(s.serverState.RadioClients, clientID)
 	}
+}
+
+// StartCleanupRoutine launches a goroutine that periodically removes stale clients.
+func (s *SimpleRadioServer) StartCleanupRoutine(interval time.Duration, staleAfter time.Duration) {
+	go func() {
+		for {
+			time.Sleep(interval)
+			now := time.Now()
+			for clientID, stream := range s.streams {
+				s.serverState.RLock()
+				client, exists := s.serverState.Clients[clientID]
+				s.serverState.RUnlock()
+				if !exists || now.Sub(client.LastUpdate) > staleAfter {
+					if stream != nil {
+						stream.Context().Done()
+					}
+					s.cleanupClientState(clientID)
+					s.mu.Lock()
+					delete(s.streams, clientID)
+					s.mu.Unlock()
+					s.logger.Info("Cleaned up stale client", "client_id", clientID)
+				}
+			}
+		}
+	}()
 }
