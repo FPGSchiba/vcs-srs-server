@@ -24,7 +24,8 @@ type Server struct {
 	sync.RWMutex
 	conn              *net.UDPConn
 	clients           map[uuid.UUID]*Client
-	state             *state.ServerState
+	serverState       *state.ServerState
+	settingsState     *state.SettingsState
 	distributionState *state.DistributionState
 	logger            *slog.Logger
 	running           bool
@@ -33,11 +34,12 @@ type Server struct {
 	serverId          string
 }
 
-func NewServer(state *state.ServerState, logger *slog.Logger, distributionState *state.DistributionState) *Server {
+func NewServer(state *state.ServerState, logger *slog.Logger, distributionState *state.DistributionState, settingsState *state.SettingsState) *Server {
 	return &Server{
 		clients:           make(map[uuid.UUID]*Client),
-		state:             state,
+		serverState:       state,
 		logger:            logger,
+		settingsState:     settingsState,
 		stopChan:          make(chan struct{}),
 		distributionState: distributionState,
 		serverId:          uuid.New().String(),
@@ -139,7 +141,7 @@ func (v *Server) handlePacket(data []byte, addr *net.UDPAddr) {
 
 func (v *Server) handleHelloPacket(packet *VCSPacket, addr *net.UDPAddr) {
 	v.logger.Info("Received hello packet", "sender_id", packet.SenderID, "addr", addr.String())
-	if !v.state.DoesClientExist(packet.SenderID) {
+	if !v.serverState.DoesClientExist(packet.SenderID) {
 		v.logger.Warn("Client with hello, that does not exist", "sender_id", packet.SenderID)
 		// Ignore hello from unknown client
 		return
@@ -320,12 +322,24 @@ func (v *Server) GetClientCount() int {
 }
 
 func (v *Server) GetListeningClients(packet *VCSPacket, senderId uuid.UUID) []*Client {
+	if v.settingsState.IsFrequencyTest(packet.FrequencyAsFloat32()) {
+		v.serverState.RLock()
+		defer v.serverState.RUnlock()
+		if _, exists := v.clients[packet.SenderID]; exists {
+			// Instead of echoing, play the voice data locally on the server
+			go v.PlayVoiceData(packet.Payload)
+			return []*Client{} // Do not send to any clients
+		}
+		v.logger.Warn("Received test frequency packet from unknown client", "sender_id", packet.SenderID)
+		return []*Client{} // No clients to return if sender is unknown
+	}
+
 	var listeningClients []*Client
-	for _, client := range v.state.GetAllClients() {
+	for _, client := range v.serverState.GetAllClients() {
 		if client.ID == senderId {
 			continue // Skip the sender
 		}
-		if v.state.IsListeningOnFrequency(client.ID, packet.FrequencyAsFloat32()) {
+		if v.serverState.IsListeningOnFrequency(client.ID, senderId, packet.FrequencyAsFloat32(), v.settingsState.IsFrequencyGlobal(packet.FrequencyAsFloat32())) {
 			v.RLock()
 			clientData, exists := v.clients[client.ID]
 			v.RUnlock()
@@ -335,4 +349,24 @@ func (v *Server) GetListeningClients(packet *VCSPacket, senderId uuid.UUID) []*C
 		}
 	}
 	return listeningClients
+}
+
+// TODO: Implement Opus decoding and playback
+func (v *Server) PlayVoiceData(payload []byte) {
+	// Example: decode Opus and play locally (stub)
+	// You would use an Opus decoder library, e.g., github.com/hraban/opus
+	// decoder, err := opus.NewDecoder(sampleRate, channels)
+	// if err != nil {
+	//     v.logger.Error("Failed to create Opus decoder", "error", err)
+	//     return
+	// }
+	// pcm := make([]int16, maxFrameSize)
+	// n, err := decoder.Decode(payload, pcm)
+	// if err != nil {
+	//     v.logger.Error("Failed to decode Opus data", "error", err)
+	//     return
+	// }
+	// Play PCM data using an audio library (platform dependent)
+	// This is a stub; actual playback implementation depends on your environment
+	v.logger.Info("PlayVoiceData called - implement Opus decode and playback here")
 }
