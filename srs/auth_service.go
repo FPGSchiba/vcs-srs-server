@@ -3,6 +3,7 @@ package srs
 import (
 	"context"
 	"fmt"
+	"github.com/FPGSchiba/vcs-srs-server/events"
 	pb "github.com/FPGSchiba/vcs-srs-server/srspb"
 	"github.com/FPGSchiba/vcs-srs-server/state"
 	"github.com/FPGSchiba/vcs-srs-server/utils"
@@ -23,6 +24,7 @@ type AuthServer struct {
 	serverState           *state.ServerState
 	settingsState         *state.SettingsState
 	distributionState     *state.DistributionState
+	eventBus              *events.EventBus
 	mu                    sync.RWMutex
 	authenticatingClients map[uuid.UUID]*AuthenticatingClient
 	pluginClients         map[string]*PluginClient
@@ -35,10 +37,11 @@ type AuthenticatingClient struct {
 	AvailableUnits []*pb.UnitSelection
 }
 
-func NewAuthServer(serverState *state.ServerState, settingsState *state.SettingsState, logger *slog.Logger, distributionState *state.DistributionState) *AuthServer {
+func NewAuthServer(serverState *state.ServerState, settingsState *state.SettingsState, logger *slog.Logger, distributionState *state.DistributionState, eventBus *events.EventBus) *AuthServer {
 	return &AuthServer{
 		serverState:           serverState,
 		settingsState:         settingsState,
+		eventBus:              eventBus,
 		logger:                logger,
 		mu:                    sync.RWMutex{},
 		distributionState:     distributionState,
@@ -233,7 +236,11 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.ClientGuestLogi
 	}
 
 	s.logger.Info("guest login succeeded for ", "Guest Name", request.Name, "UnitId", request.UnitId, "Coalition", selectedCoalition.Name, "ClientGuid", clientGuid)
-	response := &pb.ServerGuestLoginResponse{
+	s.eventBus.Publish(events.Event{
+		Name: events.ClientsChanged,
+		Data: s.serverState.Clients,
+	})
+	return &pb.ServerGuestLoginResponse{
 		Success: true,
 		LoginResult: &pb.ServerGuestLoginResponse_Result{
 			Result: &pb.GuestLoginResult{
@@ -241,8 +248,7 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.ClientGuestLogi
 				Coalition: selectedCoalition.Name,
 			},
 		},
-	}
-	return response, nil
+	}, nil
 }
 
 func (s *AuthServer) Login(ctx context.Context, request *pb.ClientLoginRequest) (*pb.ServerLoginResponse, error) {
@@ -465,6 +471,11 @@ func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.ClientUnitSelec
 		}, err
 	}
 
+	s.eventBus.Publish(events.Event{
+		Name: events.ClientsChanged,
+		Data: s.serverState.Clients,
+	})
+	
 	return &pb.ServerUnitSelectResponse{
 		Success: true,
 		Result:  &pb.ServerUnitSelectResponse_Token{Token: token},

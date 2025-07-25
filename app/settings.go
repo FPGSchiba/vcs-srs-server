@@ -22,7 +22,11 @@ func (a *VCSApplication) SaveGeneralSettings(newSettings *state.GeneralSettings)
 		a.Notify(events.NewNotification("Failed to save settings", "Failed to save settings", "error"))
 		return
 	}
-	a.App.EmitEvent(events.SettingsChanged, a.SettingsState)
+	event := events.Event{
+		Name: events.SettingsChanged,
+		Data: a.SettingsState,
+	}
+	a.EmitEvent(event)
 	a.Notify(events.NewNotification("Settings saved", "General Settings were successfully saved", "info"))
 }
 
@@ -36,7 +40,11 @@ func (a *VCSApplication) SaveServerSettings(newSettings *state.ServerSettings) {
 		a.Notify(events.NewNotification("Failed to save settings", "Failed to save settings", "error"))
 		return
 	}
-	a.App.EmitEvent(events.SettingsChanged, a.SettingsState)
+	event := events.Event{
+		Name: events.SettingsChanged,
+		Data: a.SettingsState,
+	}
+	a.EmitEvent(event)
 	a.Notify(events.NewNotification("Settings saved", "Server Settings were successfully saved", "info"))
 }
 
@@ -50,6 +58,10 @@ func (a *VCSApplication) SaveFrequencySettings(newSettings *state.FrequencySetti
 		a.Notify(events.NewNotification("Failed to save settings", "Failed to save settings", "error"))
 		return
 	}
-	a.App.EmitEvent(events.SettingsChanged, a.SettingsState)
+	event := events.Event{
+		Name: events.SettingsChanged,
+		Data: a.SettingsState,
+	}
+	a.EmitEvent(event)
 	a.Notify(events.NewNotification("Settings saved", "Frequency Settings were successfully saved", "info"))
 }

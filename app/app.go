@@ -24,24 +24,32 @@ type VCSApplication struct {
 	voiceServer       *voice.Server
 	controlServer     *control.Server // Add this
 	StopSignals       map[string]chan struct{}
+	eventBus          *events.EventBus // Event bus for handling events
 	App               *application.App
 	Logger            *slog.Logger // Optional Logger, only used in headless mode
 }
 
 // New creates a new App application struct
 func New() *VCSApplication {
-	return &VCSApplication{
+	app := &VCSApplication{
 		ServerState:       &state.ServerState{},
 		SettingsState:     &state.SettingsState{},
 		AdminState:        &state.AdminState{},
 		DistributionState: &state.DistributionState{},
 		autoStart:         false,
+		eventBus:          events.NewEventBus(), // Initialize the event bus
 		httpServer:        nil,
 		voiceServer:       nil,
 		controlServer:     nil, // Initialize control server
 		StopSignals:       make(map[string]chan struct{}),
 		App:               nil,
 	}
+	// Subscribe to the notification event to log notifications
+	notChan := app.eventBus.Subscribe(events.NotificationEvent)
+	allChan := app.eventBus.Subscribe("*")
+	go app.handleFrontendEmits(allChan)
+	go app.handleNotificationEvent(notChan)
+	return app
 }
 
 func (a *VCSApplication) StartUp(app *application.App, configFilePath, bannedFilePath string, autoStartServers bool) {
@@ -262,9 +270,36 @@ func (a *VCSApplication) Notify(notification events.Notification) {
 }
 
 func (a *VCSApplication) EmitEvent(event events.Event) {
-	a.DistributionState.RLock()
-	if a.DistributionState.RuntimeMode == state.RuntimeModeGUI { // Only emit events if in GUI mode
-		a.DistributionState.RUnlock()
-		a.App.EmitEvent(event.Name, event.Data)
+	a.eventBus.Publish(event)
+}
+
+func (a *VCSApplication) handleNotificationEvent(channel chan events.Event) {
+	for event := range channel {
+		if event.Name == events.NotificationEvent {
+			notification, ok := event.Data.(events.Notification)
+			if !ok {
+				a.Logger.Error("Received non-notification event", "event", event)
+				continue
+			}
+			a.Logger.Info("Notification received", "title", notification.Title, "message", notification.Message, "level", notification.Level)
+			a.DistributionState.RLock()
+			if a.DistributionState.RuntimeMode == state.RuntimeModeGUI {
+				a.DistributionState.RUnlock()
+				a.App.EmitEvent(event.Name, notification)
+				continue
+			}
+			a.DistributionState.RUnlock() // In headless mode, just log the notification
+		}
 	}
+}
+
+func (a *VCSApplication) handleFrontendEmits(channel chan events.Event) {
+	a.DistributionState.RLock()
+	if a.DistributionState.RuntimeMode == state.RuntimeModeGUI {
+		a.DistributionState.RUnlock()
+		for event := range channel {
+			a.App.EmitEvent(event.Name, event.Data)
+		}
+	}
+	a.DistributionState.RUnlock() // In headless mode, we don't emit events to the frontend
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/FPGSchiba/vcs-srs-server/events"
 	"github.com/FPGSchiba/vcs-srs-server/srs"
 	"github.com/FPGSchiba/vcs-srs-server/srspb"
 	"github.com/FPGSchiba/vcs-srs-server/state"
@@ -48,14 +49,16 @@ type Server struct {
 	serverState       *state.ServerState
 	settingsState     *state.SettingsState
 	distributionState *state.DistributionState
+	eventBus          *events.EventBus // Add event bus for handling events
 	isRunning         bool
 	stopOnce          sync.Once // Add this to ensure we only stop once
 }
 
-func NewServer(serverState *state.ServerState, settingsState *state.SettingsState, logger *slog.Logger, distributionState *state.DistributionState) *Server {
+func NewServer(serverState *state.ServerState, settingsState *state.SettingsState, logger *slog.Logger, distributionState *state.DistributionState, eventBus *events.EventBus) *Server {
 	return &Server{
 		serverState:       serverState,
 		settingsState:     settingsState,
+		eventBus:          eventBus,
 		logger:            logger,
 		distributionState: distributionState,
 	}
@@ -99,8 +102,8 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 		}),
 	)
 
-	srsServer := srs.NewSimpleRadioServer(s.serverState, s.settingsState, s.logger)
-	authServer := srs.NewAuthServer(s.serverState, s.settingsState, s.logger, s.distributionState)
+	srsServer := srs.NewSimpleRadioServer(s.serverState, s.settingsState, s.logger, s.eventBus)
+	authServer := srs.NewAuthServer(s.serverState, s.settingsState, s.logger, s.distributionState, s.eventBus)
 	srspb.RegisterSRSServiceServer(s.clientGrpcServer, srsServer)
 	srspb.RegisterAuthServiceServer(s.clientGrpcServer, authServer)
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"gopkg.in/yaml.v3"
 	"os"
+	"slices"
 	"sync"
 )
 
@@ -233,4 +234,16 @@ func (s *SettingsState) DoesCoalitionExist(coalitionName string) bool {
 		}
 	}
 	return false
+}
+
+func (s *SettingsState) IsFrequencyGlobal(freq float32) bool {
+	s.RLock()
+	defer s.RUnlock()
+	return slices.Contains(s.Frequencies.GlobalFrequencies, freq)
+}
+
+func (s *SettingsState) IsFrequencyTest(freq float32) bool {
+	s.RLock()
+	defer s.RUnlock()
+	return slices.Contains(s.Frequencies.TestFrequencies, freq)
 }

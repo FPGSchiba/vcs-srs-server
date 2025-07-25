@@ -4,7 +4,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// SettingsEvent is an event that is triggered when the settings are changed
+// SettingsEvent is an event triggered when the settings are changed
 const (
 	SettingsChanged   = "settings/changed"
 	CoalitionsChanged = "settings/coalitions/changed"
@@ -42,5 +42,12 @@ func NewNotification(title, message, level string) Notification {
 		Message: message,
 		Level:   level,
 		Id:      uuid.New().String(),
+	}
+}
+
+func NewEvent(name string, data interface{}) Event {
+	return Event{
+		Name: name,
+		Data: data,
 	}
 }

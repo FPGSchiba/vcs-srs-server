@@ -3,6 +3,7 @@ package srs
 import (
 	"context"
 	"fmt"
+	"github.com/FPGSchiba/vcs-srs-server/events"
 	pb "github.com/FPGSchiba/vcs-srs-server/srspb"
 	"github.com/FPGSchiba/vcs-srs-server/state"
 	"github.com/google/uuid"
@@ -20,13 +21,15 @@ type SimpleRadioServer struct {
 	mu            sync.Mutex
 	serverState   *state.ServerState
 	settingsState *state.SettingsState
+	eventBus      *events.EventBus
 	streams       map[uuid.UUID]grpc.ServerStreamingServer[pb.ServerUpdate]
 }
 
-func NewSimpleRadioServer(serverState *state.ServerState, settingsState *state.SettingsState, logger *slog.Logger) *SimpleRadioServer {
+func NewSimpleRadioServer(serverState *state.ServerState, settingsState *state.SettingsState, logger *slog.Logger, bus *events.EventBus) *SimpleRadioServer {
 	server := SimpleRadioServer{
 		serverState:   serverState,
 		settingsState: settingsState,
+		eventBus:      bus,
 		logger:        logger,
 		mu:            sync.Mutex{},
 		streams:       make(map[uuid.UUID]grpc.ServerStreamingServer[pb.ServerUpdate]),
@@ -82,6 +85,11 @@ func (s *SimpleRadioServer) SyncClient(_ context.Context, _ *pb.Empty) (*pb.Serv
 		s.serverState.RUnlock()
 	}
 
+	s.eventBus.Publish(events.Event{
+		Name: events.ClientsChanged,
+		Data: s.serverState.Clients,
+	})
+
 	return &pb.ServerSyncResponse{
 		Success: true,
 		SyncResult: &pb.ServerSyncResponse_Data{
@@ -123,6 +131,10 @@ func (s *SimpleRadioServer) Disconnect(ctx context.Context, _ *pb.Empty) (*pb.Se
 
 	s.logger.Info("Disconnecting client", "client_id", clientID, "client_name", client.Name)
 	s.cleanupClientState(clientID)
+	s.eventBus.Publish(events.Event{
+		Name: events.ClientsChanged,
+		Data: s.serverState.Clients,
+	})
 
 	return &pb.ServerResponse{
 		Success:      true,
@@ -202,6 +214,12 @@ func (s *SimpleRadioServer) UpdateClientInfo(ctx context.Context, req *pb.Client
 			ErrorMessage: "Errors occurred while updating client info: \n - " + strings.Join(errors, "\n - "),
 		}, nil
 	}
+
+	s.eventBus.Publish(events.Event{
+		Name: events.ClientsChanged,
+		Data: s.serverState.Clients,
+	})
+
 	return &pb.ServerResponse{
 		Success:      true,
 		ErrorMessage: "",
@@ -233,6 +251,11 @@ func (s *SimpleRadioServer) UpdateRadioInfo(ctx context.Context, req *pb.RadioIn
 	s.serverState.Lock()
 	s.serverState.RadioClients[clientID] = convertRadioInfo(req)
 	s.serverState.Unlock()
+
+	s.eventBus.Publish(events.Event{
+		Name: events.RadioClientsChanged,
+		Data: s.serverState.RadioClients,
+	})
 
 	return &pb.ServerResponse{
 		Success:      true,

@@ -131,8 +131,7 @@ func (a *VCSApplication) startVoiceServer() {
 	a.StopSignals["voice"] = stopChan
 
 	go func() {
-		voiceServer := voice.NewServer(a.ServerState, a.Logger, a.DistributionState)
-		a.voiceServer = voiceServer
+		a.voiceServer = voice.NewServer(a.ServerState, a.Logger, a.DistributionState, a.SettingsState)
 
 		// Update status
 		a.AdminState.Lock()
@@ -143,7 +142,7 @@ func (a *VCSApplication) startVoiceServer() {
 		a.SettingsState.Lock()
 		serverHost := fmt.Sprintf("%s:%d", a.SettingsState.Servers.Voice.Host, a.SettingsState.Servers.Voice.Port)
 		a.SettingsState.Unlock()
-		if err := voiceServer.Listen(serverHost, stopChan); err != nil {
+		if err := a.voiceServer.Listen(serverHost, stopChan); err != nil {
 			a.AdminState.Lock()
 			a.AdminState.VoiceStatus.Error = err.Error()
 			a.AdminState.VoiceStatus.IsRunning = false
@@ -213,7 +212,7 @@ func (a *VCSApplication) startGrpcServer() {
 	a.StopSignals["control"] = stopChan
 	a.AdminState.Unlock()
 
-	controlServer := control.NewServer(a.ServerState, a.SettingsState, a.Logger, a.DistributionState)
+	controlServer := control.NewServer(a.ServerState, a.SettingsState, a.Logger, a.DistributionState, a.eventBus)
 	a.controlServer = controlServer
 
 	a.SettingsState.Lock()

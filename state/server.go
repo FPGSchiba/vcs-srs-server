@@ -174,14 +174,23 @@ func (s *ServerState) GetAllEnabledFrequencies(clientGuid uuid.UUID) []float32 {
 	return nil
 }
 
-func (s *ServerState) IsListeningOnFrequency(clientGuid uuid.UUID, frequency float32) bool {
-	if clientState, exists := s.RadioClients[clientGuid]; exists {
-		for _, radio := range clientState.Radios {
-			if radio.Frequency == frequency {
-				return radio.Enabled
+func (s *ServerState) IsListeningOnFrequency(clientGuid, senderId uuid.UUID, frequency float32, globalFreq bool) bool {
+	s.RLock()
+	defer s.RUnlock()
+	if sender, exists := s.Clients[senderId]; exists {
+		if clientState, exists := s.RadioClients[clientGuid]; exists {
+			receiver := s.Clients[senderId]
+			if !globalFreq && sender.Coalition != receiver.Coalition {
+				return false // Different coalitions cannot listen to each other
+			}
+			for _, radio := range clientState.Radios {
+				if radio.Frequency == frequency {
+					return radio.Enabled
+				}
 			}
 		}
 	}
+
 	return false
 }
 
