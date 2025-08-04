@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@emotion/styled": "^11.14.1",
-    "@hookform/resolvers": "^5.1.1",
+    "@hookform/resolvers": "^5.2.1",
     "@mui/icons-material": "^7.2.0",
     "@mui/lab": "^7.0.0-beta.14",
     "@mui/material": "^7.1.2",
