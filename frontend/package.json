@@ -11,26 +11,26 @@
   },
   "dependencies": {
     "@emotion/styled": "^11.14.1",
-    "@hookform/resolvers": "^5.1.1",
+    "@hookform/resolvers": "^5.2.1",
     "@mui/icons-material": "^7.2.0",
     "@mui/lab": "^7.0.0-beta.14",
     "@mui/material": "^7.1.2",
     "@wailsio/runtime": "^3.0.0-alpha.66",
     "mui-color-input": "^7.0.0",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "react-router": "^7.6.3",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "react-router": "^7.7.1",
     "sass": "^1.89.2",
     "uuid": "^11.1.0",
     "vite-plugin-typed-css-modules": "^0.3.0",
     "zod": "^4.0.5"
   },
   "devDependencies": {
-    "@types/react": "^19.1.8",
-    "@types/react-dom": "^19.1.6",
+    "@types/react": "^19.1.9",
+    "@types/react-dom": "^19.1.7",
     "@vitejs/plugin-react": "^4.6.0",
     "typed-scss-modules": "^8.1.1",
     "typescript": "^5.8.3",
-    "vite": "^7.0.4"
+    "vite": "^7.1.0"
   }
 }
