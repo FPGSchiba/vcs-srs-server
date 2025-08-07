@@ -17,7 +17,7 @@
     "@mui/material": "^7.1.2",
     "@wailsio/runtime": "^3.0.0-alpha.66",
     "mui-color-input": "^7.0.0",
-    "react": "^19.1.0",
+    "react": "^19.1.1",
     "react-dom": "^19.1.0",
     "react-router": "^7.7.1",
     "sass": "^1.89.2",
@@ -26,7 +26,7 @@
     "zod": "^4.0.5"
   },
   "devDependencies": {
-    "@types/react": "^19.1.8",
+    "@types/react": "^19.1.9",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
     "typed-scss-modules": "^8.1.1",
