@@ -2,17 +2,25 @@ package voice
 
 import (
 	_ "encoding/binary"
-	"github.com/FPGSchiba/vcs-srs-server/state"
-	"github.com/FPGSchiba/vcs-srs-server/voiceontrol"
-	"github.com/google/uuid"
+	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"sync"
 	"time"
+
+	"github.com/FPGSchiba/vcs-srs-server/state"
+	"github.com/FPGSchiba/vcs-srs-server/voiceontrol"
+	"github.com/faiface/beep"
+	"github.com/faiface/beep/speaker"
+	"github.com/google/uuid"
+	"github.com/pion/opus"
 )
 
 const (
-	BufferSize = 1024 // UDP buffer size
+	BufferSize       = 1024                  // UDP buffer size
+	JitterBufferSize = 10                    // Number of packets to buffer
+	PlayoutDelay     = 60 * time.Millisecond // Initial playout delay
 )
 
 type Client struct {
@@ -32,6 +40,16 @@ type Server struct {
 	stopChan          chan struct{}
 	controlClient     *voiceontrol.VoiceControlClient
 	serverId          string
+
+	// Playback/decoder state
+	playOnce   sync.Once
+	opusDec    opus.Decoder
+	pipeW      *io.PipeWriter
+	playFormat beep.Format
+	playErr    error
+
+	// Optional: gate concurrent writes to the pipe if PlayVoiceData is called from multiple goroutines
+	playMu sync.Mutex
 }
 
 func NewServer(state *state.ServerState, logger *slog.Logger, distributionState *state.DistributionState, settingsState *state.SettingsState) *Server {
@@ -351,22 +369,173 @@ func (v *Server) GetListeningClients(packet *VCSPacket, senderId uuid.UUID) []*C
 	return listeningClients
 }
 
-// TODO: Implement Opus decoding and playback
+// Simple, direct PlayVoiceData without dejitter buffer - for clean local test playback
 func (v *Server) PlayVoiceData(payload []byte) {
-	// Example: decode Opus and play locally (stub)
-	// You would use an Opus decoder library, e.g., github.com/hraban/opus
-	// decoder, err := opus.NewDecoder(sampleRate, channels)
-	// if err != nil {
-	//     v.logger.Error("Failed to create Opus decoder", "error", err)
-	//     return
-	// }
-	// pcm := make([]int16, maxFrameSize)
-	// n, err := decoder.Decode(payload, pcm)
-	// if err != nil {
-	//     v.logger.Error("Failed to decode Opus data", "error", err)
-	//     return
-	// }
-	// Play PCM data using an audio library (platform dependent)
-	// This is a stub; actual playback implementation depends on your environment
-	v.logger.Info("PlayVoiceData called - implement Opus decode and playback here")
+	if len(payload) == 0 {
+		return
+	}
+	toc := payload[0]
+	config := toc >> 3
+	if config < 16 {
+		// Not CELT-only (likely SILK/hybrid). Drop to avoid Pion error.
+		v.logger.Warn("Dropping non-CELT Opus packet", "config", config, "len_payload", len(payload))
+		return
+	}
+
+	// Lazy-initialize decoder and speaker once
+	v.playOnce.Do(func() {
+		var err error
+		v.opusDec = opus.NewDecoder() // mono 48kHz
+
+		v.playFormat = beep.Format{
+			SampleRate:  beep.SampleRate(48000),
+			NumChannels: 1,
+			Precision:   2,
+		}
+
+		// Larger buffer for smoother playback
+		err = speaker.Init(v.playFormat.SampleRate, v.playFormat.SampleRate.N(300*time.Millisecond))
+		if err != nil {
+			v.playErr = err
+			v.logger.Error("Failed to init Speaker", "error", err)
+			return
+		}
+
+		pr, pw := io.Pipe()
+		v.pipeW = pw
+
+		stream := &pcmStream{
+			r:   pr,
+			f:   v.playFormat,
+			buf: make([]byte, 8192*v.playFormat.Width()),
+		}
+		speaker.Play(stream)
+	})
+
+	if v.playErr != nil || v.pipeW == nil {
+		v.logger.Error("Audio playback not initialized", "error", v.playErr)
+		return
+	}
+
+	// Decode directly - buffer for up to 60ms stereo @ 48kHz
+	out := make([]byte, 11520)
+
+	// Serialize opus decoder access and pipe writes; opus.Decoder is not goroutine-safe
+	v.playMu.Lock()
+	// Protect against library panics on corrupt/non-Opus payloads
+	var (
+		bw       opus.Bandwidth
+		isStereo bool
+		err      error
+	)
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("opus decode panic: %v", r)
+			}
+		}()
+		bw, isStereo, err = v.opusDec.Decode(payload, out)
+	}()
+	if err != nil {
+		v.playMu.Unlock()
+		v.logger.Error("Failed to decode Opus data", "error", err)
+		return
+	}
+
+	// Get sample rate and assume 20ms frame
+	sr := bw.SampleRate()
+	if sr == 0 {
+		sr = 48000
+	}
+	samplesPerCh := sr / 50 // 20ms
+	if samplesPerCh <= 0 {
+		samplesPerCh = 960
+	}
+
+	// Calculate actual bytes to use
+	channels := 1
+	if isStereo {
+		channels = 2
+	}
+	bytesToUse := samplesPerCh * 2 * channels
+	if bytesToUse > len(out) {
+		bytesToUse = len(out)
+	}
+
+	var pcmData []byte
+	if isStereo {
+		// Downmix to mono
+		pcmData = downmixStereoS16LEToMono(out[:bytesToUse], samplesPerCh)
+	} else {
+		pcmData = out[:bytesToUse]
+	}
+
+	// Write directly to pipe while still holding the lock (serialize with decoder)
+	_, err = v.pipeW.Write(pcmData)
+	v.playMu.Unlock()
+
+	if err != nil {
+		v.logger.Error("Failed to write PCM to speaker pipe", "error", err)
+	}
+}
+
+// downmixStereoS16LEToMono averages L/R channels into mono S16LE.
+func downmixStereoS16LEToMono(in []byte, samplesPerCh int) []byte {
+	out := make([]byte, samplesPerCh*2)
+	for i := 0; i < samplesPerCh; i++ {
+		li := 4 * i
+		ri := li + 2
+		l := int16(uint16(in[li]) | uint16(in[li+1])<<8)
+		r := int16(uint16(in[ri]) | uint16(in[ri+1])<<8)
+		m := int16((int32(l) + int32(r)) / 2)
+		oi := 2 * i
+		out[oi] = byte(uint16(m))
+		out[oi+1] = byte(uint16(m) >> 8)
+	}
+	return out
+}
+
+// pcmStream allows faiface to play raw S16LE PCM directly.
+// This is adapted from the example you pasted.
+type pcmStream struct {
+	r   io.Reader
+	f   beep.Format
+	buf []byte
+	len int
+	pos int
+	err error
+}
+
+func (s *pcmStream) Err() error { return s.err }
+
+func (s *pcmStream) Stream(samples [][2]float64) (n int, ok bool) {
+	width := s.f.Width()
+
+	// If there's not enough data for a full sample, get more
+	if size := s.len - s.pos; size < width {
+		// If there's a partial sample, move it to the beginning of the buffer
+		if size != 0 {
+			copy(s.buf, s.buf[s.pos:s.len])
+		}
+		s.len = size
+		s.pos = 0
+
+		// Refill the buffer
+		nbytes, err := s.r.Read(s.buf[s.len:])
+		if err != nil {
+			if err != io.EOF {
+				s.err = err
+			}
+			return n, false
+		}
+		s.len += nbytes
+	}
+
+	// Decode as many samples as we can
+	for n < len(samples) && s.len-s.pos >= width {
+		samples[n], _ = s.f.DecodeSigned(s.buf[s.pos:])
+		n++
+		s.pos += width
+	}
+	return n, true
 }
