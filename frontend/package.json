@@ -23,7 +23,7 @@
     "sass": "^1.89.2",
     "uuid": "^11.1.0",
     "vite-plugin-typed-css-modules": "^0.3.0",
-    "zod": "^4.0.5"
+    "zod": "^4.1.1"
   },
   "devDependencies": {
     "@types/react": "^19.1.9",
