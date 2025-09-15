@@ -10,7 +10,7 @@ require (
 	github.com/samber/slog-multi v1.4.1
 	github.com/wailsapp/wails/v3 v3.0.0-alpha.8.3
 	google.golang.org/grpc v1.75.0
-	google.golang.org/protobuf v1.36.8
+	google.golang.org/protobuf v1.36.9
 	gopkg.in/yaml.v3 v3.0.1
 )
 
