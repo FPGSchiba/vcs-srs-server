@@ -1,20 +1,18 @@
 module github.com/FPGSchiba/vcs-srs-server
 
-go 1.23.0
-
-toolchain go1.23.4
+go 1.25.0
 
 require (
 	github.com/faiface/beep v1.1.0
 	github.com/gin-gonic/gin v1.10.1
 	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/google/uuid v1.6.0
-	github.com/pion/opus v0.0.0-20250618074346-646586bb17bf
-	github.com/samber/slog-multi v1.4.1
+	github.com/pion/opus v0.0.0-20250915015601-6e2aa18a262f
+	github.com/samber/slog-multi v1.5.0
 	github.com/sethvargo/go-diceware v0.5.0
 	github.com/wailsapp/wails/v3 v3.0.0-alpha.8.3
-	google.golang.org/grpc v1.73.0
-	google.golang.org/protobuf v1.36.6
+	google.golang.org/grpc v1.75.1
+	google.golang.org/protobuf v1.36.9
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -83,7 +81,7 @@ require (
 	golang.org/x/sys v0.35.0 // indirect
 	golang.org/x/text v0.28.0 // indirect
 	golang.org/x/tools v0.35.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20250528174236-200df99c418a // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20250707201910-8d1bb00bc6a7 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 )
 
