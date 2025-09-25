@@ -32,6 +32,7 @@ type AuthServer struct {
 }
 
 type AuthenticatingClient struct {
+	Name           string
 	Secret         string
 	Expires        time.Time
 	AvailableRoles []uint8
@@ -335,6 +336,7 @@ func (s *AuthServer) Login(ctx context.Context, request *pb.ClientLoginRequest) 
 	}
 	s.mu.Lock()
 	s.authenticatingClients[clientGuid] = &AuthenticatingClient{
+		Name:           result.Result.PlayerName,
 		Secret:         strings.Join(clientSecret, "-"),
 		Expires:        time.Now().Add(5 * time.Minute),
 		AvailableRoles: availableRoles,
@@ -443,7 +445,7 @@ func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.ClientUnitSelec
 	}
 
 	s.serverState.AddClient(clientGuid, &state.ClientState{
-		Name:      authClient.Secret,
+		Name:      authClient.Name,
 		UnitId:    selectedUnit.UnitId,
 		Coalition: request.Coalition,
 		Role:      uint8(request.Role),
