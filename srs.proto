@@ -3,37 +3,168 @@ syntax = "proto3";
 package srspb;
 
 option go_package = "github.com/FPGSchiba/vcs-srs-server/srspb";
+option csharp_namespace = "Vanguard.VCS.Client.Network";
+
+service AuthService {
+  // Get Available Plugins
+  rpc InitAuth(ClientAuthInitRequest) returns (ServerAuthInitResponse);
+
+  // Guest login (Using Coalition Password and self chosen name)
+  rpc GuestLogin(ClientGuestLoginRequest) returns (ServerGuestLoginResponse);
+
+  // Vanguard login (Using email and password > Connects to Wix backend)
+  rpc Login(ClientLoginRequest) returns (ServerLoginResponse);
+
+  // Vanguard unit selection (Using client GUID and selected unit ID)
+  rpc UnitSelect(ClientUnitSelectRequest) returns (ServerUnitSelectResponse);
+}
 
 // Service definition
 service SRSService {
-  // Initial client connection and authentication (metadata)
-  rpc Connect(ClientConnectRequest) returns (ServerConnectResponse);
+  // Client synchronization request
+  rpc SyncClient(Empty) returns (ServerSyncResponse);
 
-  // Client update (metadata, client info, position)
+  // Client update (metadata, client info)
   rpc UpdateClientInfo(ClientInfo) returns (ServerResponse);
 
   // Client radio update (metadata, radio info)
   rpc UpdateRadioInfo(RadioInfo) returns (ServerResponse);
 
-  // Client synchronization request
-  rpc SyncClient(ClientSyncRequest) returns (ServerSyncResponse);
-
   // Client disconnect (metadata)
-  rpc DisconnectClient(ClientDisconnectRequest) returns (ServerResponse);
+  rpc Disconnect(Empty) returns (ServerResponse);
 
   // Server settings request
   rpc GetServerSettings(Empty) returns (ServerSettings);
 
   // Server-to-client updates stream
-  rpc SubscribeToUpdates(SubscribeRequest) returns (stream ServerUpdate);
+  rpc SubscribeToUpdates(Empty) returns (stream ServerUpdate);
 }
 
 // Empty message for requests that don't need parameters
 message Empty {}
 
-// Subscribe request
-message SubscribeRequest {
-  string client_guid = 1;
+message ClientAuthInitRequest {
+  ClientCapabilities capabilities = 1; // Version and distribution information of the client
+}
+
+message ServerAuthInitResponse {
+  bool success = 1; // Indicates if the initialization was successful
+  oneof init_result {
+    string error_message = 2; // Error message if initialization failed
+    AuthInitResult result = 3; // List of available authentication plugins
+  }
+}
+
+message AuthInitResult {
+  repeated string available_plugins = 1; // List of available authentication plugins
+  bool has_guest_login = 2; // Indicates if guest login is supported
+  DistributionMode distribution_mode = 3; // Distribution mode of the server
+  string client_guid = 4; // Unique identifier for the client
+}
+
+// Authentication messages
+message ClientGuestLoginRequest {
+  string name = 1; // Name of the guest client
+  string password = 2; // Password for the guest client
+  string unit_id = 3; // unit ID for the guest
+  string client_guid = 4; // Unique identifier for the client (To make sure the client is initialized)
+}
+
+message ClientLoginRequest {
+  map<string, string> credentials = 1; // Map of credentials
+  string authentication_plugin = 2; // Name of the authentication plugin to use
+  string client_guid = 3; // Unique identifier for the client (To make sure the client is initialized)
+}
+
+message ClientUnitSelectRequest {
+  string client_guid = 1; // Unique identifier for the client
+  string secret = 2; // Secret for the vanguard client after successful login
+  string unit_id = 3; // Selected unit ID
+  string coalition = 4; // Coalition of the client
+  uint32  role = 5; // Optional role (If user has permissions to select roles)
+}
+
+message ServerGuestLoginResponse {
+  bool success = 1;
+  oneof login_result {
+    GuestLoginResult result = 2; // Token for the guest client after successful login
+    string error_message = 3; // Error message if login failed
+  }
+}
+
+message GuestLoginResult {
+  string token = 1; // Token for the guest client after successful login
+  string coalition = 2; // Coalition of the guest client
+}
+
+message ServerLoginResponse {
+  bool success = 1;
+  oneof login_result {
+    LoginResult result = 2; // Result of the vanguard login
+    string error_message = 3; // Error message if login failed
+  }
+}
+
+message LoginResult {
+  string secret = 1; // Secret for the client after successful login for selecting the Unit and the Coalition
+  repeated CoalitionSelection available_coalitions = 3; // List of available coalitions for the client
+  repeated UnitSelection available_units = 4; // List of available unit IDs for the client
+  repeated RoleSelection available_roles = 5; // Optional list of roles if the user has permissions to select roles
+  string player_name = 6; // Name of the player
+}
+
+message UnitSelection {
+  string unit_id = 1; // The selected unit ID
+  string unit_name = 2; // The name of the selected unit
+}
+
+message RoleSelection {
+  string name = 1; // The selected role
+  uint32 id = 3; // Priority of the role (lower number means higher priority)
+}
+
+message CoalitionSelection {
+  string name = 1; // The selected coalition
+  string color = 2; // The name of the selected coalition
+  string description = 3; // The description of the selected coalition
+}
+
+message ServerUnitSelectResponse {
+  bool success = 1;
+  oneof result {
+    string token = 2; // The selected unit ID after successful selection
+    string error_message = 3; // Error message if selection failed
+  }
+}
+
+message ClientCapabilities {
+  string version = 1; // Version of the client
+  repeated DistributionMode supported_distribution_modes = 2; // List of features supported by the client
+}
+
+enum DistributionMode {
+  STANDALONE = 0; // Standalone client
+  DISTRIBUTED = 1; // Distribution of Voice servers supported by client
+}
+
+// Distribution preparation here
+message ServerInitializationResponse {
+  string client_guid = 1; // Unique identifier for the client
+  repeated VoiceHostDetails voice_hosts = 2; // Details of the voice server to connect to
+  ClientCapabilities capabilities = 3; // Version and distribution information of the client
+}
+
+message VoiceHostDetails {
+  string host = 1; // Host address for the voice server
+  int32 port = 2; // Port for the voice server
+  repeated FrequencyRange frequencies = 3; // List of frequencies assigned to the voice server with these details
+  optional string secret = 4; // The secret for the voice server
+}
+
+message FrequencyRange {
+  string coalition = 1; // Coalition for which the frequency range applies
+  double start_frequency = 2; // Minimum frequency
+  double end_frequency = 3; // Maximum frequency
 }
 
 // Server update message
@@ -43,6 +174,7 @@ message ServerUpdate {
     ClientUpdate client_update = 2;
     ServerAction server_action = 3;
     ServerSettings settings_update = 4;
+    DistributionUpdate voice_hosts = 5; // For distribution updates
   }
 
   enum UpdateType {
@@ -53,12 +185,18 @@ message ServerUpdate {
     CLIENT_INFO_UPDATE = 4;
     SERVER_SETTINGS_CHANGED = 5;
     SERVER_ACTION = 6;
+    DISTRIBUTION_UPDATE = 7; // For distribution updates
   }
+}
+
+message DistributionUpdate {
+  repeated VoiceHostDetails voice_hosts = 2; // Details of the voice server to connect to
+  optional string secret = 4; // The secret for the voice server
 }
 
 // Client update information
 message ClientUpdate {
-  string client_guid = 1;
+  optional string client_guid = 1;
   optional ClientInfo client_info = 2;
   optional RadioInfo radio_info = 3;
 }
@@ -79,71 +217,62 @@ message ServerAction {
   }
 }
 
-// Initial client connection request
-message ClientConnectRequest {
-  string version = 1;
-}
-
-// Initial server connection response
-message ServerConnectResponse {
-  bool success = 1;
-  string error_message = 2;
-  optional string client_guid = 3; // Server sets the Client GUID
-}
-
 // Client information
 message ClientInfo {
-  string client_guid = 1;
-  string name = 2;
-  string coalition = 3;
-  int64 last_update = 4;
+  string name = 1;
+  string coalition = 2;
+  string unit_id = 3;
+  uint32 role_id = 4; // Optional role ID if the user has permissions to select roles
+  optional int64 last_update = 5;
 }
 
 // Radio information
 message RadioInfo {
-  string client_guid = 1;
-  int64 last_update = 2;
-  repeated Radio radios = 3;
-  bool muted = 4;
+  optional int64 last_update = 1;
+  repeated Radio radios = 2;
+  bool muted = 3;
 }
 
 message Radio {
-  int32 id = 1;
+  uint32 id = 1;
   string name = 2;
   float frequency = 3;
   bool enabled = 6;
+  bool is_intercom = 7;
 }
 
 // Server settings
 message ServerSettings {
-  map<string, ServerSetting> settings = 1;
+  repeated Coalition coalitions = 1; // List of coalitions available on the server
+  repeated float test_frequencies = 2; // List of test frequencies available on the server
+  repeated float global_frequencies = 3; // List of global frequencies available on the server
+  GeneralServerSettings general_settings = 4; // General server settings
 }
 
-// Individual server setting
-message ServerSetting {
-  oneof value {
-    string string_value = 1;
-    bool bool_value = 2;
-    int32 int_value = 3;
-    float float_value = 4;
-  }
+message GeneralServerSettings {
+  int32 max_radios_per_client = 1; // Maximum number of radios per client
 }
 
-// Client synchronization request
-message ClientSyncRequest {
-  string client_guid = 1;
+message Coalition {
+  string name = 1; // Name of the coalition
+  string color = 2; // Color of the coalition
+  string description = 3; // Description of the coalition
 }
 
 // Server synchronization response
 message ServerSyncResponse {
-  repeated ClientInfo connected_clients = 1;
-  ServerSettings server_settings = 2;
-  string version = 3;
+  bool success = 1;
+  oneof sync_result {
+    string error_message = 2; // Error message if synchronization failed
+    ServerSyncResult data = 3; // Data for successful synchronization
+  }
+  string version = 4; // Version of the server
 }
 
-// Client disconnect request
-message ClientDisconnectRequest {
-  string client_guid = 1;
+message ServerSyncResult {
+  map<string, ClientInfo> clients = 1; // List of clients currently connected
+  map<string, RadioInfo> radios = 2; // List of radio information
+  ServerSettings settings = 3; // Current server settings
 }
 
 // Generic server response

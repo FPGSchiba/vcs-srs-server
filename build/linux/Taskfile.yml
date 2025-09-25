@@ -112,3 +112,38 @@ tasks:
   run:
     cmds:
       - '{{.BIN_DIR}}/{{.APP_NAME}}'
+
+  build:headless:
+    summary: Builds the application in headless mode
+    cmds:
+      - go build {{.BUILD_FLAGS}} -o {{.OUTPUT}} -tags headless
+    vars:
+      BUILD_FLAGS: '{{if eq .PRODUCTION "true"}}-tags production,headless -trimpath -buildvcs=false -ldflags="-w -s"{{else}}-buildvcs=false -gcflags=all="-l"{{end}}'
+      DEFAULT_OUTPUT: '{{.BIN_DIR}}/{{.APP_NAME}}-headless'
+      OUTPUT: '{{ .OUTPUT | default .DEFAULT_OUTPUT }}'
+    env:
+      GOOS: linux
+      CGO_ENABLED: 1
+      GOARCH: '{{.ARCH | default ARCH}}'
+      PRODUCTION: '{{.PRODUCTION | default "false"}}'
+
+  headless-standalone:
+    summary: Runs the application in headless mode
+    deps:
+      - task: build:headless
+    cmds:
+      - '{{.BIN_DIR}}/{{.APP_NAME}}-headless --mode=standalone'
+
+  headless-control:
+    summary: Runs the application in headless mode
+    deps:
+      - task: build:headless
+    cmds:
+      - '{{.BIN_DIR}}/{{.APP_NAME}}-headless --mode=control'
+
+  headless-voice:
+    summary: Runs the application in headless mode
+    deps:
+      - task: build:headless
+    cmds:
+      - '{{.BIN_DIR}}/{{.APP_NAME}}-headless --mode=voice'

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/FPGSchiba/vcs-srs-server/control"
 	"github.com/FPGSchiba/vcs-srs-server/events"
+	"github.com/FPGSchiba/vcs-srs-server/rest"
 	"github.com/FPGSchiba/vcs-srs-server/voice"
 	"github.com/gin-gonic/gin"
 	"net/http"
@@ -28,8 +29,8 @@ func (a *VCSApplication) startHTTPServer() {
 	a.AdminState.Unlock()
 
 	go func() {
-		r := gin.Default()
-		// Configure your gin routes and socket.io here
+		gin.SetMode(gin.ReleaseMode)
+		r := rest.GetRouter(a.Logger)
 
 		a.SettingsState.Lock()
 
@@ -50,7 +51,7 @@ func (a *VCSApplication) startHTTPServer() {
 		a.AdminState.HTTPStatus.Error = ""
 		a.AdminState.Unlock()
 
-		a.Logger.Info("HTTP server starting")
+		a.Logger.Info("HTTP server starting", "address", a.httpServer.Addr)
 
 		// Start server
 		if err := a.httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -130,8 +131,7 @@ func (a *VCSApplication) startVoiceServer() {
 	a.StopSignals["voice"] = stopChan
 
 	go func() {
-		voiceServer := voice.NewServer(a.ServerState, a.Logger)
-		a.voiceServer = voiceServer
+		a.voiceServer = voice.NewServer(a.ServerState, a.Logger, a.DistributionState, a.SettingsState)
 
 		// Update status
 		a.AdminState.Lock()
@@ -142,7 +142,7 @@ func (a *VCSApplication) startVoiceServer() {
 		a.SettingsState.Lock()
 		serverHost := fmt.Sprintf("%s:%d", a.SettingsState.Servers.Voice.Host, a.SettingsState.Servers.Voice.Port)
 		a.SettingsState.Unlock()
-		if err := voiceServer.Listen(serverHost, stopChan); err != nil {
+		if err := a.voiceServer.Listen(serverHost, stopChan); err != nil {
 			a.AdminState.Lock()
 			a.AdminState.VoiceStatus.Error = err.Error()
 			a.AdminState.VoiceStatus.IsRunning = false
@@ -197,7 +197,7 @@ func (a *VCSApplication) stopVoiceServer() {
 	})
 }
 
-func (a *VCSApplication) startControlServer() {
+func (a *VCSApplication) startGrpcServer() {
 	a.AdminState.Lock()
 	if a.AdminState.ControlStatus.IsRunning {
 		a.AdminState.Unlock()
@@ -212,7 +212,7 @@ func (a *VCSApplication) startControlServer() {
 	a.StopSignals["control"] = stopChan
 	a.AdminState.Unlock()
 
-	controlServer := control.NewServer(a.ServerState, a.Logger)
+	controlServer := control.NewServer(a.ServerState, a.SettingsState, a.Logger, a.DistributionState, a.eventBus)
 	a.controlServer = controlServer
 
 	a.SettingsState.Lock()

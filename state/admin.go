@@ -11,5 +11,6 @@ type AdminState struct {
 
 type ServiceStatus struct {
 	IsRunning bool
+	IsNeeded  bool
 	Error     string
 }

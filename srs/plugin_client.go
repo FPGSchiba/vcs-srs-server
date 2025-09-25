@@ -1,0 +1,196 @@
+package srs
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/FPGSchiba/vcs-srs-server/state"
+	pb "github.com/FPGSchiba/vcs-srs-server/vcsauthpb"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
+	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
+)
+
+type PluginClient struct {
+	client pb.AuthPluginServiceClient
+	// GetServerState returns the current state of the voice control server.
+	conn             *grpc.ClientConn
+	logger           *slog.Logger
+	settingsState    *state.SettingsState
+	connectionFailed bool
+	address          string
+	pluginName       string
+	stopc            chan struct{}
+	configuration    map[string]string
+}
+
+func NewPluginClient(logger *slog.Logger, settingsState *state.SettingsState, name, address string, configuration map[string]string) *PluginClient {
+	return &PluginClient{
+		logger:        logger,
+		settingsState: settingsState,
+		pluginName:    name,
+		address:       address,
+		configuration: configuration,
+	}
+}
+
+func (v *PluginClient) ConnectPlugin() error {
+	v.logger.Info("Connecting to plugin", "plugin-name", v.pluginName, "address", v.address)
+
+	opts := []grpc.DialOption{
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithConnectParams(grpc.ConnectParams{
+			Backoff: backoff.Config{
+				BaseDelay:  1 * time.Second,
+				Multiplier: 1.6,
+				MaxDelay:   10 * time.Second,
+				Jitter:     0.2,
+			},
+			MinConnectTimeout: 5 * time.Second,
+		}),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                15 * time.Second,
+			Timeout:             10 * time.Second,
+			PermitWithoutStream: true,
+		}),
+	}
+	conn, err := grpc.NewClient(v.address, opts...)
+	if err != nil {
+		return err
+	}
+
+	v.conn = conn
+	client := pb.NewAuthPluginServiceClient(v.conn)
+	v.client = client
+	if err := v.establishConnection(); err != nil {
+		v.logger.Error("Failed to establish connection to Plugin", "plugin-name", v.pluginName, "error", err)
+		v.Close()
+		return err
+	}
+
+	return nil
+}
+
+func (v *PluginClient) establishConnection() error {
+	go func() {
+		lastState := v.conn.GetState()
+		for {
+			if !v.conn.WaitForStateChange(context.Background(), lastState) {
+				return
+			}
+			newState := v.conn.GetState()
+			if newState == connectivity.Idle {
+				v.logger.Warn(fmt.Sprintf("Plugin: '%s' connection idle...", v.pluginName))
+				err := v.settingsState.SetPluginEnabled(v.pluginName, false)
+				if err != nil {
+					return
+				}
+				go v.handleReconnection()
+			}
+			lastState = newState
+		}
+	}()
+
+	return v.configurePlugin()
+}
+
+func (v *PluginClient) handleReconnection() {
+	currentBackoff := 1
+	reconnectionAttempts := 0
+	maxBackoff := 128
+	maxReconnectionAttempts := 20
+	v.logger.Warn("Attempting to reconnect to Plugin Server")
+
+	for {
+		select {
+		case <-v.stopc:
+			return
+		default:
+			if reconnectionAttempts >= maxReconnectionAttempts {
+				v.logger.Error("Max reconnection attempts reached, giving up")
+				v.Close()
+				return
+			}
+			err := v.establishConnection()
+			if err == nil {
+				return
+			}
+			time.Sleep(time.Duration(currentBackoff) * time.Second)
+			if currentBackoff < maxBackoff {
+				currentBackoff *= 2
+			}
+			reconnectionAttempts++
+		}
+	}
+}
+
+func (v *PluginClient) configurePlugin() error {
+	if v.client == nil {
+		return fmt.Errorf("client is not initialized")
+	}
+
+	config := &pb.ConfigureRequest{
+		PluginName: v.pluginName,
+		Settings:   v.configuration,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	resp, err := v.client.Configure(ctx, config)
+	if err != nil {
+		return fmt.Errorf("failed to configure plugin: %w", err)
+	}
+
+	if !resp.Success {
+		return fmt.Errorf("plugin configuration failed: %s", resp.Message)
+	}
+
+	v.logger.Info("Plugin configured successfully", "name", v.pluginName)
+	err = v.settingsState.SetPluginEnabled(v.pluginName, true)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (v *PluginClient) Close() error {
+	if v.stopc != nil {
+		close(v.stopc)
+	}
+	if v.conn != nil {
+		return v.conn.Close()
+	}
+	return nil
+}
+
+func (v *PluginClient) Login(credentials map[string]string) (*pb.ServerLoginResponse, error) {
+	if v.client == nil {
+		return nil, fmt.Errorf("client is not initialized")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	request := &pb.ClientLoginRequest{
+		Credentials: credentials,
+	}
+
+	resp, err := v.client.Login(ctx, request)
+	if err != nil {
+		return nil, fmt.Errorf("failed to login: %w", err)
+	}
+
+	if !resp.Success {
+		if errMsg, ok := resp.LoginResult.(*pb.ServerLoginResponse_ErrorMessage); ok {
+			return nil, fmt.Errorf("%s", errMsg.ErrorMessage)
+		}
+		return nil, fmt.Errorf("login failed: unexpected response type")
+	}
+
+	return resp, nil
+}

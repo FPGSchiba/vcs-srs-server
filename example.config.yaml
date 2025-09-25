@@ -21,3 +21,19 @@ frequencies:
     - 248.22
 general:
   maxRadiosPerUser: 20
+security:
+  enablePluginAuth: false # Enables plugin authentication
+  plugins: [] # a list of security plugins to authenticate against 3rd Party systems, empty by default
+  enableGuestAuth: true
+  token:
+    expiration: 28800 # Token expiration in seconds
+    privateKeyFile: /path/to/ecdsa_key.pem # Will be generated at the location if not present
+    publicKeyFile: /path/to/ecdsa_pubkey.pem # Will be generated at the location if not present
+    issuer: "https://vcs.vngd.net" # Issuer of the token
+    subject: "vcs.vngd.net" # Subject of the token
+voiceControl: # Voice control configuration only needed if distribution is active
+  port: 14448 # Port for voice control
+  remoteHost: localhost # Remote host for voice control (for voice distribution)
+  listenHost: 0.0.0.0 # Host to listen for voice control (for control distribution)
+  certificateFile: /path/to/voicecontrol-cert.pem # Path to the certificate file
+  privateKeyFile: /path/to/voicecontrol-private-key.pem # Path to the private key file

@@ -1,0 +1,232 @@
+syntax = "proto3";
+
+package voicecontrolpb;
+
+option go_package = "github.com/FPGSchiba/vcs-srs-server/voicecontrolpb";
+
+// Service definition for Voice Server <-> Control Server communication
+service VoiceControlService {
+  // Initial registration and reporting
+  rpc RegisterVoiceServer(RegisterVoiceServerRequest) returns (RegisterVoiceServerResponse);
+  rpc SendHeartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  rpc ReportClientConnected(ClientConnectedRequest) returns (ClientConnectedResponse);
+  rpc ReportClientDisconnected(ClientDisconnectedRequest) returns (ClientDisconnectedResponse);
+  rpc ReportFrequencyChange(FrequencyChangeRequest) returns (FrequencyChangeResponse);
+
+  // Stream for control commands (Control -> Voice) with event IDs
+  rpc EstablishStream(stream ControlResponse) returns (stream ControlMessage);
+}
+
+// Messages from Control Server to Voice Server
+message ControlMessage {
+  string server_id = 1;
+  string event_id = 2; // Unique ID for this event
+  oneof command {
+    AssignFrequenciesRequest assign_frequencies = 3;
+    KickClientRequest kick_client = 4;
+    ShutdownRequest shutdown = 5;
+    RebalanceRequest rebalance = 6;
+    UpdateConfigRequest update_config = 7;
+  }
+}
+
+// Response for Control Messages
+message ControlResponse {
+  string server_id = 1;
+  string event_id = 2; // Matches the event_id from ControlMessage
+  bool success = 3;
+  string message = 4;
+  oneof result {
+    AssignFrequenciesResponse assign_frequencies_response = 5;
+    KickClientResponse kick_client_response = 6;
+    ShutdownResponse shutdown_response = 7;
+    RebalanceResponse rebalance_response = 8;
+    UpdateConfigResponse update_config_response = 9;
+  }
+}
+
+// Configuration Updates
+message UpdateConfigRequest {
+  string server_id = 1;
+  map<string, string> config_parameters = 2; // Key-value pairs for config
+}
+
+message UpdateConfigResponse {
+  bool success = 1;
+  string message = 2;
+  map<string, string> applied_parameters = 3; // Parameters that were successfully applied
+  repeated string rejected_parameters = 4; // Parameters that were rejected
+}
+
+// Voice Server Registration
+message RegisterVoiceServerRequest {
+  string server_id = 1;
+  string server_address = 2;
+  int32 udp_port = 3;
+  ServerCapabilities capabilities = 5;
+}
+
+message RegisterVoiceServerResponse {
+  bool success = 1;
+  string message = 2;
+  repeated FrequencyRange assigned_frequencies = 3;
+}
+
+message ServerCapabilities {
+  string version = 1; // Version of the voice server
+}
+
+// Heartbeat
+message HeartbeatRequest {
+  string server_id = 1;
+  ServerStatus status = 2;
+  repeated ClientInfo connected_clients = 3;
+}
+
+message HeartbeatResponse {
+  bool acknowledged = 1;
+  repeated ControlCommand commands = 2;
+}
+
+message ServerStatus {
+  int32 cpu_usage_percent = 1;
+  int32 memory_usage_percent = 2;
+  int32 active_connections = 3;
+  int64 bytes_sent = 4;
+  int64 bytes_received = 5;
+  bool is_healthy = 6;
+}
+
+// Client Connection Events
+message ClientConnectedRequest {
+  string server_id = 1;
+  string client_id = 2;
+  string client_address = 3;
+  int32 client_port = 4;
+  double frequency = 5;
+  int64 connected_at = 6; // Unix timestamp
+}
+
+message ClientConnectedResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message ClientDisconnectedRequest {
+  string server_id = 1;
+  string client_id = 2;
+  DisconnectReason reason = 3;
+  int64 disconnected_at = 4; // Unix timestamp
+}
+
+message ClientDisconnectedResponse {
+  bool acknowledged = 1;
+}
+
+enum DisconnectReason {
+  CLIENT_DISCONNECT = 0;
+  KICKED = 1;
+  TIMEOUT = 2;
+  SERVER_SHUTDOWN = 3;
+  FREQUENCY_REASSIGNMENT = 4;
+}
+
+// Frequency Management
+message FrequencyChangeRequest {
+  string server_id = 1;
+  string client_id = 2;
+  double old_frequency = 3;
+  double new_frequency = 4;
+  int64 changed_at = 5; // Unix timestamp
+}
+
+message FrequencyChangeResponse {
+  bool success = 1;
+  string message = 2;
+  bool requires_server_change = 3;
+  string new_server_id = 4;
+}
+
+message AssignFrequenciesRequest {
+  string server_id = 1;
+  repeated FrequencyRange frequency_ranges = 2;
+}
+
+message AssignFrequenciesResponse {
+  bool success = 1;
+  string message = 2;
+  repeated FrequencyRange accepted_ranges = 3;
+}
+
+// TODO: Make this better with coalitions as well
+message FrequencyRange {
+  double start_frequency = 1;
+  double end_frequency = 2;
+}
+
+// Admin Actions
+message KickClientRequest {
+  string server_id = 1;
+  string client_id = 2;
+  string reason = 3;
+  string admin_id = 4;
+}
+
+message KickClientResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// Server Management
+message ShutdownRequest {
+  string server_id = 1;
+  bool graceful = 2;
+  int32 timeout_seconds = 3;
+}
+
+message ShutdownResponse {
+  bool acknowledged = 1;
+  string message = 2;
+}
+
+message RebalanceRequest {
+  string server_id = 1;
+  repeated FrequencyReassignment reassignments = 2;
+}
+
+message RebalanceResponse {
+  bool success = 1;
+  string message = 2;
+  repeated string affected_clients = 3;
+}
+
+message FrequencyReassignment {
+  double frequency = 1;
+  string from_server_id = 2;
+  string to_server_id = 3;
+  repeated string affected_clients = 4;
+}
+
+// Common Data Types
+message ClientInfo {
+  string client_id = 1;
+  string client_address = 2;
+  int32 client_port = 3;
+  double frequency = 4;
+  int64 connected_at = 5;
+  bool is_transmitting = 6;
+}
+
+message ControlCommand {
+  CommandType type = 1;
+  string target_client_id = 2;
+  map<string, string> parameters = 3;
+}
+
+enum CommandType {
+  NO_COMMAND = 0;
+  KICK_CLIENT = 1;
+  CHANGE_FREQUENCY = 2;
+  UPDATE_CONFIG = 3;
+  SHUTDOWN = 4;
+}

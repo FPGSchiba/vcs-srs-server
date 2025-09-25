@@ -5,6 +5,7 @@ import (
 	"github.com/FPGSchiba/vcs-srs-server/events"
 	"github.com/FPGSchiba/vcs-srs-server/state"
 	"github.com/FPGSchiba/vcs-srs-server/voice"
+	"github.com/google/uuid"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"log/slog"
 	"net/http"
@@ -14,32 +15,41 @@ const Version = "v0.1.0"
 
 // VCSApplication struct
 type VCSApplication struct {
-	ServerState   *state.ServerState
-	SettingsState *state.SettingsState
-	AdminState    *state.AdminState
-	autoStart     bool
-	headlessMode  bool
-	httpServer    *http.Server
-	voiceServer   *voice.Server
-	controlServer *control.Server // Add this
-	StopSignals   map[string]chan struct{}
-	App           *application.App
-	Logger        *slog.Logger // Optional Logger, only used in headless mode
+	ServerState       *state.ServerState
+	SettingsState     *state.SettingsState
+	AdminState        *state.AdminState
+	DistributionState *state.DistributionState
+	autoStart         bool
+	httpServer        *http.Server
+	voiceServer       *voice.Server
+	controlServer     *control.Server // Add this
+	StopSignals       map[string]chan struct{}
+	eventBus          *events.EventBus // Event bus for handling events
+	App               *application.App
+	Logger            *slog.Logger // Optional Logger, only used in headless mode
 }
 
 // New creates a new App application struct
 func New() *VCSApplication {
-	return &VCSApplication{
-		ServerState:   &state.ServerState{},
-		SettingsState: &state.SettingsState{},
-		AdminState:    &state.AdminState{},
-		autoStart:     false,
-		httpServer:    nil,
-		voiceServer:   nil,
-		controlServer: nil, // Initialize control server
-		StopSignals:   make(map[string]chan struct{}),
-		App:           nil,
+	app := &VCSApplication{
+		ServerState:       &state.ServerState{},
+		SettingsState:     &state.SettingsState{},
+		AdminState:        &state.AdminState{},
+		DistributionState: &state.DistributionState{},
+		autoStart:         false,
+		eventBus:          events.NewEventBus(), // Initialize the event bus
+		httpServer:        nil,
+		voiceServer:       nil,
+		controlServer:     nil, // Initialize control server
+		StopSignals:       make(map[string]chan struct{}),
+		App:               nil,
 	}
+	// Subscribe to the notification event to log notifications
+	notChan := app.eventBus.Subscribe(events.NotificationEvent)
+	allChan := app.eventBus.Subscribe("*")
+	go app.handleFrontendEmits(allChan)
+	go app.handleNotificationEvent(notChan)
+	return app
 }
 
 func (a *VCSApplication) StartUp(app *application.App, configFilePath, bannedFilePath string, autoStartServers bool) {
@@ -52,14 +62,17 @@ func (a *VCSApplication) StartUp(app *application.App, configFilePath, bannedFil
 	adminState := &state.AdminState{
 		HTTPStatus: state.ServiceStatus{
 			IsRunning: false,
+			IsNeeded:  true,
 			Error:     "",
 		},
 		VoiceStatus: state.ServiceStatus{
 			IsRunning: false,
+			IsNeeded:  true,
 			Error:     "",
 		},
 		ControlStatus: state.ServiceStatus{
 			IsRunning: false,
+			IsNeeded:  true,
 			Error:     "",
 		},
 	}
@@ -78,25 +91,30 @@ func (a *VCSApplication) StartUp(app *application.App, configFilePath, bannedFil
 	}
 
 	serverState := &state.ServerState{
-		Clients:      make(map[string]*state.ClientState),
-		RadioClients: make(map[string]*state.RadioState),
+		Clients:      make(map[uuid.UUID]*state.ClientState),
+		RadioClients: make(map[uuid.UUID]*state.RadioState),
 		BannedState:  *bannedState,
+	}
+
+	distributionState := &state.DistributionState{
+		DistributionMode: state.DistributionModeStandalone, // Default to Standalone
+		RuntimeMode:      state.RuntimeModeGUI,
 	}
 
 	a.ServerState = serverState
 	a.SettingsState = settingsState
 	a.AdminState = adminState
+	a.DistributionState = distributionState
 	a.autoStart = autoStartServers
 	a.Logger = app.Logger
 	a.App = app
-	a.headlessMode = false
 
 	if autoStartServers {
-		a.StartServer()
+		a.StartStandaloneServer()
 	}
 }
 
-func (a *VCSApplication) HeadlessStartup(logger *slog.Logger, configFilePath, bannedFilePath string) {
+func (a *VCSApplication) HeadlessStartup(logger *slog.Logger, configFilePath, bannedFilePath string, distributionMode uint8) {
 	settingsState, err := state.GetSettingsState(configFilePath)
 	if err != nil {
 		panic(err) // Without settings, we can't run
@@ -105,14 +123,17 @@ func (a *VCSApplication) HeadlessStartup(logger *slog.Logger, configFilePath, ba
 	adminState := &state.AdminState{
 		HTTPStatus: state.ServiceStatus{
 			IsRunning: false,
+			IsNeeded:  distributionMode == state.DistributionModeStandalone || distributionMode == state.DistributionModeControl,
 			Error:     "",
 		},
 		VoiceStatus: state.ServiceStatus{
 			IsRunning: false,
+			IsNeeded:  distributionMode == state.DistributionModeStandalone || distributionMode == state.DistributionModeVoice,
 			Error:     "",
 		},
 		ControlStatus: state.ServiceStatus{
 			IsRunning: false,
+			IsNeeded:  distributionMode == state.DistributionModeStandalone || distributionMode == state.DistributionModeControl,
 			Error:     "",
 		},
 	}
@@ -129,24 +150,39 @@ func (a *VCSApplication) HeadlessStartup(logger *slog.Logger, configFilePath, ba
 	}
 
 	serverState := &state.ServerState{
-		Clients:      make(map[string]*state.ClientState),
-		RadioClients: make(map[string]*state.RadioState),
+		Clients:      make(map[uuid.UUID]*state.ClientState),
+		RadioClients: make(map[uuid.UUID]*state.RadioState),
 		BannedState:  *bannedState,
+	}
+
+	distributionState := &state.DistributionState{
+		DistributionMode: distributionMode,
+		RuntimeMode:      state.RuntimeModeHeadless,
 	}
 
 	a.ServerState = serverState
 	a.SettingsState = settingsState
 	a.AdminState = adminState
+	a.DistributionState = distributionState
 	a.autoStart = true
-	a.headlessMode = true
 	a.Logger = logger
 	a.App = nil // No application context in headless mode
 
-	a.StartServer()
+	switch distributionMode {
+	case state.DistributionModeStandalone:
+		a.StartStandaloneServer()
+		break
+	case state.DistributionModeControl:
+		a.StartControlServer()
+		break
+	case state.DistributionModeVoice:
+		a.StartVoiceServer()
+		break
+	}
 }
 
-// StartServer starts the HTTP and Voice servers
-func (a *VCSApplication) StartServer() {
+// StartStandaloneServer starts the Control, HTTP and Voice servers
+func (a *VCSApplication) StartStandaloneServer() {
 	a.AdminState.Lock()
 	if a.AdminState.HTTPStatus.IsRunning ||
 		a.AdminState.VoiceStatus.IsRunning ||
@@ -156,14 +192,41 @@ func (a *VCSApplication) StartServer() {
 	}
 	a.AdminState.Unlock()
 
-	a.startControlServer()
+	a.startGrpcServer()
 	a.startVoiceServer()
 	a.startHTTPServer()
 
 	return
 }
 
-// StopServer starts the HTTP and Voice servers
+func (a *VCSApplication) StartControlServer() {
+	a.AdminState.Lock()
+	if a.AdminState.ControlStatus.IsRunning {
+		a.AdminState.Unlock()
+		return
+	}
+	a.AdminState.Unlock()
+
+	a.startGrpcServer()
+	a.startHTTPServer()
+
+	return
+}
+
+func (a *VCSApplication) StartVoiceServer() {
+	a.AdminState.Lock()
+	if a.AdminState.VoiceStatus.IsRunning {
+		a.AdminState.Unlock()
+		return
+	}
+	a.AdminState.Unlock()
+
+	a.startVoiceServer()
+
+	return
+}
+
+// StopServer stops the Control, HTTP and Voice servers
 func (a *VCSApplication) StopServer() {
 	a.AdminState.RLock()
 	if !a.AdminState.HTTPStatus.IsRunning &&
@@ -174,14 +237,20 @@ func (a *VCSApplication) StopServer() {
 	}
 	a.AdminState.RUnlock()
 
-	a.stopHTTPServer()
-	a.stopVoiceServer()
-	a.stopControlServer()
+	a.DistributionState.RLock()
+	if a.DistributionState.DistributionMode == state.DistributionModeVoice || a.DistributionState.DistributionMode == state.DistributionModeStandalone {
+		a.stopVoiceServer()
+	}
+	if a.DistributionState.DistributionMode == state.DistributionModeControl || a.DistributionState.DistributionMode == state.DistributionModeStandalone {
+		a.stopHTTPServer()
+		a.stopControlServer()
+	}
+	a.DistributionState.RUnlock()
 
 	return
 }
 
-// GetServerStatus returns the status of the HTTP and Voice servers
+// GetServerStatus returns the status of the Control, HTTP and Voice servers
 func (a *VCSApplication) GetServerStatus() *state.AdminState {
 	a.AdminState.RLock()
 	defer a.AdminState.RUnlock()
@@ -201,7 +270,36 @@ func (a *VCSApplication) Notify(notification events.Notification) {
 }
 
 func (a *VCSApplication) EmitEvent(event events.Event) {
-	if !a.headlessMode { // Only emit events if not in headless mode
-		a.App.EmitEvent(event.Name, event.Data)
+	a.eventBus.Publish(event)
+}
+
+func (a *VCSApplication) handleNotificationEvent(channel chan events.Event) {
+	for event := range channel {
+		if event.Name == events.NotificationEvent {
+			notification, ok := event.Data.(events.Notification)
+			if !ok {
+				a.Logger.Error("Received non-notification event", "event", event)
+				continue
+			}
+			a.Logger.Info("Notification received", "title", notification.Title, "message", notification.Message, "level", notification.Level)
+			a.DistributionState.RLock()
+			if a.DistributionState.RuntimeMode == state.RuntimeModeGUI {
+				a.DistributionState.RUnlock()
+				a.App.EmitEvent(event.Name, notification)
+				continue
+			}
+			a.DistributionState.RUnlock() // In headless mode, just log the notification
+		}
 	}
+}
+
+func (a *VCSApplication) handleFrontendEmits(channel chan events.Event) {
+	a.DistributionState.RLock()
+	if a.DistributionState.RuntimeMode == state.RuntimeModeGUI {
+		a.DistributionState.RUnlock()
+		for event := range channel {
+			a.App.EmitEvent(event.Name, event.Data)
+		}
+	}
+	a.DistributionState.RUnlock() // In headless mode, we don't emit events to the frontend
 }

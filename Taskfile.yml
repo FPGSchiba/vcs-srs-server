@@ -32,3 +32,17 @@ tasks:
     cmds:
       - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
 
+  headless-standalone:
+    summary: Runs the application in headless mode
+    cmds:
+      - task: "{{OS}}:headless-standalone"
+
+  headless-control:
+    summary: Runs the application in headless mode
+    cmds:
+      - task: "{{OS}}:headless-control"
+
+  headless-voice:
+    summary: Runs the application in headless mode
+    cmds:
+      - task: "{{OS}}:headless-voice"

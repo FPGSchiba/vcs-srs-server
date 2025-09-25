@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package vcsauthpb;
+
+option go_package = "github.com/FPGSchiba/vcs-srs-server/vcsauthpb";
+
+service AuthPluginService {
+  // Configure the plugin with settings
+  rpc Configure(ConfigureRequest) returns (ConfigureResponse);
+  // Vanguard login (Using email and password > Connects to Wix backend)
+  rpc Login(ClientLoginRequest) returns (ServerLoginResponse);
+}
+
+message ConfigureRequest {
+  string plugin_name = 1; // Name of the plugin
+  map<string, string> settings = 2; // Map of settings for the plugin
+}
+
+message ConfigureResponse {
+  bool success = 1; // Indicates if the configuration was successful
+  string message = 2; // Optional message for additional information
+  string version = 3; // Version of the plugin
+}
+
+message ClientLoginRequest {
+  map<string, string> credentials = 1; // Map of credentials
+}
+
+message ServerLoginResponse {
+  bool success = 1;
+  oneof login_result {
+    LoginResult result = 2; // Result of the vanguard login
+    string error_message = 3; // Error message if login failed
+  }
+}
+
+message LoginResult {
+  repeated UnitSelection available_units = 1; // List of available unit IDs for the vanguard client
+  repeated uint32 available_roles = 2; // Optional list of roles if the user has permissions to select roles
+  string player_name = 3; // Name of the player after successful login
+}
+
+message UnitSelection {
+  string unit_id = 1; // The selected unit ID
+  string unit_name = 2; // The name of the selected unit
+}
