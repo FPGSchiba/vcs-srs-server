@@ -2,10 +2,11 @@ package state
 
 import (
 	"encoding/json"
-	"github.com/google/uuid"
 	"os"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type ServerState struct {
@@ -94,7 +95,7 @@ func (b *BannedState) Save() error {
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(file, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0777)
+	f, err := os.OpenFile(file, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}

@@ -67,7 +67,7 @@ func LoadCertificateOnly() (*x509.Certificate, error) {
 	}
 	block, _ := pem.Decode(certData)
 	if block == nil {
-		return nil, fmt.Errorf("failed to decode private key PEM")
+		return nil, fmt.Errorf("failed to decode certificate PEM")
 	}
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {

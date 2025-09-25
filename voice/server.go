@@ -18,9 +18,12 @@ import (
 )
 
 const (
-	BufferSize       = 1024                  // UDP buffer size
-	JitterBufferSize = 10                    // Number of packets to buffer
-	PlayoutDelay     = 60 * time.Millisecond // Initial playout delay
+	BufferSize        = 1024                  // UDP buffer size
+	JitterBufferSize  = 10                    // Number of packets to buffer
+	PlayoutDelay      = 60 * time.Millisecond // Initial playout delay
+	minCELTConfig     = 16
+	maxOpusFrameSize  = 11520
+	samplesPerChannel = 960 // 20ms at 48kHz
 )
 
 type Client struct {
@@ -374,7 +377,7 @@ func (v *Server) PlayVoiceData(payload []byte) {
 	}
 	toc := payload[0]
 	config := toc >> 3
-	if config < 16 {
+	if config < minCELTConfig {
 		// Not CELT-only (likely SILK/hybrid). Drop to avoid Pion error.
 		v.logger.Warn("Dropping non-CELT Opus packet", "config", config, "len_payload", len(payload))
 		return
@@ -416,7 +419,7 @@ func (v *Server) PlayVoiceData(payload []byte) {
 	}
 
 	// Decode directly - buffer for up to 60ms stereo @ 48kHz
-	out := make([]byte, 11520)
+	out := make([]byte, maxOpusFrameSize)
 
 	// Serialize opus decoder access and pipe writes; opus.Decoder is not goroutine-safe
 	v.playMu.Lock()
@@ -447,7 +450,7 @@ func (v *Server) PlayVoiceData(payload []byte) {
 	}
 	samplesPerCh := sr / 50 // 20ms
 	if samplesPerCh <= 0 {
-		samplesPerCh = 960
+		samplesPerCh = samplesPerChannel
 	}
 
 	// Calculate actual bytes to use
