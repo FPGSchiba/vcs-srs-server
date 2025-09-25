@@ -49,6 +49,9 @@ func LoadOrGenerateKeyPair() (*tls.Certificate, *rsa.PrivateKey, error) {
 		return nil, nil, err
 	}
 	block, _ := pem.Decode(keyData)
+	if block == nil {
+		return nil, nil, fmt.Errorf("failed to decode private key PEM")
+	}
 	privateKey, err := x509.ParsePKCS1PrivateKey(block.Bytes)
 	if err != nil {
 		return nil, nil, err
