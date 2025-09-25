@@ -7,6 +7,7 @@ tasks:
   build:
     summary: Creates a production build of the application
     deps:
+      - task: common:generate:proto
       - task: common:go:mod:tidy
       - task: common:build:frontend
       - task: common:generate:icons
@@ -73,6 +74,9 @@ tasks:
     summary: Builds the application in headless mode
     cmds:
       - go build {{.BUILD_FLAGS}} -o {{.OUTPUT}} -tags headless
+    deps:
+      - task: common:generate:proto
+      - task: common:go:mod:tidy
     vars:
       BUILD_FLAGS: '{{if eq .PRODUCTION "true"}}-tags production,headless -trimpath -buildvcs=false -ldflags="-w -s"{{else}}-buildvcs=false -gcflags=all="-l"{{end}}'
       DEFAULT_OUTPUT: '{{.BIN_DIR}}/{{.APP_NAME}}-headless'

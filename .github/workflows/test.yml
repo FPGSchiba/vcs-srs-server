@@ -22,14 +22,29 @@ jobs:
       - name: Install dependencies
         uses: ConorMacBride/install-package@v1
         with:
-          apt: gcc libgtk-3-dev libwebkit2gtk-4.1-dev
+          apt: gcc libgtk-3-dev libwebkit2gtk-4.1-dev protobuf-compiler
 
-#      - name: Run tests
-#        run: go test -v -tags headless -coverprofile=coverage.out ./...
+      - name: Install Wails
+        run: go install -v github.com/wailsapp/wails/v3/cmd/wails3@latest
 
-#      - name: Upload coverage to Codecov
-#        uses: codecov/codecov-action@v4
-#        with:
-#          files: coverage.out
-#          fail_ci_if_error: true
-#          token: ${{ secrets.CODECOV_TOKEN }}
+      - name: Install Protoc Plugins
+        run: |
+          go install -v google.golang.org/protobuf/cmd/protoc-gen-go@latest
+          go install -v google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+
+      - name: Generate Protobuf files
+        run: |
+          mkdir -p srspb voicecontrolpb vcsauthpb
+          protoc --go_out=./srspb --go_opt=paths=source_relative --go-grpc_out=./srspb --go-grpc_opt=paths=source_relative srs.proto
+          protoc --go_out=./voicecontrolpb --go_opt=paths=source_relative --go-grpc_out=./voicecontrolpb --go-grpc_opt=paths=source_relative control.proto
+          protoc --go_out=./vcsauthpb --go_opt=paths=source_relative --go-grpc_out=./vcsauthpb --go-grpc_opt=paths=source_relative vcs-auth-plugin.proto
+
+      - name: Run tests
+        run: go test -v -tags headless -coverprofile=coverage.out ./...
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.out
+          fail_ci_if_error: true
+          token: ${{ secrets.CODECOV_TOKEN }}
