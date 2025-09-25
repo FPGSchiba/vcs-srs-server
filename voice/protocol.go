@@ -3,6 +3,7 @@ package voice
 import (
 	"errors"
 	"fmt"
+
 	"github.com/google/uuid"
 )
 
@@ -57,7 +58,7 @@ const (
 	MagicVCS   = "VCS"
 )
 
-func NewVCSHalloAckPacket(clientId uuid.UUID) *VCSPacket {
+func NewVCSHelloAckPacket(clientId uuid.UUID) *VCSPacket {
 	return &VCSPacket{
 		Magic:     [3]byte{'V', 'C', 'S'},
 		Version:   currentVersion,

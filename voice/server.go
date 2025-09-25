@@ -171,7 +171,7 @@ func (v *Server) handleHelloPacket(packet *VCSPacket, addr *net.UDPAddr) {
 		LastSeen: time.Now(),
 	}
 	v.Unlock()
-	ackPacket := NewVCSHalloAckPacket(packet.SenderID)
+	ackPacket := NewVCSHelloAckPacket(packet.SenderID)
 	ackData := ackPacket.SerializePacket()
 	_, err := v.conn.WriteToUDP(ackData, addr)
 	if err != nil {
@@ -236,9 +236,7 @@ func (v *Server) handleGoodbyePacket(packet *VCSPacket) {
 func (v *Server) broadcastVoice(packet *VCSPacket, senderID uuid.UUID) {
 	for _, client := range v.GetListeningClients(packet, senderID) { // Already a lot of logic is done in GetListeningClients
 		go func(addr *net.UDPAddr) {
-			v.Lock()
 			_, err := v.conn.WriteToUDP(packet.SerializePacket(), addr)
-			v.Unlock()
 			v.logger.Debug("Sent packet to client", "sender_id", packet.SenderID, "receiver_addr", addr.String())
 			if err != nil {
 				v.logger.Error("Failed to send voice packet",

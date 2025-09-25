@@ -3,6 +3,11 @@ package srs
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/FPGSchiba/vcs-srs-server/events"
 	pb "github.com/FPGSchiba/vcs-srs-server/srspb"
 	"github.com/FPGSchiba/vcs-srs-server/state"
@@ -12,10 +17,6 @@ import (
 	"github.com/sethvargo/go-diceware/diceware"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/peer"
-	"log/slog"
-	"strings"
-	"sync"
-	"time"
 )
 
 type AuthServer struct {
@@ -190,6 +191,7 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.ClientGuestLogi
 		if utils.HashPassword(coalition.Password) == request.Password {
 			s.mu.Unlock()
 			selectedCoalition = &coalition
+			break
 		}
 	}
 
@@ -475,7 +477,7 @@ func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.ClientUnitSelec
 		Name: events.ClientsChanged,
 		Data: s.serverState.Clients,
 	})
-	
+
 	return &pb.ServerUnitSelectResponse{
 		Success: true,
 		Result:  &pb.ServerUnitSelectResponse_Token{Token: token},

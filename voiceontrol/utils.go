@@ -66,8 +66,8 @@ func LoadCertificateOnly() (*x509.Certificate, error) {
 		return nil, err
 	}
 	block, _ := pem.Decode(certData)
-	if block == nil || block.Type != "CERTIFICATE" {
-		return nil, fmt.Errorf("failed to decode certificate PEM")
+	if block == nil {
+		return nil, fmt.Errorf("failed to decode private key PEM")
 	}
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
@@ -129,7 +129,7 @@ func generateSelfSignedCert() (*tls.Certificate, *rsa.PrivateKey, error) {
 
 func encode(cert *tls.Certificate, privateKey *rsa.PrivateKey) ([]byte, []byte, error) {
 	x509Encoded := x509.MarshalPKCS1PrivateKey(privateKey)
-	pemEncoded := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: x509Encoded})
+	pemEncoded := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509Encoded})
 
 	pemEncodedCert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]})
 

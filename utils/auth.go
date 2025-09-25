@@ -8,9 +8,10 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"github.com/golang-jwt/jwt/v5"
 	"os"
 	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
 var (
@@ -60,9 +61,9 @@ func getKeys(privateKeyFile, publicKeyFile string) (*ecdsa.PrivateKey, *ecdsa.Pu
 }
 
 func generateKey(privateKeyFile, publicKeyFile string) (*ecdsa.PrivateKey, *ecdsa.PublicKey, error) {
-	loadedPublicKey, loadedPrivateKey, err := loadKeyFromFile(privateKeyFile, publicKeyFile)
+	loadedPrivateKey, loadedPublicKey, err := loadKeyFromFile(privateKeyFile, publicKeyFile)
 	if err == nil {
-		return loadedPublicKey, loadedPrivateKey, nil
+		return loadedPrivateKey, loadedPublicKey, nil
 	}
 
 	// If the privateKey files do not exist, generate a new privateKey
