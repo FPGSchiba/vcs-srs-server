@@ -3,6 +3,8 @@ version: '3'
 tasks:
   go:mod:tidy:
     summary: Runs `go mod tidy`
+    deps:
+      - task: generate:proto
     internal: true
     cmds:
       - go mod tidy
