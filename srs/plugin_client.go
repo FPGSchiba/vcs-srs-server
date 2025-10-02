@@ -25,16 +25,17 @@ type PluginClient struct {
 	address          string
 	pluginName       string
 	stopc            chan struct{}
-	configuration    map[string]string
+	configuredFlows  []string
+	config           *state.FlowConfiguration
 }
 
-func NewPluginClient(logger *slog.Logger, settingsState *state.SettingsState, name, address string, configuration map[string]string) *PluginClient {
+func NewPluginClient(logger *slog.Logger, settingsState *state.SettingsState, name, address string, configuration *state.FlowConfiguration) *PluginClient {
 	return &PluginClient{
 		logger:        logger,
 		settingsState: settingsState,
 		pluginName:    name,
 		address:       address,
-		configuration: configuration,
+		config:        configuration,
 	}
 }
 
@@ -94,8 +95,15 @@ func (v *PluginClient) establishConnection() error {
 			lastState = newState
 		}
 	}()
-
-	return v.configurePlugin()
+	err := v.configurePlugin()
+	if err != nil {
+		return err
+	}
+	configurableFlows, err := v.discoverPluginFlows()
+	if err != nil {
+		return err
+	}
+	return v.configureFlows(configurableFlows)
 }
 
 func (v *PluginClient) handleReconnection() {
@@ -134,8 +142,8 @@ func (v *PluginClient) configurePlugin() error {
 	}
 
 	config := &pb.ConfigureRequest{
-		PluginName: v.pluginName,
-		Settings:   v.configuration,
+		PluginName:     v.pluginName,
+		GlobalSettings: *v.config.GlobalSettings,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -158,6 +166,62 @@ func (v *PluginClient) configurePlugin() error {
 	return nil
 }
 
+func (v *PluginClient) discoverPluginFlows() ([]string, error) {
+	if v.client == nil {
+		return nil, fmt.Errorf("client is not initialized")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	request := &pb.FlowDiscoveryRequest{}
+	resp, err := v.client.GetSupportedFlows(ctx, request)
+	if err != nil {
+		return nil, fmt.Errorf("failed to discover flows: %w", err)
+	}
+	v.logger.Info("Discovered plugin flows", "flows", v.configuredFlows)
+	configurableFlows := make([]string, 0, len(resp.Flows))
+	for _, flow := range resp.Flows {
+		configurableFlows = append(configurableFlows, flow.FlowId)
+	}
+
+	return configurableFlows, nil
+}
+
+func (v *PluginClient) configureFlows(configurableFlows []string) error {
+	flowSet := make(map[string]struct{}, len(configurableFlows))
+	for _, f := range configurableFlows {
+		flowSet[f] = struct{}{}
+	}
+	if v.client == nil {
+		return fmt.Errorf("client is not initialized")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, flow := range v.config.Flows {
+		if _, ok := flowSet[flow.FlowID]; ok {
+			v.logger.Info("Configuring flow", "flow-id", flow.FlowID)
+
+			request := &pb.ConfigureFlowRequest{
+				FlowId:   flow.FlowID,
+				Settings: flow.Configuration,
+			}
+			resp, err := v.client.ConfigureFlow(ctx, request)
+			if err != nil {
+				return fmt.Errorf("failed to configure flow %s: %w", flow.FlowID, err)
+			}
+			if !resp.Success {
+				return fmt.Errorf("flow configuration failed for %s: %s", flow.FlowID, resp.Message)
+			}
+			v.logger.Info("Flow configured successfully", "flow-id", flow.FlowID)
+
+			v.configuredFlows = append(v.configuredFlows, flow.FlowID)
+		}
+	}
+
+	return nil
+}
+
 func (v *PluginClient) Close() error {
 	if v.stopc != nil {
 		close(v.stopc)
@@ -168,29 +232,40 @@ func (v *PluginClient) Close() error {
 	return nil
 }
 
-func (v *PluginClient) Login(credentials map[string]string) (*pb.ServerLoginResponse, error) {
+func (v *PluginClient) StartAuth(flowID string, firstStepInput map[string]string) (*pb.AuthStepResponse, error) {
 	if v.client == nil {
 		return nil, fmt.Errorf("client is not initialized")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	request := &pb.ClientLoginRequest{
-		Credentials: credentials,
+	request := &pb.StartAuthRequest{
+		FlowId:         flowID,
+		FirstStepInput: firstStepInput,
 	}
-
-	resp, err := v.client.Login(ctx, request)
+	resp, err := v.client.StartAuth(ctx, request)
 	if err != nil {
-		return nil, fmt.Errorf("failed to login: %w", err)
+		return nil, fmt.Errorf("failed to start auth: %w", err)
+	}
+	return resp, nil
+}
+
+func (v *PluginClient) ContinueAuth(sessionID string, stepInput map[string]string) (*pb.AuthStepResponse, error) {
+	if v.client == nil {
+		return nil, fmt.Errorf("client is not initialized")
 	}
 
-	if !resp.Success {
-		if errMsg, ok := resp.LoginResult.(*pb.ServerLoginResponse_ErrorMessage); ok {
-			return nil, fmt.Errorf("%s", errMsg.ErrorMessage)
-		}
-		return nil, fmt.Errorf("login failed: unexpected response type")
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
+	request := &pb.ContinueAuthRequest{
+		SessionId: sessionID,
+		StepData:  stepInput,
+	}
+	resp, err := v.client.ContinueAuth(ctx, request)
+	if err != nil {
+		return nil, fmt.Errorf("failed to continue auth: %w", err)
+	}
 	return resp, nil
 }

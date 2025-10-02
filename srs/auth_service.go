@@ -55,10 +55,10 @@ func NewAuthServer(serverState *state.ServerState, settingsState *state.Settings
 func initializePluginClients(settingsState *state.SettingsState, logger *slog.Logger) map[string]*PluginClient {
 	pluginClients := make(map[string]*PluginClient)
 	for _, plugin := range settingsState.GetAllPluginNames() {
-		var configuration map[string]string
+		var conf *state.FlowConfiguration
 		var address string
 		var ok bool
-		if configuration, ok = settingsState.GetPluginConfiguration(plugin); !ok || configuration == nil {
+		if conf, ok = settingsState.GetPluginConfiguration(plugin); !ok || conf == nil {
 			logger.Warn("Plugin configuration not found or empty", "name", plugin)
 			continue
 		}
@@ -66,7 +66,7 @@ func initializePluginClients(settingsState *state.SettingsState, logger *slog.Lo
 			logger.Warn("Plugin address not found or empty", "name", plugin)
 			continue
 		}
-		client := NewPluginClient(logger, settingsState, plugin, address, configuration)
+		client := NewPluginClient(logger, settingsState, plugin, address, conf)
 		if err := client.ConnectPlugin(); err != nil {
 			logger.Error("Failed to connect to plugin", "name", plugin, "error", err)
 			err := settingsState.SetPluginEnabled(plugin, false)

@@ -60,10 +60,20 @@ type SecuritySettings struct {
 }
 
 type PluginSettings struct {
-	Name          string            `yaml:"name"`
-	Enabled       bool              `yaml:"enabled"`
-	Address       string            `yaml:"address"`
-	Configuration map[string]string `yaml:"configuration"` // Generic configuration for the plugin
+	Name           string            `yaml:"name"`
+	Enabled        bool              `yaml:"enabled"`
+	Address        string            `yaml:"address"`
+	Configurations FlowConfiguration `yaml:"configurations"`
+}
+
+type FlowConfiguration struct {
+	Flows          []PluginFlowSettings `yaml:"flows"`
+	GlobalSettings *map[string]string   `yaml:"globalSettings"`
+}
+
+type PluginFlowSettings struct {
+	FlowID        string            `yaml:"flowId"`
+	Configuration map[string]string `yaml:"configuration"`
 }
 
 type TokenSettings struct {
@@ -181,12 +191,12 @@ func (s *SettingsState) GetAllPluginNames() []string {
 	return pluginNames
 }
 
-func (s *SettingsState) GetPluginConfiguration(pluginName string) (map[string]string, bool) {
+func (s *SettingsState) GetPluginConfiguration(pluginName string) (*FlowConfiguration, bool) {
 	s.RLock()
 	defer s.RUnlock()
 	for _, plugin := range s.Security.Plugins {
 		if plugin.Name == pluginName {
-			return plugin.Configuration, true
+			return &plugin.Configurations, true
 		}
 	}
 	return nil, false
