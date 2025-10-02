@@ -22,7 +22,7 @@ jobs:
       - name: Install dependencies
         uses: ConorMacBride/install-package@v1
         with:
-          apt: gcc libgtk-3-dev libwebkit2gtk-4.1-dev protobuf-compiler
+          apt: gcc libgtk-3-dev libwebkit2gtk-4.1-dev protobuf-compiler libasound2-dev
 
       - name: Install Wails
         run: go install -v github.com/wailsapp/wails/v3/cmd/wails3@latest
