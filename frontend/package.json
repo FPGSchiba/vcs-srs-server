@@ -15,7 +15,7 @@
     "@mui/icons-material": "^7.3.2",
     "@mui/lab": "^7.0.0-beta.17",
     "@mui/material": "^7.1.2",
-    "@wailsio/runtime": "^3.0.0-alpha.66",
+    "@wailsio/runtime": "^3.0.0-alpha.72",
     "mui-color-input": "^7.0.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
