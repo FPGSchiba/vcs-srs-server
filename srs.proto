@@ -108,10 +108,11 @@ message ClientContinueAuthRequest {
 
 message ServerAuthStepResponse {
   bool success = 1;
+  string session_id = 2;                     // Session ID to track flow state
   oneof result {
-    NextStepRequired next_step = 2;          // More steps needed
-    LoginResult complete = 3;                // Final login result
-    string error_message = 4;                // Authentication failed
+    NextStepRequired next_step = 3;          // More steps needed
+    LoginResult complete = 4;                // Final login result
+    string error_message = 5;                // Authentication failed
   }
 }
 

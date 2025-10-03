@@ -37,6 +37,8 @@ type AuthenticatingClient struct {
 	Expires        time.Time
 	AvailableRoles []uint8
 	AvailableUnits []*pb.UnitSelection
+	SessionId      string
+	PluginUsed     string
 }
 
 func NewAuthServer(serverState *state.ServerState, settingsState *state.SettingsState, logger *slog.Logger, distributionState *state.DistributionState, eventBus *events.EventBus) *AuthServer {
@@ -254,7 +256,7 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.ClientGuestLogi
 	}, nil
 }
 
-func (s *AuthServer) Login(ctx context.Context, request *pb.ClientLoginRequest) (*pb.ServerLoginResponse, error) {
+func (s *AuthServer) StartAuth(ctx context.Context, request *pb.ClientStartAuthRequest) (*pb.ServerAuthStepResponse, error) {
 	p, _ := peer.FromContext(ctx)
 	s.logger.Debug("Getting 3rd Party Plugin Login", "IP", p.Addr.String(), "plugin-name", request.AuthenticationPlugin)
 
@@ -262,9 +264,10 @@ func (s *AuthServer) Login(ctx context.Context, request *pb.ClientLoginRequest) 
 	s.settingsState.RLock()
 	if !s.settingsState.Security.EnablePluginAuth {
 		s.settingsState.RUnlock()
-		return &pb.ServerLoginResponse{
-			Success:     false,
-			LoginResult: &pb.ServerLoginResponse_ErrorMessage{ErrorMessage: "Plugin login is disabled"},
+		return &pb.ServerAuthStepResponse{
+			Success:   false,
+			SessionId: "",
+			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: "Plugin login is disabled"},
 		}, nil
 	}
 	s.settingsState.RUnlock()
@@ -275,17 +278,19 @@ func (s *AuthServer) Login(ctx context.Context, request *pb.ClientLoginRequest) 
 	clientGuid, err := uuid.Parse(request.ClientGuid)
 	if err != nil {
 		s.logger.Error("Failed to parse ClientGuid", "ClientGuid", request.ClientGuid, "Error", err)
-		return &pb.ServerLoginResponse{
-			Success:     false,
-			LoginResult: &pb.ServerLoginResponse_ErrorMessage{ErrorMessage: "Invalid ClientGuid"},
+		return &pb.ServerAuthStepResponse{
+			Success:   false,
+			SessionId: "",
+			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: "Invalid ClientGuid"},
 		}, err
 	}
 	s.mu.RLock()
 	if _, ok := s.authenticatingClients[clientGuid]; !ok {
 		s.mu.RUnlock()
-		return &pb.ServerLoginResponse{
-			Success:     false,
-			LoginResult: &pb.ServerLoginResponse_ErrorMessage{ErrorMessage: "ClientGuid not found, please initialize first"},
+		return &pb.ServerAuthStepResponse{
+			Success:   false,
+			SessionId: "",
+			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: "ClientGuid not found, please initialize first"},
 		}, nil
 	}
 	s.mu.RUnlock()
@@ -296,39 +301,73 @@ func (s *AuthServer) Login(ctx context.Context, request *pb.ClientLoginRequest) 
 	if !ok {
 		s.mu.RUnlock()
 		s.logger.Warn("Plugin not found", "PluginName", request.AuthenticationPlugin)
-		return &pb.ServerLoginResponse{
-			Success:     false,
-			LoginResult: &pb.ServerLoginResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("Plugin %s not found", request.AuthenticationPlugin)},
+		return &pb.ServerAuthStepResponse{
+			Success:   false,
+			SessionId: "",
+			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("Plugin %s not found", request.AuthenticationPlugin)},
 		}, nil
 	}
 	s.mu.RUnlock()
 
 	// Call the plugin's login method
 	// This will return an error if the login fails
-	loginResponse, err := pluginClient.Login(request.Credentials)
+	loginResponse, err := pluginClient.StartAuth(request.FlowId, request.FirstStepInput)
 	if err != nil {
 		s.logger.Error("Plugin Login failed", "plugin-name", request.AuthenticationPlugin, "Error", err)
-		return &pb.ServerLoginResponse{
-			Success:     false,
-			LoginResult: &pb.ServerLoginResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("Login failed: %s", err.Error())},
+		return &pb.ServerAuthStepResponse{
+			Success:   false,
+			SessionId: "",
+			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("Login failed: %s", err.Error())},
 		}, nil
 	}
 
+	switch loginResponse.GetStatus() {
+	case authpb.AuthStepStatus_AUTH_CONTINUE:
+		s.mu.RLock()
+		s.authenticatingClients[clientGuid].PluginUsed = request.AuthenticationPlugin
+		s.authenticatingClients[clientGuid].SessionId = loginResponse.SessionId
+		s.mu.RUnlock()
+		return handleAuthContinue(loginResponse)
+	case authpb.AuthStepStatus_AUTH_FAILED:
+		errMsg := loginResponse.StepResult.(*authpb.AuthStepResponse_ErrorMessage)
+		s.logger.Warn("Plugin Login failed", "plugin-name", request.AuthenticationPlugin, "Error", errMsg.ErrorMessage)
+		s.mu.Lock()
+		delete(s.authenticatingClients, clientGuid)
+		s.mu.Unlock()
+		return &pb.ServerAuthStepResponse{
+			Success:   false,
+			SessionId: loginResponse.SessionId,
+			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("Login failed: %s", errMsg.ErrorMessage)},
+		}, nil
+	case authpb.AuthStepStatus_AUTH_COMPLETE:
+		return s.handleAuthComplete(clientGuid, loginResponse)
+	default:
+		s.logger.Error("Plugin returned unknown status", "plugin-name", request.AuthenticationPlugin, "Status", loginResponse.GetStatus())
+		return &pb.ServerAuthStepResponse{
+			Success:   false,
+			SessionId: loginResponse.SessionId,
+			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: "Plugin returned unknown status"},
+		}, nil
+	}
+}
+
+func (s *AuthServer) handleAuthComplete(clientGuid uuid.UUID, response *authpb.AuthStepResponse) (*pb.ServerAuthStepResponse, error) {
 	clientSecret, err := diceware.Generate(5)
 	if err != nil {
 		s.logger.Error("Failed to generate client secret", "Error", err)
-		return &pb.ServerLoginResponse{
-			Success:     false,
-			LoginResult: &pb.ServerLoginResponse_ErrorMessage{ErrorMessage: "Failed to generate client secret"},
+		return &pb.ServerAuthStepResponse{
+			Success: false,
+			Result:  &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: "Failed to generate client secret"},
 		}, nil
 	}
-	result := loginResponse.LoginResult.(*authpb.ServerLoginResponse_Result)
+
+	result := response.StepResult.(*authpb.AuthStepResponse_Complete).Complete
 	var availableRoles []uint8
-	for _, role := range result.Result.AvailableRoles {
+	for _, role := range result.AvailableRoles {
 		availableRoles = append(availableRoles, uint8(role))
 	}
 	var availableUnits []*pb.UnitSelection
-	for _, unit := range result.Result.AvailableUnits {
+	for _, unit := range result.AvailableUnits {
 		availableUnits = append(availableUnits, &pb.UnitSelection{
 			UnitId:   unit.UnitId,
 			UnitName: unit.UnitName,
@@ -336,7 +375,7 @@ func (s *AuthServer) Login(ctx context.Context, request *pb.ClientLoginRequest) 
 	}
 	s.mu.Lock()
 	s.authenticatingClients[clientGuid] = &AuthenticatingClient{
-		Name:           result.Result.PlayerName,
+		Name:           result.PlayerName,
 		Secret:         strings.Join(clientSecret, "-"),
 		Expires:        time.Now().Add(5 * time.Minute),
 		AvailableRoles: availableRoles,
@@ -356,25 +395,163 @@ func (s *AuthServer) Login(ctx context.Context, request *pb.ClientLoginRequest) 
 	s.settingsState.RUnlock()
 
 	var builtRoles []*pb.RoleSelection
-	for _, role := range result.Result.AvailableRoles {
+	for _, role := range result.AvailableRoles {
 		builtRoles = append(builtRoles, &pb.RoleSelection{
 			Id:   role,
 			Name: utils.SrsRoleNameMap[uint8(role)],
 		})
 	}
 
-	return &pb.ServerLoginResponse{
-		Success: true,
-		LoginResult: &pb.ServerLoginResponse_Result{
-			Result: &pb.LoginResult{
+	return &pb.ServerAuthStepResponse{
+		Success:   true,
+		SessionId: response.SessionId,
+		Result: &pb.ServerAuthStepResponse_Complete{
+			Complete: &pb.LoginResult{
 				Secret:              strings.Join(clientSecret, "-"),
 				AvailableRoles:      builtRoles,
 				AvailableUnits:      availableUnits,
 				AvailableCoalitions: availableCoalitions,
-				PlayerName:          result.Result.PlayerName,
+				PlayerName:          result.PlayerName,
 			},
 		},
 	}, nil
+}
+
+func handleAuthContinue(response *authpb.AuthStepResponse) (*pb.ServerAuthStepResponse, error) {
+	return transformAuthStepResponse(response), nil
+}
+
+func transformAuthStepResponse(response *authpb.AuthStepResponse) *pb.ServerAuthStepResponse {
+	if response.GetStatus() == authpb.AuthStepStatus_AUTH_CONTINUE {
+		return &pb.ServerAuthStepResponse{
+			Success:   true,
+			SessionId: response.SessionId,
+			Result: &pb.ServerAuthStepResponse_NextStep{
+				NextStep: &pb.NextStepRequired{
+					StepId:          response.GetNextStep().GetStepId(),
+					StepName:        response.GetNextStep().GetStepName(),
+					StepDescription: response.GetNextStep().GetStepDescription(),
+					RequiredFields:  transformFieldDefinitions(response.GetNextStep().GetRequiredFields()),
+					Metadata:        response.GetNextStep().GetMetadata(),
+				},
+			},
+		}
+	} else {
+		return nil // Ignore all other cases
+	}
+}
+
+func transformFieldDefinitions(fields []*authpb.FieldDefinition) []*pb.FieldDefinition {
+	var transformedFields []*pb.FieldDefinition
+	for _, field := range fields {
+		transformedFields = append(transformedFields, &pb.FieldDefinition{
+			FieldId:         field.Key,
+			Label:           field.Label,
+			Description:     field.Description,
+			Type:            field.Type,
+			Required:        field.Required,
+			DefaultValue:    field.DefaultValue,
+			ValidationRegex: field.ValidationRegex,
+		})
+	}
+	return transformedFields
+}
+
+func (s *AuthServer) ContinueAuth(ctx context.Context, request *pb.ClientContinueAuthRequest) (*pb.ServerAuthStepResponse, error) {
+	p, _ := peer.FromContext(ctx)
+	s.logger.Debug("Continuing 3rd Party Plugin Login", "IP", p.Addr.String(), "SessionId", request.SessionId)
+
+	// Check if This auth type is enabled
+	s.settingsState.RLock()
+	if !s.settingsState.Security.EnablePluginAuth {
+		s.settingsState.RUnlock()
+		return &pb.ServerAuthStepResponse{
+			Success:   false,
+			SessionId: "",
+			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: "Plugin login is disabled"},
+		}, nil
+	}
+	s.settingsState.RUnlock()
+
+	s.removeExpiredAuthenticatingClients()
+	// Check if client is initialized
+	clientGuid, err := uuid.Parse(request.ClientGuid)
+	if err != nil {
+		s.logger.Error("Failed to parse ClientGuid", "ClientGuid", request.ClientGuid, "Error", err)
+		return &pb.ServerAuthStepResponse{
+			Success:   false,
+			SessionId: "",
+			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: "Invalid ClientGuid"},
+		}, err
+	}
+	s.mu.RLock()
+	authenticatedClient, ok := s.authenticatingClients[clientGuid]
+	if !ok {
+		s.mu.RUnlock()
+		return &pb.ServerAuthStepResponse{
+			Success:   false,
+			SessionId: "",
+			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: "ClientGuid not found, please initialize first"},
+		}, nil
+	}
+	s.mu.RUnlock()
+	if authenticatedClient.SessionId != request.SessionId {
+		return &pb.ServerAuthStepResponse{
+			Success:   false,
+			SessionId: "",
+			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: "SessionId does not match, please start authentication again"},
+		}, nil
+	}
+
+	// Check if the plugin is available
+	s.mu.RLock()
+	pluginClient, ok := s.pluginClients[authenticatedClient.PluginUsed]
+	if !ok {
+		s.mu.RUnlock()
+		s.logger.Warn("Plugin not found", "PluginName", authenticatedClient.PluginUsed)
+		return &pb.ServerAuthStepResponse{
+			Success:   false,
+			SessionId: "",
+			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("Plugin %s not found", authenticatedClient.PluginUsed)},
+		}, nil
+	}
+	s.mu.RUnlock()
+
+	// Call the plugin's continue method
+	loginResponse, err := pluginClient.ContinueAuth(request.SessionId, request.StepData)
+	if err != nil {
+		s.logger.Error("Plugin ContinueAuth failed", "plugin-name", authenticatedClient.PluginUsed, "Error", err)
+		return &pb.ServerAuthStepResponse{
+			Success:   false,
+			SessionId: "",
+			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("ContinueAuth failed: %s", err.Error())},
+		}, nil
+	}
+
+	switch loginResponse.GetStatus() {
+	case authpb.AuthStepStatus_AUTH_CONTINUE:
+		return handleAuthContinue(loginResponse)
+	case authpb.AuthStepStatus_AUTH_FAILED:
+		errMsg := loginResponse.StepResult.(*authpb.AuthStepResponse_ErrorMessage)
+		s.logger.Warn("Plugin ContinueAuth failed", "plugin-name", authenticatedClient.PluginUsed, "Error", errMsg.ErrorMessage)
+		s.mu.Lock()
+		delete(s.authenticatingClients, clientGuid)
+		s.mu.Unlock()
+		return &pb.ServerAuthStepResponse{
+			Success:   false,
+			SessionId: loginResponse.SessionId,
+			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("ContinueAuth failed: %s", errMsg.ErrorMessage)},
+		}, nil
+	case authpb.AuthStepStatus_AUTH_COMPLETE:
+		return s.handleAuthComplete(clientGuid, loginResponse)
+	default:
+		s.logger.Error("Plugin returned unknown status", "plugin-name", authenticatedClient.PluginUsed, "Status", loginResponse.GetStatus())
+		return &pb.ServerAuthStepResponse{
+			Success:   false,
+			SessionId: loginResponse.SessionId,
+			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: "Plugin returned unknown status"},
+		}, nil
+	}
 }
 
 func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.ClientUnitSelectRequest) (*pb.ServerUnitSelectResponse, error) {
