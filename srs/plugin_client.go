@@ -59,11 +59,13 @@ func (v *PluginClient) ConnectPlugin() error {
 			PermitWithoutStream: true,
 		}),
 	}
+
 	conn, err := grpc.NewClient(v.address, opts...)
-	if err != nil {
+	if err != nil || conn == nil {
+		v.logger.Error("Failed to connect to Plugin", "plugin-name", v.pluginName, "error", err)
+		_ = v.settingsState.SetPluginEnabled(v.pluginName, false)
 		return err
 	}
-
 	v.conn = conn
 	client := pb.NewAuthPluginServiceClient(v.conn)
 	v.client = client
@@ -72,7 +74,6 @@ func (v *PluginClient) ConnectPlugin() error {
 		v.Close()
 		return err
 	}
-
 	return nil
 }
 
@@ -95,6 +96,7 @@ func (v *PluginClient) establishConnection() error {
 			lastState = newState
 		}
 	}()
+
 	err := v.configurePlugin()
 	if err != nil {
 		return err
@@ -137,13 +139,21 @@ func (v *PluginClient) handleReconnection() {
 }
 
 func (v *PluginClient) configurePlugin() error {
+	v.logger.Info("Configuring plugin", "plugin-name", v.pluginName)
 	if v.client == nil {
 		return fmt.Errorf("client is not initialized")
 	}
 
+	var globalSettings map[string]string
+	if v.config != nil && v.config.GlobalSettings != nil {
+		globalSettings = *v.config.GlobalSettings
+	} else {
+		globalSettings = nil // No global settings provided
+	}
+
 	config := &pb.ConfigureRequest{
 		PluginName:     v.pluginName,
-		GlobalSettings: *v.config.GlobalSettings,
+		GlobalSettings: globalSettings,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

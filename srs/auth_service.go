@@ -331,9 +331,6 @@ func (s *AuthServer) StartAuth(ctx context.Context, request *pb.ClientStartAuthR
 	case authpb.AuthStepStatus_AUTH_FAILED:
 		errMsg := loginResponse.StepResult.(*authpb.AuthStepResponse_ErrorMessage)
 		s.logger.Warn("Plugin Login failed", "plugin-name", request.AuthenticationPlugin, "Error", errMsg.ErrorMessage)
-		s.mu.Lock()
-		delete(s.authenticatingClients, clientGuid)
-		s.mu.Unlock()
 		return &pb.ServerAuthStepResponse{
 			Success:   false,
 			SessionId: loginResponse.SessionId,
@@ -534,9 +531,6 @@ func (s *AuthServer) ContinueAuth(ctx context.Context, request *pb.ClientContinu
 	case authpb.AuthStepStatus_AUTH_FAILED:
 		errMsg := loginResponse.StepResult.(*authpb.AuthStepResponse_ErrorMessage)
 		s.logger.Warn("Plugin ContinueAuth failed", "plugin-name", authenticatedClient.PluginUsed, "Error", errMsg.ErrorMessage)
-		s.mu.Lock()
-		delete(s.authenticatingClients, clientGuid)
-		s.mu.Unlock()
 		return &pb.ServerAuthStepResponse{
 			Success:   false,
 			SessionId: loginResponse.SessionId,
