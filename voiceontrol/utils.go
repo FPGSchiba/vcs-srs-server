@@ -49,6 +49,9 @@ func LoadOrGenerateKeyPair() (*tls.Certificate, *rsa.PrivateKey, error) {
 		return nil, nil, err
 	}
 	block, _ := pem.Decode(keyData)
+	if block == nil {
+		return nil, nil, fmt.Errorf("failed to decode private key PEM")
+	}
 	privateKey, err := x509.ParsePKCS1PrivateKey(block.Bytes)
 	if err != nil {
 		return nil, nil, err
@@ -63,7 +66,7 @@ func LoadCertificateOnly() (*x509.Certificate, error) {
 		return nil, err
 	}
 	block, _ := pem.Decode(certData)
-	if block == nil || block.Type != "CERTIFICATE" {
+	if block == nil {
 		return nil, fmt.Errorf("failed to decode certificate PEM")
 	}
 	cert, err := x509.ParseCertificate(block.Bytes)
@@ -126,28 +129,9 @@ func generateSelfSignedCert() (*tls.Certificate, *rsa.PrivateKey, error) {
 
 func encode(cert *tls.Certificate, privateKey *rsa.PrivateKey) ([]byte, []byte, error) {
 	x509Encoded := x509.MarshalPKCS1PrivateKey(privateKey)
-	pemEncoded := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: x509Encoded})
+	pemEncoded := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509Encoded})
 
 	pemEncodedCert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]})
 
 	return pemEncoded, pemEncodedCert, nil
-}
-
-func decode(pemEncoded string, pemEncodedPub string) (*rsa.PrivateKey, *rsa.PublicKey, error) {
-	block, _ := pem.Decode([]byte(pemEncoded))
-	x509Encoded := block.Bytes
-	privateKey, err := x509.ParsePKCS1PrivateKey(x509Encoded)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	blockPub, _ := pem.Decode([]byte(pemEncodedPub))
-	x509EncodedPub := blockPub.Bytes
-	genericPublicKey, err := x509.ParsePKIXPublicKey(x509EncodedPub)
-	if err != nil {
-		return nil, nil, err
-	}
-	publicKey := genericPublicKey.(*rsa.PublicKey)
-
-	return privateKey, publicKey, nil
 }

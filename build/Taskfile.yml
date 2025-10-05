@@ -3,6 +3,8 @@ version: '3'
 tasks:
   go:mod:tidy:
     summary: Runs `go mod tidy`
+    deps:
+      - task: generate:proto
     internal: true
     cmds:
       - go mod tidy
@@ -37,7 +39,6 @@ tasks:
       PRODUCTION: '{{.PRODUCTION | default "false"}}'
     vars:
       BUILD_COMMAND: '{{if eq .PRODUCTION "true"}}build{{else}}build:dev{{end}}'
-
 
   generate:bindings:
     summary: Generates bindings for the frontend
@@ -76,3 +77,27 @@ tasks:
     dir: build
     cmds:
       - wails3 update build-assets -name "{{.APP_NAME}}" -binaryname "{{.APP_NAME}}" -config config.yml -dir .
+
+  generate:proto:
+    summary: Builds the SRS protobuf files
+    sources:
+      - "*.proto"
+    generates:
+      - "./srspb/srs.pb.go"
+      - "./srspb/srs_grpc.pb.go"
+      - "./voicecontrolpb/voicecontrol.pb.go"
+      - "./voicecontrolpb/voicecontrol_grpc.pb.go"
+      - "./vcsauthpb/vcsauth.pb.go"
+      - "./vcsauthpb/vcsauth_grpc.pb.go"
+    preconditions:
+      - sh: protoc --version
+        msg: "Looks like protoc isn't installed. Please install it from https://grpc.io/docs/protoc-installation/"
+      - sh: which protoc-gen-go
+        msg: "Looks like protoc-gen-go isn't installed. Please install it with 'go install google.golang.org/protobuf/cmd/protoc-gen-go@latest'"
+      - sh: which protoc-gen-go-grpc
+        msg: "Looks like protoc-gen-go-grpc isn't installed. Please install it with 'go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest'"
+    cmds:
+      - mkdir -p srspb voicecontrolpb vcsauthpb
+      - protoc --go_out=./srspb --go_opt=paths=source_relative --go-grpc_out=./srspb --go-grpc_opt=paths=source_relative srs.proto
+      - protoc --go_out=./voicecontrolpb --go_opt=paths=source_relative --go-grpc_out=./voicecontrolpb --go-grpc_opt=paths=source_relative control.proto
+      - protoc --go_out=./vcsauthpb --go_opt=paths=source_relative --go-grpc_out=./vcsauthpb --go-grpc_opt=paths=source_relative vcs-auth-plugin.proto

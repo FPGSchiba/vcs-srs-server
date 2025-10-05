@@ -10,3 +10,4 @@ bin/
 .task/
 *.pb.go
 *.pem
+coverage.out

@@ -18,9 +18,12 @@ import (
 )
 
 const (
-	BufferSize       = 1024                  // UDP buffer size
-	JitterBufferSize = 10                    // Number of packets to buffer
-	PlayoutDelay     = 60 * time.Millisecond // Initial playout delay
+	BufferSize        = 1024                  // UDP buffer size
+	JitterBufferSize  = 10                    // Number of packets to buffer
+	PlayoutDelay      = 60 * time.Millisecond // Initial playout delay
+	minCELTConfig     = 16
+	maxOpusFrameSize  = 11520
+	samplesPerChannel = 960 // 20ms at 48kHz
 )
 
 type Client struct {
@@ -171,7 +174,7 @@ func (v *Server) handleHelloPacket(packet *VCSPacket, addr *net.UDPAddr) {
 		LastSeen: time.Now(),
 	}
 	v.Unlock()
-	ackPacket := NewVCSHalloAckPacket(packet.SenderID)
+	ackPacket := NewVCSHelloAckPacket(packet.SenderID)
 	ackData := ackPacket.SerializePacket()
 	_, err := v.conn.WriteToUDP(ackData, addr)
 	if err != nil {
@@ -236,9 +239,7 @@ func (v *Server) handleGoodbyePacket(packet *VCSPacket) {
 func (v *Server) broadcastVoice(packet *VCSPacket, senderID uuid.UUID) {
 	for _, client := range v.GetListeningClients(packet, senderID) { // Already a lot of logic is done in GetListeningClients
 		go func(addr *net.UDPAddr) {
-			v.Lock()
 			_, err := v.conn.WriteToUDP(packet.SerializePacket(), addr)
-			v.Unlock()
 			v.logger.Debug("Sent packet to client", "sender_id", packet.SenderID, "receiver_addr", addr.String())
 			if err != nil {
 				v.logger.Error("Failed to send voice packet",
@@ -376,7 +377,7 @@ func (v *Server) PlayVoiceData(payload []byte) {
 	}
 	toc := payload[0]
 	config := toc >> 3
-	if config < 16 {
+	if config < minCELTConfig {
 		// Not CELT-only (likely SILK/hybrid). Drop to avoid Pion error.
 		v.logger.Warn("Dropping non-CELT Opus packet", "config", config, "len_payload", len(payload))
 		return
@@ -418,7 +419,7 @@ func (v *Server) PlayVoiceData(payload []byte) {
 	}
 
 	// Decode directly - buffer for up to 60ms stereo @ 48kHz
-	out := make([]byte, 11520)
+	out := make([]byte, maxOpusFrameSize)
 
 	// Serialize opus decoder access and pipe writes; opus.Decoder is not goroutine-safe
 	v.playMu.Lock()
@@ -449,7 +450,7 @@ func (v *Server) PlayVoiceData(payload []byte) {
 	}
 	samplesPerCh := sr / 50 // 20ms
 	if samplesPerCh <= 0 {
-		samplesPerCh = 960
+		samplesPerCh = samplesPerChannel
 	}
 
 	// Calculate actual bytes to use

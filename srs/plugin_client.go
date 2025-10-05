@@ -3,6 +3,9 @@ package srs
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"time"
+
 	"github.com/FPGSchiba/vcs-srs-server/state"
 	pb "github.com/FPGSchiba/vcs-srs-server/vcsauthpb"
 	"google.golang.org/grpc"
@@ -10,8 +13,6 @@ import (
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
-	"log/slog"
-	"time"
 )
 
 type PluginClient struct {
@@ -185,7 +186,10 @@ func (v *PluginClient) Login(credentials map[string]string) (*pb.ServerLoginResp
 	}
 
 	if !resp.Success {
-		return nil, fmt.Errorf("%s", resp.LoginResult.(*pb.ServerLoginResponse_ErrorMessage).ErrorMessage)
+		if errMsg, ok := resp.LoginResult.(*pb.ServerLoginResponse_ErrorMessage); ok {
+			return nil, fmt.Errorf("%s", errMsg.ErrorMessage)
+		}
+		return nil, fmt.Errorf("login failed: unexpected response type")
 	}
 
 	return resp, nil

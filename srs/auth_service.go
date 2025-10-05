@@ -3,6 +3,11 @@ package srs
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/FPGSchiba/vcs-srs-server/events"
 	pb "github.com/FPGSchiba/vcs-srs-server/srspb"
 	"github.com/FPGSchiba/vcs-srs-server/state"
@@ -12,10 +17,6 @@ import (
 	"github.com/sethvargo/go-diceware/diceware"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/peer"
-	"log/slog"
-	"strings"
-	"sync"
-	"time"
 )
 
 type AuthServer struct {
@@ -31,6 +32,7 @@ type AuthServer struct {
 }
 
 type AuthenticatingClient struct {
+	Name           string
 	Secret         string
 	Expires        time.Time
 	AvailableRoles []uint8
@@ -190,6 +192,7 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.ClientGuestLogi
 		if utils.HashPassword(coalition.Password) == request.Password {
 			s.mu.Unlock()
 			selectedCoalition = &coalition
+			break
 		}
 	}
 
@@ -333,6 +336,7 @@ func (s *AuthServer) Login(ctx context.Context, request *pb.ClientLoginRequest) 
 	}
 	s.mu.Lock()
 	s.authenticatingClients[clientGuid] = &AuthenticatingClient{
+		Name:           result.Result.PlayerName,
 		Secret:         strings.Join(clientSecret, "-"),
 		Expires:        time.Now().Add(5 * time.Minute),
 		AvailableRoles: availableRoles,
@@ -441,7 +445,7 @@ func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.ClientUnitSelec
 	}
 
 	s.serverState.AddClient(clientGuid, &state.ClientState{
-		Name:      authClient.Secret,
+		Name:      authClient.Name,
 		UnitId:    selectedUnit.UnitId,
 		Coalition: request.Coalition,
 		Role:      uint8(request.Role),
@@ -475,7 +479,7 @@ func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.ClientUnitSelec
 		Name: events.ClientsChanged,
 		Data: s.serverState.Clients,
 	})
-	
+
 	return &pb.ServerUnitSelectResponse{
 		Success: true,
 		Result:  &pb.ServerUnitSelectResponse_Token{Token: token},

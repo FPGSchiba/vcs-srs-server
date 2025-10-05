@@ -2,9 +2,11 @@ package services
 
 import (
 	"fmt"
+
 	"github.com/FPGSchiba/vcs-srs-server/app"
 	"github.com/FPGSchiba/vcs-srs-server/events"
 	"github.com/FPGSchiba/vcs-srs-server/state"
+	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 type SettingsService struct {
@@ -33,7 +35,10 @@ func (s *SettingsService) SaveGeneralSettings(newSettings *state.GeneralSettings
 		s.App.Notify(events.NewNotification("Failed to save settings", "Failed to save settings", "error"))
 		return
 	}
-	s.App.App.EmitEvent(events.SettingsChanged, s.App.SettingsState)
+	s.App.App.Event.EmitEvent(&application.CustomEvent{
+		Name: events.SettingsChanged,
+		Data: s.App.SettingsState,
+	})
 	s.App.Notify(events.NewNotification("Settings saved", "General Settings were successfully saved", "info"))
 }
 
@@ -47,7 +52,10 @@ func (s *SettingsService) SaveServerSettings(newSettings *state.ServerSettings) 
 		s.App.Notify(events.NewNotification("Failed to save settings", "Failed to save settings", "error"))
 		return
 	}
-	s.App.App.EmitEvent(events.SettingsChanged, s.App.SettingsState)
+	s.App.App.Event.EmitEvent(&application.CustomEvent{
+		Name: events.SettingsChanged,
+		Data: s.App.SettingsState,
+	})
 	s.App.Notify(events.NewNotification("Settings saved", "Server Settings were successfully saved", "info"))
 }
 
@@ -61,6 +69,9 @@ func (s *SettingsService) SaveFrequencySettings(newSettings *state.FrequencySett
 		s.App.Notify(events.NewNotification("Failed to save settings", "Failed to save settings", "error"))
 		return
 	}
-	s.App.App.EmitEvent(events.SettingsChanged, s.App.SettingsState)
+	s.App.App.Event.EmitEvent(&application.CustomEvent{
+		Name: events.SettingsChanged,
+		Data: s.App.SettingsState,
+	})
 	s.App.Notify(events.NewNotification("Settings saved", "Frequency Settings were successfully saved", "info"))
 }

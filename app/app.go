@@ -1,14 +1,15 @@
 package app
 
 import (
+	"log/slog"
+	"net/http"
+
 	"github.com/FPGSchiba/vcs-srs-server/control"
 	"github.com/FPGSchiba/vcs-srs-server/events"
 	"github.com/FPGSchiba/vcs-srs-server/state"
 	"github.com/FPGSchiba/vcs-srs-server/voice"
 	"github.com/google/uuid"
 	"github.com/wailsapp/wails/v3/pkg/application"
-	"log/slog"
-	"net/http"
 )
 
 const Version = "v0.1.0"
@@ -285,7 +286,7 @@ func (a *VCSApplication) handleNotificationEvent(channel chan events.Event) {
 			a.DistributionState.RLock()
 			if a.DistributionState.RuntimeMode == state.RuntimeModeGUI {
 				a.DistributionState.RUnlock()
-				a.App.EmitEvent(event.Name, notification)
+				a.App.Event.EmitEvent(&application.CustomEvent{Name: event.Name, Data: notification})
 				continue
 			}
 			a.DistributionState.RUnlock() // In headless mode, just log the notification
@@ -298,7 +299,7 @@ func (a *VCSApplication) handleFrontendEmits(channel chan events.Event) {
 	if a.DistributionState.RuntimeMode == state.RuntimeModeGUI {
 		a.DistributionState.RUnlock()
 		for event := range channel {
-			a.App.EmitEvent(event.Name, event.Data)
+			a.App.Event.EmitEvent(&application.CustomEvent{Name: event.Name, Data: event.Data})
 		}
 	}
 	a.DistributionState.RUnlock() // In headless mode, we don't emit events to the frontend

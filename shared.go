@@ -2,12 +2,13 @@ package main
 
 import (
 	"flag"
-	"github.com/FPGSchiba/vcs-srs-server/app"
-	slogmulti "github.com/samber/slog-multi"
 	"log"
 	"log/slog"
 	"os"
 	"path"
+
+	"github.com/FPGSchiba/vcs-srs-server/app"
+	slogmulti "github.com/samber/slog-multi"
 )
 
 func parseFlags(isHeadless bool) (configFilepath, bannedFilePath, distributionMode string, autoStartServers bool, logger *slog.Logger) {
@@ -25,13 +26,13 @@ func parseFlags(isHeadless bool) (configFilepath, bannedFilePath, distributionMo
 
 	if fileLogEnabled {
 		if _, err := os.Stat(logFolder); os.IsNotExist(err) {
-			err := os.Mkdir(logFolder, 0777)
+			err := os.Mkdir(logFolder, 0755)
 			if err != nil {
 				log.Fatalf("error creating log directory: %v", err)
 			}
 		}
 
-		f, err := os.OpenFile(path.Join(logFolder, "vcs-server-log.jsonl"), os.O_RDWR|os.O_CREATE|os.O_APPEND, 0777)
+		f, err := os.OpenFile(path.Join(logFolder, "vcs-server-log.jsonl"), os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
 		if err != nil {
 			log.Fatalf("error opening log file: %v", err)
 		}

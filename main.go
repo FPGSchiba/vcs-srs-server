@@ -4,11 +4,12 @@ package main
 
 import (
 	"embed"
+	"log/slog"
+	"os"
+
 	"github.com/FPGSchiba/vcs-srs-server/app"
 	"github.com/FPGSchiba/vcs-srs-server/services"
 	"github.com/wailsapp/wails/v3/pkg/application"
-	"log/slog"
-	"os"
 )
 
 //go:embed all:frontend/dist
@@ -19,7 +20,7 @@ func main() {
 
 	vcs := app.New()
 
-	defer func() { // Ensure we catch any panics and log them
+	defer func() {                        // Ensure we catch any panics and log them
 		if err := recover(); err != nil { //catch
 			logger.Error("Application panicked", "error", err)
 			os.Exit(1)
@@ -48,8 +49,8 @@ func main() {
 
 	wails := application.New(appOptions)
 	vcs.StartUp(wails, configFilepath, bannedFilePath, autoStartServers)
-
-	wails.NewWebviewWindowWithOptions(application.WebviewWindowOptions{
+	
+	wails.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:          "VCS Server",
 		Width:          1080,
 		Height:         800,

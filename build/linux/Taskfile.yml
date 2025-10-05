@@ -115,6 +115,8 @@ tasks:
 
   build:headless:
     summary: Builds the application in headless mode
+    deps:
+      - task: common:go:mod:tidy
     cmds:
       - go build {{.BUILD_FLAGS}} -o {{.OUTPUT}} -tags headless
     vars:

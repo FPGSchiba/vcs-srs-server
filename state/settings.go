@@ -2,10 +2,11 @@ package state
 
 import (
 	"fmt"
-	"gopkg.in/yaml.v3"
 	"os"
 	"slices"
 	"sync"
+
+	"gopkg.in/yaml.v3"
 )
 
 // SettingsState holds the current state of the settings
@@ -161,7 +162,7 @@ func (s *SettingsState) Save() error {
 		return err
 	}
 
-	err = os.WriteFile(s.file, yamlData, 0777)
+	err = os.WriteFile(s.file, yamlData, 0644)
 	if err != nil {
 		return err
 	}

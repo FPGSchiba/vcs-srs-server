@@ -2,8 +2,11 @@ package voiceontrol
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"time"
+
 	pb "github.com/FPGSchiba/vcs-srs-server/voicecontrolpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
@@ -12,9 +15,6 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
-	"io"
-	"log/slog"
-	"time"
 )
 
 const (
@@ -124,7 +124,7 @@ func (v *VoiceControlClient) registerSelf() error {
 		return err
 	}
 	if !resp.Success {
-		return errors.New(fmt.Sprintf("Failed to register voice server: %s", resp.Message))
+		return fmt.Errorf("failed to register voice server: %s", resp.Message)
 	}
 	v.assignedFrequencies = resp.AssignedFrequencies
 	return nil
