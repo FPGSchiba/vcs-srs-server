@@ -188,7 +188,7 @@ func (v *PluginClient) discoverPluginFlows() ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to discover flows: %w", err)
 	}
-	v.logger.Info("Discovered plugin flows", "flows", v.configuredFlows)
+
 	configurableFlows := make([]string, 0, len(resp.Flows))
 	for _, flow := range resp.Flows {
 		configurableFlows = append(configurableFlows, flow.FlowId)

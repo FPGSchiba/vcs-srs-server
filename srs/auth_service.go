@@ -285,7 +285,7 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.GuestLoginReque
 	s.mu.Lock()
 	var selectedCoalition *state.Coalition
 	for _, coalition := range s.settingsState.Coalitions {
-		if utils.HashPassword(coalition.Password) == request.Password {
+		if utils.CheckPasswordHash(coalition.Password, request.Password) {
 			s.mu.Unlock()
 			selectedCoalition = &coalition
 			break

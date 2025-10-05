@@ -18,12 +18,11 @@ import (
 )
 
 const (
-	BufferSize        = 1024                  // UDP buffer size
-	JitterBufferSize  = 10                    // Number of packets to buffer
-	PlayoutDelay      = 60 * time.Millisecond // Initial playout delay
-	minCELTConfig     = 16
-	maxOpusFrameSize  = 11520
-	samplesPerChannel = 960 // 20ms at 48kHz
+	BufferSize = 1024 // UDP buffer size
+	// Opus framing/code sizes are variable; we’ll just assert CELT-only
+	minCELTConfig = 20 // 20–31 = CELT-only
+	// Max decoded samples per channel for 120ms @ 48k: 5760
+	maxSamplesPerChan = 5760
 )
 
 type Client struct {
@@ -223,8 +222,11 @@ func (v *Server) handleVoicePacket(packet *VCSPacket) {
 	v.Unlock()
 
 	// Broadcast the voice data to other clients
-	v.broadcastVoice(packet, packet.SenderID)
-
+	if len(packet.Payload) > 5 {
+		// Ignore very small packets (could be keepalive or empty)
+		v.broadcastVoice(packet, packet.SenderID)
+	}
+	
 	// Optionally, you can log the received voice packet
 	v.logger.Debug("Received voice packet",
 		"sender_id", packet.SenderID,
@@ -370,41 +372,179 @@ func (v *Server) GetListeningClients(packet *VCSPacket, senderId uuid.UUID) []*C
 	return listeningClients
 }
 
-// Simple, direct PlayVoiceData without dejitter buffer - for clean local test playback
+// parseOpusPacket extracts individual frames from an Opus packet
+func parseOpusPacket(payload []byte) ([][]byte, error) {
+	if len(payload) < 1 {
+		return nil, fmt.Errorf("packet too short")
+	}
+
+	toc := payload[0]
+	code := toc & 0x03 // bits 0-1
+
+	switch code {
+	case 0: // Single frame
+		return [][]byte{payload}, nil
+
+	case 1: // Two frames, equal size
+		if len(payload) < 2 {
+			return nil, fmt.Errorf("code 1 packet too short")
+		}
+		frameSize := (len(payload) - 1) / 2
+		if frameSize <= 0 {
+			return nil, fmt.Errorf("invalid frame size")
+		}
+		// Create two synthetic packets with same TOC
+		frame1 := make([]byte, frameSize+1)
+		frame2 := make([]byte, frameSize+1)
+		frame1[0] = toc & 0xFC // Clear code bits to make it code 0
+		frame2[0] = toc & 0xFC
+		copy(frame1[1:], payload[1:1+frameSize])
+		copy(frame2[1:], payload[1+frameSize:])
+		return [][]byte{frame1, frame2}, nil
+
+	case 2: // Two frames, different sizes (VBR)
+		if len(payload) < 2 {
+			return nil, fmt.Errorf("code 2 packet too short")
+		}
+		len1 := int(payload[1])
+		if len(payload) < 2+len1 {
+			return nil, fmt.Errorf("code 2 frame 1 truncated")
+		}
+		len2 := len(payload) - 2 - len1
+		if len2 <= 0 {
+			return nil, fmt.Errorf("code 2 frame 2 invalid")
+		}
+		// Create two synthetic code-0 packets
+		frame1 := make([]byte, len1+1)
+		frame2 := make([]byte, len2+1)
+		frame1[0] = toc & 0xFC
+		frame2[0] = toc & 0xFC
+		copy(frame1[1:], payload[2:2+len1])
+		copy(frame2[1:], payload[2+len1:])
+		return [][]byte{frame1, frame2}, nil
+
+	case 3: // Arbitrary frames with length descriptors
+		if len(payload) < 2 {
+			return nil, fmt.Errorf("code 3 packet too short")
+		}
+		frameCount := int(payload[1] & 0x3F)
+		padding := (payload[1] & 0x40) != 0
+		vbr := (payload[1] & 0x80) != 0
+
+		if frameCount == 0 {
+			return nil, fmt.Errorf("code 3 zero frames")
+		}
+
+		pos := 2
+		var frames [][]byte
+
+		if vbr {
+			// VBR: read length for each frame except last
+			frameLengths := make([]int, frameCount)
+			totalLen := 0
+			for i := 0; i < frameCount-1; i++ {
+				if pos >= len(payload) {
+					return nil, fmt.Errorf("code 3 length truncated")
+				}
+				length := 0
+				for {
+					if pos >= len(payload) {
+						return nil, fmt.Errorf("code 3 length truncated")
+					}
+					b := int(payload[pos])
+					pos++
+					length += b
+					if b < 255 {
+						break
+					}
+				}
+				frameLengths[i] = length
+				totalLen += length
+			}
+			// Last frame gets remaining bytes (minus padding if present)
+			remaining := len(payload) - pos
+			if padding {
+				if pos >= len(payload) {
+					return nil, fmt.Errorf("code 3 padding length missing")
+				}
+				paddingLen := int(payload[len(payload)-1])
+				remaining -= paddingLen + 1
+			}
+			frameLengths[frameCount-1] = remaining - totalLen
+
+			// Extract frames
+			for i := 0; i < frameCount; i++ {
+				flen := frameLengths[i]
+				if pos+flen > len(payload) {
+					return nil, fmt.Errorf("code 3 frame %d truncated", i)
+				}
+				frame := make([]byte, flen+1)
+				frame[0] = toc & 0xFC // code 0
+				copy(frame[1:], payload[pos:pos+flen])
+				frames = append(frames, frame)
+				pos += flen
+			}
+		} else {
+			// CBR: all frames equal size
+			remaining := len(payload) - pos
+			if padding {
+				paddingLen := int(payload[len(payload)-1])
+				remaining -= paddingLen + 1
+			}
+			frameSize := remaining / frameCount
+			if frameSize <= 0 {
+				return nil, fmt.Errorf("code 3 CBR invalid frame size")
+			}
+			for i := 0; i < frameCount; i++ {
+				frame := make([]byte, frameSize+1)
+				frame[0] = toc & 0xFC
+				copy(frame[1:], payload[pos:pos+frameSize])
+				frames = append(frames, frame)
+				pos += frameSize
+			}
+		}
+		return frames, nil
+
+	default:
+		return nil, fmt.Errorf("invalid code: %d", code)
+	}
+}
+
 func (v *Server) PlayVoiceData(payload []byte) {
 	if len(payload) == 0 {
 		return
 	}
+
+	// Validate TOC
 	toc := payload[0]
 	config := toc >> 3
 	if config < minCELTConfig {
-		// Not CELT-only (likely SILK/hybrid). Drop to avoid Pion error.
-		v.logger.Warn("Dropping non-CELT Opus packet", "config", config, "len_payload", len(payload))
+		v.logger.Warn("Dropping non-CELT Opus packet", "config", config)
 		return
 	}
 
-	// Lazy-initialize decoder and speaker once
-	v.playOnce.Do(func() {
-		var err error
-		v.opusDec = opus.NewDecoder() // mono 48kHz
+	// Parse packet into individual frames
+	frames, err := parseOpusPacket(payload)
+	if err != nil {
+		v.logger.Error("Failed to parse Opus packet", "error", err, "payload_len", len(payload))
+		return
+	}
 
+	// Lazy-init
+	v.playOnce.Do(func() {
+		v.opusDec = opus.NewDecoder()
 		v.playFormat = beep.Format{
 			SampleRate:  beep.SampleRate(48000),
 			NumChannels: 1,
 			Precision:   2,
 		}
-
-		// Larger buffer for smoother playback
-		err = speaker.Init(v.playFormat.SampleRate, v.playFormat.SampleRate.N(300*time.Millisecond))
-		if err != nil {
+		if err := speaker.Init(v.playFormat.SampleRate, v.playFormat.SampleRate.N(300*time.Millisecond)); err != nil {
 			v.playErr = err
 			v.logger.Error("Failed to init Speaker", "error", err)
 			return
 		}
-
 		pr, pw := io.Pipe()
 		v.pipeW = pw
-
 		stream := &pcmStream{
 			r:   pr,
 			f:   v.playFormat,
@@ -414,69 +554,60 @@ func (v *Server) PlayVoiceData(payload []byte) {
 	})
 
 	if v.playErr != nil || v.pipeW == nil {
-		v.logger.Error("Audio playback not initialized", "error", v.playErr)
 		return
 	}
 
-	// Decode directly - buffer for up to 60ms stereo @ 48kHz
-	out := make([]byte, maxOpusFrameSize)
+	// Decode each frame
+	for _, frame := range frames {
+		out := make([]byte, maxSamplesPerChan*2)
 
-	// Serialize opus decoder access and pipe writes; opus.Decoder is not goroutine-safe
-	v.playMu.Lock()
-	// Protect against library panics on corrupt/non-Opus payloads
-	var (
-		bw       opus.Bandwidth
-		isStereo bool
-		err      error
-	)
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				err = fmt.Errorf("opus decode panic: %v", r)
-			}
+		v.playMu.Lock()
+		var (
+			bw       opus.Bandwidth
+			isStereo bool
+			decErr   error
+		)
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					decErr = fmt.Errorf("opus decode panic: %v", r)
+				}
+			}()
+			bw, isStereo, decErr = v.opusDec.Decode(frame, out)
 		}()
-		bw, isStereo, err = v.opusDec.Decode(payload, out)
-	}()
-	if err != nil {
 		v.playMu.Unlock()
-		v.logger.Error("Failed to decode Opus data", "error", err)
-		return
-	}
 
-	// Get sample rate and assume 20ms frame
-	sr := bw.SampleRate()
-	if sr == 0 {
-		sr = 48000
-	}
-	samplesPerCh := sr / 50 // 20ms
-	if samplesPerCh <= 0 {
-		samplesPerCh = samplesPerChannel
-	}
+		if decErr != nil {
+			v.logger.Error("Failed to decode Opus frame", "error", decErr)
+			continue
+		}
 
-	// Calculate actual bytes to use
-	channels := 1
-	if isStereo {
-		channels = 2
-	}
-	bytesToUse := samplesPerCh * 2 * channels
-	if bytesToUse > len(out) {
-		bytesToUse = len(out)
-	}
+		sr := bw.SampleRate()
+		if sr == 0 {
+			sr = 48000
+		}
+		samplesPerCh := sr / 50 // 20ms
+		if samplesPerCh <= 0 || samplesPerCh > maxSamplesPerChan {
+			samplesPerCh = 960
+		}
 
-	var pcmData []byte
-	if isStereo {
-		// Downmix to mono
-		pcmData = downmixStereoS16LEToMono(out[:bytesToUse], samplesPerCh)
-	} else {
-		pcmData = out[:bytesToUse]
-	}
+		bytesToUse := samplesPerCh * 2
+		if isStereo {
+			bytesToUse *= 2
+		}
+		if bytesToUse > len(out) {
+			bytesToUse = len(out)
+		}
 
-	// Write directly to pipe while still holding the lock (serialize with decoder)
-	_, err = v.pipeW.Write(pcmData)
-	v.playMu.Unlock()
+		pcmData := out[:bytesToUse]
+		if isStereo {
+			pcmData = downmixStereoS16LEToMono(pcmData, samplesPerCh)
+		}
 
-	if err != nil {
-		v.logger.Error("Failed to write PCM to speaker pipe", "error", err)
+		if _, err := v.pipeW.Write(pcmData); err != nil {
+			v.logger.Error("Failed to write PCM", "error", err)
+			return
+		}
 	}
 }
 
