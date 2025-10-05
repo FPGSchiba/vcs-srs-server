@@ -3,16 +3,17 @@ package srs
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/FPGSchiba/vcs-srs-server/events"
 	pb "github.com/FPGSchiba/vcs-srs-server/srspb"
 	"github.com/FPGSchiba/vcs-srs-server/state"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
-	"log/slog"
-	"strings"
-	"sync"
-	"time"
 )
 
 type SimpleRadioServer struct {
@@ -49,7 +50,7 @@ func (s *SimpleRadioServer) GetServerState() healthpb.HealthCheckResponse_Servin
 	return healthpb.HealthCheckResponse_SERVING
 }
 
-func (s *SimpleRadioServer) SyncClient(_ context.Context, _ *pb.Empty) (*pb.ServerSyncResponse, error) {
+func (s *SimpleRadioServer) SyncClient(_ context.Context, _ *pb.Empty) (*pb.SyncResponse, error) {
 	clients := s.serverState.GetAllClients()
 	radioClients := s.serverState.GetAllRadios()
 
@@ -90,9 +91,9 @@ func (s *SimpleRadioServer) SyncClient(_ context.Context, _ *pb.Empty) (*pb.Serv
 		Data: s.serverState.Clients,
 	})
 
-	return &pb.ServerSyncResponse{
+	return &pb.SyncResponse{
 		Success: true,
-		SyncResult: &pb.ServerSyncResponse_Data{
+		SyncResult: &pb.SyncResponse_Data{
 			Data: &pb.ServerSyncResult{
 				Clients:  srsClients,
 				Radios:   srsRadios,

@@ -92,12 +92,15 @@ tasks:
     preconditions:
       - sh: protoc --version
         msg: "Looks like protoc isn't installed. Please install it from https://grpc.io/docs/protoc-installation/"
-      - sh: which protoc-gen-go
+      - sh: which protoc-gen-go || where protoc-gen-go
         msg: "Looks like protoc-gen-go isn't installed. Please install it with 'go install google.golang.org/protobuf/cmd/protoc-gen-go@latest'"
-      - sh: which protoc-gen-go-grpc
+      - sh: which protoc-gen-go-grpc || where protoc-gen-go-grpc
         msg: "Looks like protoc-gen-go-grpc isn't installed. Please install it with 'go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest'"
     cmds:
-      - mkdir -p srspb voicecontrolpb vcsauthpb
+      - cmd: powershell New-Item -ItemType Directory -Force -Path srspb,voicecontrolpb,vcsauthpb
+        platforms: [ windows ]
+      - cmd: mkdir -p srspb voicecontrolpb vcsauthpb
+        platforms: [ linux, darwin ]
       - protoc --go_out=./srspb --go_opt=paths=source_relative --go-grpc_out=./srspb --go-grpc_opt=paths=source_relative srs.proto
       - protoc --go_out=./voicecontrolpb --go_opt=paths=source_relative --go-grpc_out=./voicecontrolpb --go-grpc_opt=paths=source_relative control.proto
       - protoc --go_out=./vcsauthpb --go_opt=paths=source_relative --go-grpc_out=./vcsauthpb --go-grpc_opt=paths=source_relative vcs-auth-plugin.proto

@@ -99,7 +99,7 @@ func (s *AuthServer) isControlServer() bool {
 	return s.distributionState.DistributionMode == state.DistributionModeControl
 }
 
-func (s *AuthServer) InitAuth(ctx context.Context, request *pb.ClientAuthInitRequest) (*pb.ServerAuthInitResponse, error) {
+func (s *AuthServer) InitAuth(ctx context.Context, request *pb.AuthInitRequest) (*pb.AuthInitResponse, error) {
 	p, _ := peer.FromContext(ctx)
 	s.logger.Debug("Initializing Auth", "IP", p.Addr.String(), "Version", request.Capabilities.Version)
 
@@ -107,17 +107,17 @@ func (s *AuthServer) InitAuth(ctx context.Context, request *pb.ClientAuthInitReq
 
 	// Check Version
 	if !checkVersion(request.Capabilities.Version) {
-		return &pb.ServerAuthInitResponse{
+		return &pb.AuthInitResponse{
 			Success:    false,
-			InitResult: &pb.ServerAuthInitResponse_ErrorMessage{ErrorMessage: "Unsupported version"},
+			InitResult: &pb.AuthInitResponse_ErrorMessage{ErrorMessage: "Unsupported version"},
 		}, nil
 	}
 
 	// Check Distribution Capabilities
 	if !s.checkDistributionCapabilities(request.Capabilities.SupportedDistributionModes) {
-		return &pb.ServerAuthInitResponse{
+		return &pb.AuthInitResponse{
 			Success:    false,
-			InitResult: &pb.ServerAuthInitResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("Unsupported distribution capabilities, currently running: %s", s.GetStringDistributionMode())},
+			InitResult: &pb.AuthInitResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("Unsupported distribution capabilities, currently running: %s", s.GetStringDistributionMode())},
 		}, nil
 	}
 
@@ -130,9 +130,9 @@ func (s *AuthServer) InitAuth(ctx context.Context, request *pb.ClientAuthInitReq
 
 	s.logger.Info("Client initialized", "ClientGuid", clientGuid, "IP", p.Addr.String(), "Version", request.Capabilities.Version)
 
-	return &pb.ServerAuthInitResponse{
+	return &pb.AuthInitResponse{
 		Success: true,
-		InitResult: &pb.ServerAuthInitResponse_Result{
+		InitResult: &pb.AuthInitResponse_Result{
 			Result: &pb.AuthInitResult{
 				DistributionMode: s.GetProtoDistributionMode(),
 				AvailablePlugins: s.settingsState.GetAllPluginNames(),
@@ -143,7 +143,101 @@ func (s *AuthServer) InitAuth(ctx context.Context, request *pb.ClientAuthInitReq
 	}, nil
 }
 
-func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.ClientGuestLoginRequest) (*pb.ServerGuestLoginResponse, error) {
+func (s *AuthServer) DiscoverAuthenticationFlows(ctx context.Context, request *pb.FlowDiscoveryRequest) (*pb.FlowDiscoveryResponse, error) {
+	p, _ := peer.FromContext(ctx)
+	s.logger.Debug("Getting Flow Discovery", "IP", p.Addr.String(), "Plugin", request.AuthenticationPlugin)
+
+	// Check if This auth type is enabled
+	s.settingsState.RLock()
+	if !s.settingsState.Security.EnablePluginAuth {
+		s.settingsState.RUnlock()
+		return &pb.FlowDiscoveryResponse{
+			Success:         false,
+			DiscoveryResult: &pb.FlowDiscoveryResponse_ErrorMessage{ErrorMessage: "Plugin login is disabled"},
+		}, nil
+	}
+	s.settingsState.RUnlock()
+
+	s.removeExpiredAuthenticatingClients()
+
+	// Check if plugin is available
+	s.mu.RLock()
+	pluginClient, ok := s.pluginClients[request.AuthenticationPlugin]
+	if !ok {
+		s.mu.RUnlock()
+		s.logger.Warn("Plugin not found", "PluginName", request.AuthenticationPlugin)
+		return &pb.FlowDiscoveryResponse{
+			Success:         false,
+			DiscoveryResult: &pb.FlowDiscoveryResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("Plugin %s not found", request.AuthenticationPlugin)},
+		}, nil
+	}
+	s.mu.RUnlock()
+
+	// Call the plugin's flow discovery method
+	flows, err := pluginClient.DiscoverPluginFlows()
+	if err != nil {
+		s.logger.Error("Plugin Flow Discovery failed", "plugin-name", request.AuthenticationPlugin, "Error", err)
+		return &pb.FlowDiscoveryResponse{
+			Success:         false,
+			DiscoveryResult: &pb.FlowDiscoveryResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("Flow discovery failed: %s", err.Error())},
+		}, nil
+	}
+
+	return &pb.FlowDiscoveryResponse{
+		Success: true,
+		DiscoveryResult: &pb.FlowDiscoveryResponse_Result{
+			Result: &pb.FlowDiscoveryResult{
+				Flows: mapFlows(flows.Flows),
+			},
+		},
+	}, nil
+}
+
+func mapFlows(in []*authpb.AuthFlowDefinition) []*pb.AuthFlowDefinition {
+	outs := make([]*pb.AuthFlowDefinition, 0, len(in))
+	for _, f := range in {
+		outs = append(outs, &pb.AuthFlowDefinition{
+			FlowId:      f.FlowId,
+			Description: f.Description,
+			Steps:       mapSteps(f.Steps),
+			// ignore settings, as Client does not need them
+		})
+	}
+	return outs
+}
+
+func mapSteps(in []*authpb.AuthStepDefinition) []*pb.AuthStepDefinition {
+	outs := make([]*pb.AuthStepDefinition, 0, len(in))
+	for _, s := range in {
+		outs = append(outs, &pb.AuthStepDefinition{
+			StepId:          s.StepId,
+			StepName:        s.StepName,
+			StepDescription: s.StepDescription,
+			StepType:        s.StepType,
+			RequiredFields:  mapFields(s.RequiredFields),
+			Metadata:        s.Metadata, // map[string]string matches
+		})
+	}
+	return outs
+}
+
+func mapFields(in []*authpb.FieldDefinition) []*pb.FieldDefinition {
+	outs := make([]*pb.FieldDefinition, 0, len(in))
+	for _, f := range in {
+		outs = append(outs, &pb.FieldDefinition{
+			FieldId:         f.Key,
+			Label:           f.Label,
+			Description:     f.Description,
+			Type:            f.Type,
+			Required:        f.Required,
+			ValidationRegex: f.ValidationRegex,
+			DefaultValue:    f.DefaultValue,
+		})
+	}
+	return outs
+}
+
+func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.GuestLoginRequest) (*pb.GuestLoginResponse, error) {
 	p, _ := peer.FromContext(ctx)
 	s.logger.Debug("Getting Guest Login", "IP", p.Addr.String(), "Name", request.Name, "UnitId", request.UnitId)
 
@@ -151,9 +245,9 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.ClientGuestLogi
 	s.settingsState.RLock()
 	if !s.settingsState.Security.EnableGuestAuth {
 		s.settingsState.RUnlock()
-		return &pb.ServerGuestLoginResponse{
+		return &pb.GuestLoginResponse{
 			Success:     false,
-			LoginResult: &pb.ServerGuestLoginResponse_ErrorMessage{ErrorMessage: "Guest login is disabled"},
+			LoginResult: &pb.GuestLoginResponse_ErrorMessage{ErrorMessage: "Guest login is disabled"},
 		}, nil
 	}
 	s.settingsState.RUnlock()
@@ -164,26 +258,26 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.ClientGuestLogi
 	clientGuid, err := uuid.Parse(request.ClientGuid)
 	if err != nil {
 		s.logger.Error("Failed to parse ClientGuid", "ClientGuid", request.ClientGuid, "Error", err)
-		return &pb.ServerGuestLoginResponse{
+		return &pb.GuestLoginResponse{
 			Success:     false,
-			LoginResult: &pb.ServerGuestLoginResponse_ErrorMessage{ErrorMessage: "Invalid ClientGuid"},
+			LoginResult: &pb.GuestLoginResponse_ErrorMessage{ErrorMessage: "Invalid ClientGuid"},
 		}, err
 	}
 	s.mu.RLock()
 	if _, ok := s.authenticatingClients[clientGuid]; !ok {
 		s.mu.RUnlock()
-		return &pb.ServerGuestLoginResponse{
+		return &pb.GuestLoginResponse{
 			Success:     false,
-			LoginResult: &pb.ServerGuestLoginResponse_ErrorMessage{ErrorMessage: "ClientGuid not found, please initialize first"},
+			LoginResult: &pb.GuestLoginResponse_ErrorMessage{ErrorMessage: "ClientGuid not found, please initialize first"},
 		}, nil
 	}
 	s.mu.RUnlock()
 
 	// Check Username
 	if !checkUsername(request.Name) {
-		return &pb.ServerGuestLoginResponse{
+		return &pb.GuestLoginResponse{
 			Success:     false,
-			LoginResult: &pb.ServerGuestLoginResponse_ErrorMessage{ErrorMessage: "Invalid username"},
+			LoginResult: &pb.GuestLoginResponse_ErrorMessage{ErrorMessage: "Invalid username"},
 		}, nil
 	}
 
@@ -199,17 +293,17 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.ClientGuestLogi
 	}
 
 	if selectedCoalition == nil {
-		return &pb.ServerGuestLoginResponse{
+		return &pb.GuestLoginResponse{
 			Success:     false,
-			LoginResult: &pb.ServerGuestLoginResponse_ErrorMessage{ErrorMessage: "No Coalition found with that password"},
+			LoginResult: &pb.GuestLoginResponse_ErrorMessage{ErrorMessage: "No Coalition found with that password"},
 		}, nil
 	}
 
 	// Check Client UnitId
 	if !checkUnitId(request.UnitId) {
-		return &pb.ServerGuestLoginResponse{
+		return &pb.GuestLoginResponse{
 			Success:     false,
-			LoginResult: &pb.ServerGuestLoginResponse_ErrorMessage{ErrorMessage: "Invalid UnitId"},
+			LoginResult: &pb.GuestLoginResponse_ErrorMessage{ErrorMessage: "Invalid UnitId"},
 		}, nil
 	}
 
@@ -234,9 +328,9 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.ClientGuestLogi
 	s.settingsState.RUnlock()
 	if err != nil {
 		s.logger.Error("Failed to generate token for guest login", "error", err)
-		return &pb.ServerGuestLoginResponse{
+		return &pb.GuestLoginResponse{
 			Success:     false,
-			LoginResult: &pb.ServerGuestLoginResponse_ErrorMessage{ErrorMessage: "Failed to generate token"},
+			LoginResult: &pb.GuestLoginResponse_ErrorMessage{ErrorMessage: "Failed to generate token"},
 		}, err
 	}
 
@@ -245,9 +339,9 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.ClientGuestLogi
 		Name: events.ClientsChanged,
 		Data: s.serverState.Clients,
 	})
-	return &pb.ServerGuestLoginResponse{
+	return &pb.GuestLoginResponse{
 		Success: true,
-		LoginResult: &pb.ServerGuestLoginResponse_Result{
+		LoginResult: &pb.GuestLoginResponse_Result{
 			Result: &pb.GuestLoginResult{
 				Token:     token,
 				Coalition: selectedCoalition.Name,
@@ -256,7 +350,7 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.ClientGuestLogi
 	}, nil
 }
 
-func (s *AuthServer) StartAuth(ctx context.Context, request *pb.ClientStartAuthRequest) (*pb.ServerAuthStepResponse, error) {
+func (s *AuthServer) StartAuth(ctx context.Context, request *pb.StartAuthRequest) (*pb.AuthStepResponse, error) {
 	p, _ := peer.FromContext(ctx)
 	s.logger.Debug("Getting 3rd Party Plugin Login", "IP", p.Addr.String(), "plugin-name", request.AuthenticationPlugin)
 
@@ -264,10 +358,10 @@ func (s *AuthServer) StartAuth(ctx context.Context, request *pb.ClientStartAuthR
 	s.settingsState.RLock()
 	if !s.settingsState.Security.EnablePluginAuth {
 		s.settingsState.RUnlock()
-		return &pb.ServerAuthStepResponse{
+		return &pb.AuthStepResponse{
 			Success:   false,
 			SessionId: "",
-			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: "Plugin login is disabled"},
+			Result:    &pb.AuthStepResponse_ErrorMessage{ErrorMessage: "Plugin login is disabled"},
 		}, nil
 	}
 	s.settingsState.RUnlock()
@@ -278,19 +372,19 @@ func (s *AuthServer) StartAuth(ctx context.Context, request *pb.ClientStartAuthR
 	clientGuid, err := uuid.Parse(request.ClientGuid)
 	if err != nil {
 		s.logger.Error("Failed to parse ClientGuid", "ClientGuid", request.ClientGuid, "Error", err)
-		return &pb.ServerAuthStepResponse{
+		return &pb.AuthStepResponse{
 			Success:   false,
 			SessionId: "",
-			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: "Invalid ClientGuid"},
+			Result:    &pb.AuthStepResponse_ErrorMessage{ErrorMessage: "Invalid ClientGuid"},
 		}, err
 	}
 	s.mu.RLock()
 	if _, ok := s.authenticatingClients[clientGuid]; !ok {
 		s.mu.RUnlock()
-		return &pb.ServerAuthStepResponse{
+		return &pb.AuthStepResponse{
 			Success:   false,
 			SessionId: "",
-			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: "ClientGuid not found, please initialize first"},
+			Result:    &pb.AuthStepResponse_ErrorMessage{ErrorMessage: "ClientGuid not found, please initialize first"},
 		}, nil
 	}
 	s.mu.RUnlock()
@@ -301,10 +395,10 @@ func (s *AuthServer) StartAuth(ctx context.Context, request *pb.ClientStartAuthR
 	if !ok {
 		s.mu.RUnlock()
 		s.logger.Warn("Plugin not found", "PluginName", request.AuthenticationPlugin)
-		return &pb.ServerAuthStepResponse{
+		return &pb.AuthStepResponse{
 			Success:   false,
 			SessionId: "",
-			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("Plugin %s not found", request.AuthenticationPlugin)},
+			Result:    &pb.AuthStepResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("Plugin %s not found", request.AuthenticationPlugin)},
 		}, nil
 	}
 	s.mu.RUnlock()
@@ -314,10 +408,10 @@ func (s *AuthServer) StartAuth(ctx context.Context, request *pb.ClientStartAuthR
 	loginResponse, err := pluginClient.StartAuth(request.FlowId, request.FirstStepInput)
 	if err != nil {
 		s.logger.Error("Plugin Login failed", "plugin-name", request.AuthenticationPlugin, "Error", err)
-		return &pb.ServerAuthStepResponse{
+		return &pb.AuthStepResponse{
 			Success:   false,
 			SessionId: "",
-			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("Login failed: %s", err.Error())},
+			Result:    &pb.AuthStepResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("Login failed: %s", err.Error())},
 		}, nil
 	}
 
@@ -331,30 +425,30 @@ func (s *AuthServer) StartAuth(ctx context.Context, request *pb.ClientStartAuthR
 	case authpb.AuthStepStatus_AUTH_FAILED:
 		errMsg := loginResponse.StepResult.(*authpb.AuthStepResponse_ErrorMessage)
 		s.logger.Warn("Plugin Login failed", "plugin-name", request.AuthenticationPlugin, "Error", errMsg.ErrorMessage)
-		return &pb.ServerAuthStepResponse{
+		return &pb.AuthStepResponse{
 			Success:   false,
 			SessionId: loginResponse.SessionId,
-			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("Login failed: %s", errMsg.ErrorMessage)},
+			Result:    &pb.AuthStepResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("Login failed: %s", errMsg.ErrorMessage)},
 		}, nil
 	case authpb.AuthStepStatus_AUTH_COMPLETE:
 		return s.handleAuthComplete(clientGuid, loginResponse)
 	default:
 		s.logger.Error("Plugin returned unknown status", "plugin-name", request.AuthenticationPlugin, "Status", loginResponse.GetStatus())
-		return &pb.ServerAuthStepResponse{
+		return &pb.AuthStepResponse{
 			Success:   false,
 			SessionId: loginResponse.SessionId,
-			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: "Plugin returned unknown status"},
+			Result:    &pb.AuthStepResponse_ErrorMessage{ErrorMessage: "Plugin returned unknown status"},
 		}, nil
 	}
 }
 
-func (s *AuthServer) handleAuthComplete(clientGuid uuid.UUID, response *authpb.AuthStepResponse) (*pb.ServerAuthStepResponse, error) {
+func (s *AuthServer) handleAuthComplete(clientGuid uuid.UUID, response *authpb.AuthStepResponse) (*pb.AuthStepResponse, error) {
 	clientSecret, err := diceware.Generate(5)
 	if err != nil {
 		s.logger.Error("Failed to generate client secret", "Error", err)
-		return &pb.ServerAuthStepResponse{
+		return &pb.AuthStepResponse{
 			Success: false,
-			Result:  &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: "Failed to generate client secret"},
+			Result:  &pb.AuthStepResponse_ErrorMessage{ErrorMessage: "Failed to generate client secret"},
 		}, nil
 	}
 
@@ -399,10 +493,10 @@ func (s *AuthServer) handleAuthComplete(clientGuid uuid.UUID, response *authpb.A
 		})
 	}
 
-	return &pb.ServerAuthStepResponse{
+	return &pb.AuthStepResponse{
 		Success:   true,
 		SessionId: response.SessionId,
-		Result: &pb.ServerAuthStepResponse_Complete{
+		Result: &pb.AuthStepResponse_Complete{
 			Complete: &pb.LoginResult{
 				Secret:              strings.Join(clientSecret, "-"),
 				AvailableRoles:      builtRoles,
@@ -414,16 +508,16 @@ func (s *AuthServer) handleAuthComplete(clientGuid uuid.UUID, response *authpb.A
 	}, nil
 }
 
-func handleAuthContinue(response *authpb.AuthStepResponse) (*pb.ServerAuthStepResponse, error) {
+func handleAuthContinue(response *authpb.AuthStepResponse) (*pb.AuthStepResponse, error) {
 	return transformAuthStepResponse(response), nil
 }
 
-func transformAuthStepResponse(response *authpb.AuthStepResponse) *pb.ServerAuthStepResponse {
+func transformAuthStepResponse(response *authpb.AuthStepResponse) *pb.AuthStepResponse {
 	if response.GetStatus() == authpb.AuthStepStatus_AUTH_CONTINUE {
-		return &pb.ServerAuthStepResponse{
+		return &pb.AuthStepResponse{
 			Success:   true,
 			SessionId: response.SessionId,
-			Result: &pb.ServerAuthStepResponse_NextStep{
+			Result: &pb.AuthStepResponse_NextStep{
 				NextStep: &pb.NextStepRequired{
 					StepId:          response.GetNextStep().GetStepId(),
 					StepName:        response.GetNextStep().GetStepName(),
@@ -454,7 +548,7 @@ func transformFieldDefinitions(fields []*authpb.FieldDefinition) []*pb.FieldDefi
 	return transformedFields
 }
 
-func (s *AuthServer) ContinueAuth(ctx context.Context, request *pb.ClientContinueAuthRequest) (*pb.ServerAuthStepResponse, error) {
+func (s *AuthServer) ContinueAuth(ctx context.Context, request *pb.ContinueAuthRequest) (*pb.AuthStepResponse, error) {
 	p, _ := peer.FromContext(ctx)
 	s.logger.Debug("Continuing 3rd Party Plugin Login", "IP", p.Addr.String(), "SessionId", request.SessionId)
 
@@ -462,10 +556,10 @@ func (s *AuthServer) ContinueAuth(ctx context.Context, request *pb.ClientContinu
 	s.settingsState.RLock()
 	if !s.settingsState.Security.EnablePluginAuth {
 		s.settingsState.RUnlock()
-		return &pb.ServerAuthStepResponse{
+		return &pb.AuthStepResponse{
 			Success:   false,
 			SessionId: "",
-			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: "Plugin login is disabled"},
+			Result:    &pb.AuthStepResponse_ErrorMessage{ErrorMessage: "Plugin login is disabled"},
 		}, nil
 	}
 	s.settingsState.RUnlock()
@@ -475,28 +569,28 @@ func (s *AuthServer) ContinueAuth(ctx context.Context, request *pb.ClientContinu
 	clientGuid, err := uuid.Parse(request.ClientGuid)
 	if err != nil {
 		s.logger.Error("Failed to parse ClientGuid", "ClientGuid", request.ClientGuid, "Error", err)
-		return &pb.ServerAuthStepResponse{
+		return &pb.AuthStepResponse{
 			Success:   false,
 			SessionId: "",
-			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: "Invalid ClientGuid"},
+			Result:    &pb.AuthStepResponse_ErrorMessage{ErrorMessage: "Invalid ClientGuid"},
 		}, err
 	}
 	s.mu.RLock()
 	authenticatedClient, ok := s.authenticatingClients[clientGuid]
 	if !ok {
 		s.mu.RUnlock()
-		return &pb.ServerAuthStepResponse{
+		return &pb.AuthStepResponse{
 			Success:   false,
 			SessionId: "",
-			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: "ClientGuid not found, please initialize first"},
+			Result:    &pb.AuthStepResponse_ErrorMessage{ErrorMessage: "ClientGuid not found, please initialize first"},
 		}, nil
 	}
 	s.mu.RUnlock()
 	if authenticatedClient.SessionId != request.SessionId {
-		return &pb.ServerAuthStepResponse{
+		return &pb.AuthStepResponse{
 			Success:   false,
 			SessionId: "",
-			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: "SessionId does not match, please start authentication again"},
+			Result:    &pb.AuthStepResponse_ErrorMessage{ErrorMessage: "SessionId does not match, please start authentication again"},
 		}, nil
 	}
 
@@ -506,10 +600,10 @@ func (s *AuthServer) ContinueAuth(ctx context.Context, request *pb.ClientContinu
 	if !ok {
 		s.mu.RUnlock()
 		s.logger.Warn("Plugin not found", "PluginName", authenticatedClient.PluginUsed)
-		return &pb.ServerAuthStepResponse{
+		return &pb.AuthStepResponse{
 			Success:   false,
 			SessionId: "",
-			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("Plugin %s not found", authenticatedClient.PluginUsed)},
+			Result:    &pb.AuthStepResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("Plugin %s not found", authenticatedClient.PluginUsed)},
 		}, nil
 	}
 	s.mu.RUnlock()
@@ -518,10 +612,10 @@ func (s *AuthServer) ContinueAuth(ctx context.Context, request *pb.ClientContinu
 	loginResponse, err := pluginClient.ContinueAuth(request.SessionId, request.StepData)
 	if err != nil {
 		s.logger.Error("Plugin ContinueAuth failed", "plugin-name", authenticatedClient.PluginUsed, "Error", err)
-		return &pb.ServerAuthStepResponse{
+		return &pb.AuthStepResponse{
 			Success:   false,
 			SessionId: "",
-			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("ContinueAuth failed: %s", err.Error())},
+			Result:    &pb.AuthStepResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("ContinueAuth failed: %s", err.Error())},
 		}, nil
 	}
 
@@ -531,24 +625,24 @@ func (s *AuthServer) ContinueAuth(ctx context.Context, request *pb.ClientContinu
 	case authpb.AuthStepStatus_AUTH_FAILED:
 		errMsg := loginResponse.StepResult.(*authpb.AuthStepResponse_ErrorMessage)
 		s.logger.Warn("Plugin ContinueAuth failed", "plugin-name", authenticatedClient.PluginUsed, "Error", errMsg.ErrorMessage)
-		return &pb.ServerAuthStepResponse{
+		return &pb.AuthStepResponse{
 			Success:   false,
 			SessionId: loginResponse.SessionId,
-			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("ContinueAuth failed: %s", errMsg.ErrorMessage)},
+			Result:    &pb.AuthStepResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("ContinueAuth failed: %s", errMsg.ErrorMessage)},
 		}, nil
 	case authpb.AuthStepStatus_AUTH_COMPLETE:
 		return s.handleAuthComplete(clientGuid, loginResponse)
 	default:
 		s.logger.Error("Plugin returned unknown status", "plugin-name", authenticatedClient.PluginUsed, "Status", loginResponse.GetStatus())
-		return &pb.ServerAuthStepResponse{
+		return &pb.AuthStepResponse{
 			Success:   false,
 			SessionId: loginResponse.SessionId,
-			Result:    &pb.ServerAuthStepResponse_ErrorMessage{ErrorMessage: "Plugin returned unknown status"},
+			Result:    &pb.AuthStepResponse_ErrorMessage{ErrorMessage: "Plugin returned unknown status"},
 		}, nil
 	}
 }
 
-func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.ClientUnitSelectRequest) (*pb.ServerUnitSelectResponse, error) {
+func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.UnitSelectRequest) (*pb.UnitSelectResponse, error) {
 	p, _ := peer.FromContext(ctx)
 	s.logger.Debug("Processing Unit Select", "IP", p.Addr.String(), "ClientGuid", request.ClientGuid, "UnitId", request.UnitId)
 
@@ -556,9 +650,9 @@ func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.ClientUnitSelec
 	clientGuid, err := uuid.Parse(request.ClientGuid)
 	if err != nil {
 		s.logger.Error("Failed to parse ClientGuid", "ClientGuid", request.ClientGuid, "Error", err)
-		return &pb.ServerUnitSelectResponse{
+		return &pb.UnitSelectResponse{
 			Success: false,
-			Result:  &pb.ServerUnitSelectResponse_ErrorMessage{ErrorMessage: "Invalid ClientGuid"},
+			Result:  &pb.UnitSelectResponse_ErrorMessage{ErrorMessage: "Invalid ClientGuid"},
 		}, err
 	}
 	s.mu.RLock()
@@ -566,9 +660,9 @@ func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.ClientUnitSelec
 	if !ok {
 		s.mu.RUnlock()
 		s.logger.Warn("Client not found for Unit Select", "ClientGuid", request.ClientGuid)
-		return &pb.ServerUnitSelectResponse{
+		return &pb.UnitSelectResponse{
 			Success: false,
-			Result:  &pb.ServerUnitSelectResponse_ErrorMessage{ErrorMessage: "ClientGuid not found, please initialize first"},
+			Result:  &pb.UnitSelectResponse_ErrorMessage{ErrorMessage: "ClientGuid not found, please initialize first"},
 		}, nil
 	}
 	s.mu.RUnlock()
@@ -576,9 +670,9 @@ func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.ClientUnitSelec
 	// Check secret
 	if authClient == nil || authClient.Secret != request.Secret {
 		s.logger.Warn("Authentication failed for Unit Select", "ClientGuid", request.ClientGuid, "UnitId", request.UnitId)
-		return &pb.ServerUnitSelectResponse{
+		return &pb.UnitSelectResponse{
 			Success: false,
-			Result:  &pb.ServerUnitSelectResponse_ErrorMessage{ErrorMessage: "Problem verifying client"},
+			Result:  &pb.UnitSelectResponse_ErrorMessage{ErrorMessage: "Problem verifying client"},
 		}, nil
 	}
 
@@ -587,9 +681,9 @@ func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.ClientUnitSelec
 	if selectedUnit == nil {
 		// Other UnitIds should also be valid, so we check if the UnitId is valid
 		if !checkUnitId(request.UnitId) {
-			return &pb.ServerUnitSelectResponse{
+			return &pb.UnitSelectResponse{
 				Success: false,
-				Result:  &pb.ServerUnitSelectResponse_ErrorMessage{ErrorMessage: "Invalid UnitId"},
+				Result:  &pb.UnitSelectResponse_ErrorMessage{ErrorMessage: "Invalid UnitId"},
 			}, nil
 		}
 		// If the UnitId is not available, we create a new selection as only the UnitId is required
@@ -601,17 +695,17 @@ func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.ClientUnitSelec
 
 	// Check if the role is available
 	if !isRoleAvailable(authClient, uint8(request.Role)) {
-		return &pb.ServerUnitSelectResponse{
+		return &pb.UnitSelectResponse{
 			Success: false,
-			Result:  &pb.ServerUnitSelectResponse_ErrorMessage{ErrorMessage: "Invalid Role"},
+			Result:  &pb.UnitSelectResponse_ErrorMessage{ErrorMessage: "Invalid Role"},
 		}, nil
 	}
 
 	// Check if the coalition is available
 	if !s.isCoalitionAvailable(request.Coalition) {
-		return &pb.ServerUnitSelectResponse{
+		return &pb.UnitSelectResponse{
 			Success: false,
-			Result:  &pb.ServerUnitSelectResponse_ErrorMessage{ErrorMessage: "Invalid Coalition"},
+			Result:  &pb.UnitSelectResponse_ErrorMessage{ErrorMessage: "Invalid Coalition"},
 		}, nil
 	}
 
@@ -640,9 +734,9 @@ func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.ClientUnitSelec
 
 	if err != nil {
 		s.logger.Error("Failed to generate token for guest login", "error", err)
-		return &pb.ServerUnitSelectResponse{
+		return &pb.UnitSelectResponse{
 			Success: false,
-			Result:  &pb.ServerUnitSelectResponse_ErrorMessage{ErrorMessage: "Failed to generate token"},
+			Result:  &pb.UnitSelectResponse_ErrorMessage{ErrorMessage: "Failed to generate token"},
 		}, err
 	}
 
@@ -651,9 +745,9 @@ func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.ClientUnitSelec
 		Data: s.serverState.Clients,
 	})
 
-	return &pb.ServerUnitSelectResponse{
+	return &pb.UnitSelectResponse{
 		Success: true,
-		Result:  &pb.ServerUnitSelectResponse_Token{Token: token},
+		Result:  &pb.UnitSelectResponse_Token{Token: token},
 	}, nil
 }
 

@@ -197,6 +197,21 @@ func (v *PluginClient) discoverPluginFlows() ([]string, error) {
 	return configurableFlows, nil
 }
 
+func (v *PluginClient) DiscoverPluginFlows() (*pb.FlowDiscoveryResponse, error) {
+	if v.client == nil {
+		return nil, fmt.Errorf("client is not initialized")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	request := &pb.FlowDiscoveryRequest{}
+	resp, err := v.client.GetSupportedFlows(ctx, request)
+	if err != nil {
+		return nil, fmt.Errorf("failed to discover flows: %w", err)
+	}
+	return resp, nil
+}
+
 func (v *PluginClient) configureFlows(configurableFlows []string) error {
 	flowSet := make(map[string]struct{}, len(configurableFlows))
 	for _, f := range configurableFlows {
