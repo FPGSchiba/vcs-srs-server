@@ -20,7 +20,7 @@
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-router": "^7.9.3",
-    "sass": "^1.89.2",
+    "sass": "^1.93.2",
     "uuid": "^13.0.0",
     "vite-plugin-typed-css-modules": "^0.4.0",
     "zod": "^4.1.11"
