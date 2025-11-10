@@ -14,7 +14,7 @@
     "@hookform/resolvers": "^5.2.2",
     "@mui/icons-material": "^7.3.4",
     "@mui/lab": "^7.0.0-beta.17",
-    "@mui/material": "^7.1.2",
+    "@mui/material": "^7.3.5",
     "@wailsio/runtime": "^3.0.0-alpha.72",
     "mui-color-input": "^7.0.0",
     "react": "^19.2.0",
