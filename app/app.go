@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -32,7 +33,7 @@ type VCSApplication struct {
 
 // New creates a new App application struct
 func New() *VCSApplication {
-	app := &VCSApplication{
+	return &VCSApplication{
 		ServerState:       &state.ServerState{},
 		SettingsState:     &state.SettingsState{},
 		AdminState:        &state.AdminState{},
@@ -45,12 +46,6 @@ func New() *VCSApplication {
 		StopSignals:       make(map[string]chan struct{}),
 		App:               nil,
 	}
-	// Subscribe to the notification event to log notifications
-	notChan := app.eventBus.Subscribe(events.NotificationEvent)
-	allChan := app.eventBus.Subscribe("*")
-	go app.handleFrontendEmits(allChan)
-	go app.handleNotificationEvent(notChan)
-	return app
 }
 
 func (a *VCSApplication) StartUp(app *application.App, configFilePath, bannedFilePath string, autoStartServers bool) {
@@ -113,6 +108,12 @@ func (a *VCSApplication) StartUp(app *application.App, configFilePath, bannedFil
 	if autoStartServers {
 		a.StartStandaloneServer()
 	}
+
+	// Subscribe to the notification event to log notifications
+	notChan := a.eventBus.Subscribe(events.NotificationEvent)
+	allChan := a.eventBus.Subscribe("*")
+	go a.handleFrontendEmits(allChan)
+	go a.handleNotificationEvent(notChan)
 }
 
 func (a *VCSApplication) HeadlessStartup(logger *slog.Logger, configFilePath, bannedFilePath string, distributionMode uint8) {
@@ -275,6 +276,10 @@ func (a *VCSApplication) EmitEvent(event events.Event) {
 }
 
 func (a *VCSApplication) handleNotificationEvent(channel chan events.Event) {
+	var guiMode bool
+	a.DistributionState.RLock()
+	guiMode = a.DistributionState.RuntimeMode == state.RuntimeModeGUI
+	a.DistributionState.RUnlock()
 	for event := range channel {
 		if event.Name == events.NotificationEvent {
 			notification, ok := event.Data.(events.Notification)
@@ -283,22 +288,21 @@ func (a *VCSApplication) handleNotificationEvent(channel chan events.Event) {
 				continue
 			}
 			a.Logger.Info("Notification received", "title", notification.Title, "message", notification.Message, "level", notification.Level)
-			a.DistributionState.RLock()
-			if a.DistributionState.RuntimeMode == state.RuntimeModeGUI {
-				a.DistributionState.RUnlock()
+			if guiMode {
 				a.App.Event.EmitEvent(&application.CustomEvent{Name: event.Name, Data: notification})
 				continue
 			}
-			a.DistributionState.RUnlock() // In headless mode, just log the notification
 		}
 	}
 }
 
 func (a *VCSApplication) handleFrontendEmits(channel chan events.Event) {
 	a.DistributionState.RLock()
+	fmt.Println("Current Runtime mode: ", a.DistributionState.RuntimeMode)
 	if a.DistributionState.RuntimeMode == state.RuntimeModeGUI {
 		a.DistributionState.RUnlock()
 		for event := range channel {
+			fmt.Println("Received event from event bus: ", event.Name)
 			a.App.Event.EmitEvent(&application.CustomEvent{Name: event.Name, Data: event.Data})
 		}
 	}

@@ -28,7 +28,7 @@ func (c *ClientService) GetBannedClients() []state.BannedClient {
 }
 
 func (c *ClientService) BanClient(clientId string, reason string) {
-	c.BanClient(clientId, reason)
+	c.App.BanClient(clientId, reason)
 }
 
 func (c *ClientService) UnbanClient(clientId string) {

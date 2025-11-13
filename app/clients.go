@@ -45,7 +45,7 @@ func (a *VCSApplication) GetBannedClients() []state.BannedClient {
 	return a.ServerState.BannedState.BannedClients
 }
 
-func (a *VCSApplication) BanClient(clientId string, reason string) { // TODO: Implement the Backend Logic to ban a client
+func (a *VCSApplication) BanClient(clientId string, reason string) {
 	a.ServerState.Lock()
 	defer a.ServerState.Unlock()
 	clientGuid, err := uuid.Parse(clientId)
@@ -62,7 +62,7 @@ func (a *VCSApplication) BanClient(clientId string, reason string) { // TODO: Im
 	}
 	a.ServerState.BannedState.BannedClients = append(a.ServerState.BannedState.BannedClients, state.BannedClient{
 		Name:      client.Name,
-		IPAddress: "0.0.0.0",
+		IPAddress: "0.0.0.0", // TODO: Get real IP Address from backend
 		Reason:    reason,
 		ID:        clientId,
 	})

@@ -20,7 +20,7 @@ func main() {
 
 	vcs := app.New()
 
-	defer func() {                        // Ensure we catch any panics and log them
+	defer func() { // Ensure we catch any panics and log them
 		if err := recover(); err != nil { //catch
 			logger.Error("Application panicked", "error", err)
 			os.Exit(1)
@@ -49,17 +49,18 @@ func main() {
 
 	wails := application.New(appOptions)
 	vcs.StartUp(wails, configFilepath, bannedFilePath, autoStartServers)
-	
+
 	wails.Window.NewWithOptions(application.WebviewWindowOptions{
-		Title:          "VCS Server",
-		Width:          1080,
-		Height:         800,
-		MaxHeight:      800,
-		MaxWidth:       1080,
-		MinHeight:      800,
-		MinWidth:       1080,
-		BackgroundType: application.BackgroundTypeTransparent,
-		Frameless:      true,
+		Title:           "VCS Server",
+		DevToolsEnabled: true,
+		Width:           1080,
+		Height:          800,
+		MaxHeight:       800,
+		MaxWidth:        1080,
+		MinHeight:       800,
+		MinWidth:        1080,
+		BackgroundType:  application.BackgroundTypeTransparent,
+		Frameless:       true,
 		Mac: application.MacWindow{
 			InvisibleTitleBarHeight: 50,
 			Backdrop:                application.MacBackdropTransparent,

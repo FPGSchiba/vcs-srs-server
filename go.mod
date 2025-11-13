@@ -10,7 +10,7 @@ require (
 	github.com/pion/opus v0.0.0-20250922023219-00a4dd0bfcf6
 	github.com/samber/slog-multi v1.5.0
 	github.com/sethvargo/go-diceware v0.5.0
-	github.com/wailsapp/wails/v3 v3.0.0-alpha.29
+	github.com/wailsapp/wails/v3 v3.0.0-alpha.40
 	golang.org/x/crypto v0.42.0
 	google.golang.org/grpc v1.75.1
 	google.golang.org/protobuf v1.36.9
@@ -71,7 +71,7 @@ require (
 	github.com/skeema/knownhosts v1.3.1 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.0 // indirect
-	github.com/wailsapp/go-webview2 v1.0.21 // indirect
+	github.com/wailsapp/go-webview2 v1.0.22 // indirect
 	github.com/wailsapp/mimetype v1.4.1 // indirect
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
 	go.uber.org/mock v0.6.0 // indirect

@@ -85,7 +85,7 @@ function SettingsPage() {
     };
 
     const handleSettingsChange = async (event: WailsEvent) => {
-        const settings = event.data[0] as SettingsState;
+        const settings = event.data as SettingsState;
         reset({
             General: {
                 MaxRadiosPerUser: Number(settings.General.MaxRadiosPerUser) || 1,

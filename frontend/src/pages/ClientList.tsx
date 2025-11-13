@@ -35,7 +35,8 @@ function ClientListPage() {
     React.useEffect(() => {
         fetchClients();
         Events.On("clients/changed", (event: WailsEvent) => {
-            const clients = event.data[0] as Record<string, ClientState>
+            const clients = event.data as Record<string, ClientState>
+            console.log("Received clients changed event:", clients);
             setClients(clients);
         });
     }, []);

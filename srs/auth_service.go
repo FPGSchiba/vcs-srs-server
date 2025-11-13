@@ -105,6 +105,8 @@ func (s *AuthServer) InitAuth(ctx context.Context, request *pb.AuthInitRequest) 
 
 	s.removeExpiredAuthenticatingClients()
 
+	// TODO: Check if IP is banned
+
 	// Check Version
 	if !checkVersion(request.Capabilities.Version) {
 		return &pb.AuthInitResponse{

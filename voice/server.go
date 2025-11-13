@@ -126,6 +126,8 @@ func (v *Server) Listen(address string, stopChan chan struct{}) error {
 				continue
 			}
 
+			// TODO: Check if IP is banned
+
 			// Handle the received packet
 			go v.handlePacket(buffer[:n], remoteAddr)
 		}
@@ -226,7 +228,7 @@ func (v *Server) handleVoicePacket(packet *VCSPacket) {
 		// Ignore very small packets (could be keepalive or empty)
 		v.broadcastVoice(packet, packet.SenderID)
 	}
-	
+
 	// Optionally, you can log the received voice packet
 	v.logger.Debug("Received voice packet",
 		"sender_id", packet.SenderID,
