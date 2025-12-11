@@ -14,13 +14,8 @@ import (
 	"time"
 )
 
-const (
-	certFileName       = "voicecontrol-cert.pem"
-	privateKeyFileName = "voicecontrol-private-key.pem"
-)
-
 // LoadOrGenerateKeyPair ensures both private key and certificate exist, generating them if needed, and returns both.
-func LoadOrGenerateKeyPair() (*tls.Certificate, *rsa.PrivateKey, error) {
+func LoadOrGenerateKeyPair(privateKeyFileName, certFileName string) (*tls.Certificate, *rsa.PrivateKey, error) {
 	if _, err := os.Stat(privateKeyFileName); os.IsNotExist(err) {
 		cert, privateKey, err := generateSelfSignedCert()
 		if err != nil {
@@ -60,7 +55,7 @@ func LoadOrGenerateKeyPair() (*tls.Certificate, *rsa.PrivateKey, error) {
 }
 
 // LoadCertificateOnly loads and returns the certificate without the private key.
-func LoadCertificateOnly() (*x509.Certificate, error) {
+func LoadCertificateOnly(certFileName string) (*x509.Certificate, error) {
 	certData, err := os.ReadFile(certFileName)
 	if err != nil {
 		return nil, err

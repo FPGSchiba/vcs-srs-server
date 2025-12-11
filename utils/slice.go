@@ -20,3 +20,13 @@ func Remove[K comparable](s []K, e K) []K {
 	s[i] = s[len(s)-1]
 	return s[:len(s)-1]
 }
+
+func FindByFunc[K any](s []K, f func(K) bool) (K, bool) {
+	var zero K
+	for _, v := range s {
+		if f(v) {
+			return v, true
+		}
+	}
+	return zero, false
+}

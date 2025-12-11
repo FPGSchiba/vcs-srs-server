@@ -9,6 +9,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const (
+	DefaultHost = "0.0.0.0"
+	DefaultPort = 5002
+
+	DefaultVoiceControlPort = 14448
+	DefaultVoiceControlHost = "0.0.0.0"
+)
+
 // SettingsState holds the current state of the settings
 type SettingsState struct {
 	sync.RWMutex `yaml:"-"`
@@ -98,23 +106,20 @@ func GetSettingsState(file string) (*SettingsState, error) {
 	if err != nil {
 		// If the file doesn't exist, create a new one with default values
 		if os.IsNotExist(err) {
-			const defaultHost = "0.0.0.0"
-			const defaultPort = 5002
-
 			settings := &SettingsState{
 				file: file,
 				Servers: ServerSettings{
 					HTTP: ServerSetting{
-						Host: defaultHost,
+						Host: DefaultHost,
 						Port: 80,
 					},
 					Voice: ServerSetting{
-						Host: defaultHost,
-						Port: defaultPort,
+						Host: DefaultHost,
+						Port: DefaultPort,
 					},
 					Control: ServerSetting{
-						Host: defaultHost,
-						Port: defaultPort,
+						Host: DefaultHost,
+						Port: DefaultPort,
 					},
 				},
 				Coalitions: make([]Coalition, 0),
@@ -138,9 +143,9 @@ func GetSettingsState(file string) (*SettingsState, error) {
 					},
 				},
 				VoiceControl: VoiceControlSettings{
-					Port:            14448,
-					RemoteHost:      "localhost", // Default remote host is empty
-					ListenHost:      defaultHost,
+					Port:            DefaultVoiceControlPort,
+					RemoteHost:      "localhost",
+					ListenHost:      DefaultVoiceControlHost,
 					CertificateFile: "/path/to/voicecontrol-cert.pem",
 					PrivateKeyFile:  "/path/to/voicecontrol-private-key.pem",
 				},

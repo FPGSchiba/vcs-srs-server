@@ -105,7 +105,21 @@ func (s *AuthServer) InitAuth(ctx context.Context, request *pb.AuthInitRequest) 
 
 	s.removeExpiredAuthenticatingClients()
 
-	// TODO: Check if IP is banned
+	s.serverState.RLock()
+	_, banned := utils.FindByFunc(s.serverState.BannedState.BannedClients, func(bc state.BannedClient) bool {
+		if bc.IPAddress == p.Addr.String() {
+			return true
+		}
+		return false
+	})
+	s.serverState.RUnlock()
+	if banned {
+		s.logger.Warn("Banned client attempted to initialize", "IP", p.Addr.String())
+		return &pb.AuthInitResponse{
+			Success:    false,
+			InitResult: &pb.AuthInitResponse_ErrorMessage{ErrorMessage: "You are banned from this server"},
+		}, nil
+	}
 
 	// Check Version
 	if !checkVersion(request.Capabilities.Version) {

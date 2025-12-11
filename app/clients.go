@@ -60,11 +60,25 @@ func (a *VCSApplication) BanClient(clientId string, reason string) {
 		a.Logger.Error("Failed to ban client", "clientId", clientId, "reason", reason)
 		return
 	}
+	_, alreadyBanned := utils.FindByFunc(a.ServerState.BannedState.BannedClients, func(bc state.BannedClient) bool {
+		return bc.ID == clientGuid
+	})
+	if alreadyBanned {
+		a.Notify(events.NewNotification("Ban failed", "Client is already banned", "error"))
+		a.Logger.Error("Failed to ban client: already banned", "clientId", clientId)
+		return
+	}
+	clientIp, ok := a.voiceServer.GetClientIPFromId(clientGuid)
+	if !ok {
+		a.Notify(events.NewNotification("Ban failed", "Client not found in voice server", "error"))
+		a.Logger.Error("Failed to ban client: not found in voice server", "clientId", clientId)
+		return
+	}
 	a.ServerState.BannedState.BannedClients = append(a.ServerState.BannedState.BannedClients, state.BannedClient{
 		Name:      client.Name,
-		IPAddress: "0.0.0.0", // TODO: Get real IP Address from backend
+		IPAddress: clientIp.String(),
 		Reason:    reason,
-		ID:        clientId,
+		ID:        clientGuid,
 	})
 	err = a.ServerState.BannedState.Save()
 	if err != nil {
@@ -88,9 +102,15 @@ func (a *VCSApplication) BanClient(clientId string, reason string) {
 func (a *VCSApplication) UnbanClient(clientId string) {
 	a.ServerState.Lock()
 	defer a.ServerState.Unlock()
+	clientGuid, err := uuid.Parse(clientId)
+	if err != nil {
+		a.Notify(events.NewNotification("Unban failed", "Invalid client ID format", "error"))
+		a.Logger.Error("Failed to parse client ID", "clientId", clientId, "error", err)
+		return
+	}
 	success := false
 	for _, client := range a.ServerState.BannedState.BannedClients {
-		if client.ID == clientId {
+		if client.ID == clientGuid {
 			a.ServerState.BannedState.BannedClients = utils.Remove(a.ServerState.BannedState.BannedClients, client)
 			success = true
 			break
@@ -101,7 +121,7 @@ func (a *VCSApplication) UnbanClient(clientId string) {
 		a.Logger.Error("Failed to unban client", "clientId", clientId)
 		return
 	}
-	err := a.ServerState.BannedState.Save()
+	err = a.ServerState.BannedState.Save()
 	if err != nil {
 		a.Notify(events.NewNotification("Unban failed", "Failed to save banned clients", "error"))
 		a.Logger.Error("Failed to save banned clients", "error", err)

@@ -4,6 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/FPGSchiba/vcs-srs-server/events"
 	"github.com/FPGSchiba/vcs-srs-server/srs"
 	"github.com/FPGSchiba/vcs-srs-server/srspb"
@@ -17,11 +23,6 @@ import (
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/reflection"
-	"log/slog"
-	"net"
-	"strings"
-	"sync"
-	"time"
 )
 
 var (
@@ -33,10 +34,6 @@ const (
 	healthServiceSRS     = "srs"     // service name for SRS
 	healthServiceControl = "control" // service name for Control Server
 	healthServiceAuth    = "auth"    // service name for Auth Server
-)
-
-const (
-	controlServerListeningIpAddress = "0.0.0.0" // Default address for control server
 )
 
 type Server struct {
@@ -84,7 +81,10 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 	}
 
 	if s.isControlServer() {
-		s.controlListener, err = net.Listen("tcp", fmt.Sprintf("%s:%d", controlServerListeningIpAddress, voiceontrol.DefaultVoiceControlPort))
+		s.settingsState.RLock()
+		voiceControlAddr := fmt.Sprintf("%s:%d", s.settingsState.VoiceControl.ListenHost, s.settingsState.VoiceControl.Port)
+		s.settingsState.RUnlock()
+		s.controlListener, err = net.Listen("tcp", voiceControlAddr)
 		if err != nil {
 			return fmt.Errorf("failed to listen on control server address: %v", err)
 		}
@@ -137,7 +137,11 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 }
 
 func (s *Server) initControlServer(controlServer voicecontrolpb.VoiceControlServiceServer) {
-	cert, _, err := voiceontrol.LoadOrGenerateKeyPair()
+	s.serverState.RLock()
+	privateKeyFileName := s.settingsState.VoiceControl.PrivateKeyFile
+	certificateFileName := s.settingsState.VoiceControl.CertificateFile
+	s.serverState.RUnlock()
+	cert, _, err := voiceontrol.LoadOrGenerateKeyPair(privateKeyFileName, certificateFileName)
 	if err != nil {
 		s.logger.Error("Failed to load TLS certificate for control server", "error", err)
 		return
@@ -200,7 +204,10 @@ func (s *Server) serveClient(address string) {
 }
 
 func (s *Server) serveControl() {
-	s.logger.Info("Starting Control gRPC server", "address", fmt.Sprintf("%s:%d", controlServerListeningIpAddress, voiceontrol.DefaultVoiceControlPort))
+	s.settingsState.RLock()
+	addr := fmt.Sprintf("%s:%d", s.settingsState.VoiceControl.ListenHost, s.settingsState.VoiceControl.Port)
+	s.settingsState.RUnlock()
+	s.logger.Info("Starting Control gRPC server", "address", addr)
 	if err := s.controlGrpcServer.Serve(s.controlListener); err != nil {
 		if !errors.Is(err, grpc.ErrServerStopped) {
 			s.logger.Error("gRPC server error", "error", err)

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/FPGSchiba/vcs-srs-server/state"
+	"github.com/FPGSchiba/vcs-srs-server/utils"
 	"github.com/FPGSchiba/vcs-srs-server/voiceontrol"
 	"github.com/faiface/beep"
 	"github.com/faiface/beep/speaker"
@@ -50,7 +51,7 @@ type Server struct {
 	playFormat beep.Format
 	playErr    error
 
-	// Optional: gate concurrent writes to the pipe if PlayVoiceData is called from multiple goroutines
+	// Optional: gate concurrent writes to the pipe if playVoiceData is called from multiple goroutines
 	playMu sync.Mutex
 }
 
@@ -75,9 +76,8 @@ func (v *Server) isDistributedServer() bool {
 func (v *Server) Listen(address string, stopChan chan struct{}) error {
 	if v.isDistributedServer() {
 		// Initialize control client if this is a distributed server
-		v.controlClient = voiceontrol.NewVoiceControlClient(v.serverId, v.logger)
-		// TODO: Make Server domain / IP configurable
-		if err := v.controlClient.ConnectControlServer("localhost"); err != nil {
+		v.controlClient = voiceontrol.NewVoiceControlClient(v.serverId, v.settingsState, v.logger)
+		if err := v.controlClient.ConnectControlServer(); err != nil {
 			v.logger.Error("Failed to connect to control server", "error", err)
 			return err
 		}
@@ -126,7 +126,18 @@ func (v *Server) Listen(address string, stopChan chan struct{}) error {
 				continue
 			}
 
-			// TODO: Check if IP is banned
+			v.serverState.RLock()
+			_, banned := utils.FindByFunc(v.serverState.BannedState.BannedClients, func(bc state.BannedClient) bool {
+				if bc.IPAddress == conn.RemoteAddr().String() {
+					return true
+				}
+				return false
+			})
+			v.serverState.RUnlock()
+			if banned {
+				v.logger.Warn("Banned client attempted to initialize", "IP", conn.RemoteAddr().String())
+				continue
+			}
 
 			// Handle the received packet
 			go v.handlePacket(buffer[:n], remoteAddr)
@@ -350,7 +361,7 @@ func (v *Server) GetListeningClients(packet *VCSPacket, senderId uuid.UUID) []*C
 		defer v.serverState.RUnlock()
 		if _, exists := v.clients[packet.SenderID]; exists {
 			// Instead of echoing, play the voice data locally on the server
-			go v.PlayVoiceData(packet.Payload)
+			go v.playVoiceData(packet.Payload)
 			return []*Client{} // Do not send to any clients
 		}
 		v.logger.Warn("Received test frequency packet from unknown client", "sender_id", packet.SenderID)
@@ -372,6 +383,15 @@ func (v *Server) GetListeningClients(packet *VCSPacket, senderId uuid.UUID) []*C
 		}
 	}
 	return listeningClients
+}
+
+func (v *Server) GetClientIPFromId(clientId uuid.UUID) (net.IP, bool) {
+	v.RLock()
+	defer v.RUnlock()
+	if client, exists := v.clients[clientId]; exists {
+		return client.Addr.IP, true
+	}
+	return nil, false
 }
 
 // parseOpusPacket extracts individual frames from an Opus packet
@@ -512,7 +532,7 @@ func parseOpusPacket(payload []byte) ([][]byte, error) {
 	}
 }
 
-func (v *Server) PlayVoiceData(payload []byte) {
+func (v *Server) playVoiceData(payload []byte) {
 	if len(payload) == 0 {
 		return
 	}

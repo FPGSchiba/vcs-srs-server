@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/FPGSchiba/vcs-srs-server/state"
 	pb "github.com/FPGSchiba/vcs-srs-server/voicecontrolpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
@@ -15,10 +16,6 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
-)
-
-const (
-	DefaultVoiceControlPort = 14448
 )
 
 type VoiceControlClient struct {
@@ -31,20 +28,28 @@ type VoiceControlClient struct {
 	stream              grpc.BidiStreamingClient[pb.ControlResponse, pb.ControlMessage]
 	stopc               chan struct{}
 	connectionFailed    bool
+	settingsState       *state.SettingsState
 }
 
-func NewVoiceControlClient(serverId string, logger *slog.Logger) *VoiceControlClient {
+func NewVoiceControlClient(serverId string, settingsState *state.SettingsState, logger *slog.Logger) *VoiceControlClient {
 	return &VoiceControlClient{
-		serverId: serverId,
-		logger:   logger,
+		serverId:      serverId,
+		logger:        logger,
+		settingsState: settingsState,
 	}
 }
 
-func (v *VoiceControlClient) ConnectControlServer(addr string) error {
-	address := fmt.Sprintf("%s:%d", addr, DefaultVoiceControlPort)
+func (v *VoiceControlClient) ConnectControlServer() error {
+	v.settingsState.RLock()
+	address := fmt.Sprintf("%s:%d", v.settingsState.VoiceControl.RemoteHost, v.settingsState.VoiceControl.Port)
+	v.settingsState.RUnlock()
 	v.logger.Info("Connecting to Control node", "address", address)
 
-	cert, err := LoadCertificateOnly()
+	v.settingsState.RLock()
+	certFileName := v.settingsState.VoiceControl.CertificateFile
+	v.settingsState.RUnlock()
+
+	cert, err := LoadCertificateOnly(certFileName)
 	if err != nil {
 		return err
 	}

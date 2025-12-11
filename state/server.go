@@ -44,10 +44,10 @@ type BannedState struct {
 }
 
 type BannedClient struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	IPAddress string `json:"ip_address"`
-	Reason    string `json:"reason"`
+	ID        uuid.UUID `json:"id"`
+	Name      string    `json:"name"`
+	IPAddress string    `json:"ip_address"`
+	Reason    string    `json:"reason"`
 }
 
 func ensureBanFileExists(bannedFile string) error {
