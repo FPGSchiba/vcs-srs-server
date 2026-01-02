@@ -1,31 +1,31 @@
-# To get started with Dependabot version updates, you'll need to specify which
-# package ecosystems to update and where the package manifests are located.
-# Please see the documentation for all configuration options:
-# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
-
 version: 2
 updates:
-  - package-ecosystem: "gomod" # See documentation for possible values
-    directory: "/" # Location of package manifests
+  # 1. Go Modules - Groups all Go updates into one PR
+  - package-ecosystem: "gomod"
+    directory: "/"
     schedule:
       interval: "weekly"
     groups:
-      dependencies:
+      all-go:
         patterns:
           - "*"
+
+  # 2. Docker - Groups all Docker updates into one PR
   - package-ecosystem: "docker"
-    directory: "/" # Location of package manifests
+    directory: "/"
     schedule:
       interval: "weekly"
     groups:
-      dependencies:
+      all-docker:
         patterns:
           - "*"
+
+  # 3. NPM - Groups all NPM updates (in /frontend) into one PR
   - package-ecosystem: "npm"
-    directory: "/frontend" # Location of package manifests
+    directory: "/frontend"
     schedule:
       interval: "weekly"
     groups:
-      dependencies:
+      all-npm:
         patterns:
           - "*"
