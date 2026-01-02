@@ -15,15 +15,15 @@
     "@mui/icons-material": "^7.3.6",
     "@mui/lab": "^7.0.0-beta.17",
     "@mui/material": "^7.3.6",
-    "@wailsio/runtime": "^3.0.0-alpha.73",
+    "@wailsio/runtime": "^3.0.0-alpha.77",
     "mui-color-input": "^7.0.0",
     "react": "^19.2.3",
-    "react-dom": "^19.2.0",
+    "react-dom": "^19.2.3",
     "react-router": "^7.11.0",
-    "sass": "^1.96.0",
+    "sass": "^1.97.1",
     "uuid": "^13.0.0",
-    "vite-plugin-typed-css-modules": "^0.5.0",
-    "zod": "^4.2.0"
+    "vite-plugin-typed-css-modules": "^0.5.3",
+    "zod": "^4.3.4"
   },
   "devDependencies": {
     "@types/react": "^19.2.7",
