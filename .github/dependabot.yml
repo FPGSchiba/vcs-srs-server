@@ -29,3 +29,13 @@ updates:
       all-npm:
         patterns:
           - "*"
+
+  # 4. GitHub Actions - Groups all GitHub Actions updates into one PR
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      all-github-actions:
+        patterns:
+          - "*"
