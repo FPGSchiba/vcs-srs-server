@@ -19,8 +19,8 @@
     "mui-color-input": "^7.0.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "react-router": "^7.13.1",
-    "sass": "^1.97.3",
+    "react-router": "^7.13.2",
+    "sass": "^1.98.0",
     "uuid": "^13.0.0",
     "vite-plugin-typed-css-modules": "^0.5.3",
     "zod": "^4.3.6"
@@ -28,9 +28,9 @@
   "devDependencies": {
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "5.1.4",
+    "@vitejs/plugin-react": "6.0.1",
     "typed-scss-modules": "^8.1.1",
-    "typescript": "^5.9.3",
-    "vite": "7.3.1"
+    "typescript": "^6.0.2",
+    "vite": "8.0.2"
   }
 }
