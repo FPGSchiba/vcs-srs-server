@@ -144,7 +144,6 @@ func (v *VoiceControlClient) registerSelf() error {
 
 func (v *VoiceControlClient) establishStream() error {
 	stream, err := v.client.EstablishStream(context.Background())
-	v.stream = stream
 	if err != nil {
 		st, ok := status.FromError(err)
 		if ok && (st.Code() == codes.Unavailable || st.Code() == codes.DeadlineExceeded) {
@@ -153,6 +152,7 @@ func (v *VoiceControlClient) establishStream() error {
 		}
 		return fmt.Errorf("failed to establish stream: %v", err)
 	}
+	v.stream = stream
 	if v.stopc == nil {
 		v.stopc = make(chan struct{})
 	}

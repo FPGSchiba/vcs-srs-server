@@ -52,14 +52,17 @@ type BannedClient struct {
 
 func ensureBanFileExists(bannedFile string) error {
 	_, err := os.Stat(bannedFile)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
 	if os.IsNotExist(err) {
 		f, createErr := os.Create(bannedFile)
 		if createErr != nil {
 			return createErr
 		}
-		defer f.Close()
+		f.Close()
 	}
-	return err
+	return nil
 }
 
 func getBanFile(bannedFile string) (string, error) {

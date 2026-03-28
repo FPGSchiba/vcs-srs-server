@@ -298,20 +298,22 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.GuestLoginReque
 	}
 
 	// Check Password > Select coalition
-	s.mu.Lock()
-	var selectedCoalition *state.Coalition
+	s.settingsState.RLock()
+	var selectedCoalition state.Coalition
+	var coalitionFound bool
 	for _, coalition := range s.settingsState.Coalitions {
 		if utils.CheckPasswordHash(coalition.Password, request.Password) {
-			s.mu.Unlock()
-			selectedCoalition = &coalition
+			selectedCoalition = coalition
+			coalitionFound = true
 			break
 		}
 	}
+	s.settingsState.RUnlock()
 
-	if selectedCoalition == nil {
+	if !coalitionFound {
 		return &pb.GuestLoginResponse{
 			Success:     false,
-			LoginResult: &pb.GuestLoginResponse_ErrorMessage{ErrorMessage: "No Coalition found with that password"},
+			LoginResult: &pb.GuestLoginResponse_ErrorMessage{ErrorMessage: "No coalition found with that password"},
 		}, nil
 	}
 

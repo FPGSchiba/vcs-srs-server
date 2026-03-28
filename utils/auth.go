@@ -127,6 +127,9 @@ func encode(privateKey *ecdsa.PrivateKey, publicKey *ecdsa.PublicKey) (string, s
 
 func decode(pemEncoded string, pemEncodedPub string) (*ecdsa.PrivateKey, *ecdsa.PublicKey, error) {
 	block, _ := pem.Decode([]byte(pemEncoded))
+	if block == nil {
+		return nil, nil, fmt.Errorf("failed to decode private key PEM")
+	}
 	x509Encoded := block.Bytes
 	privateKey, err := x509.ParseECPrivateKey(x509Encoded)
 	if err != nil {
@@ -134,6 +137,9 @@ func decode(pemEncoded string, pemEncodedPub string) (*ecdsa.PrivateKey, *ecdsa.
 	}
 
 	blockPub, _ := pem.Decode([]byte(pemEncodedPub))
+	if blockPub == nil {
+		return nil, nil, fmt.Errorf("failed to decode public key PEM")
+	}
 	x509EncodedPub := blockPub.Bytes
 	genericPublicKey, err := x509.ParsePKIXPublicKey(x509EncodedPub)
 	if err != nil {
