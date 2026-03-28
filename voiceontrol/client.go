@@ -27,6 +27,7 @@ type VoiceControlClient struct {
 	logger              *slog.Logger
 	stream              grpc.BidiStreamingClient[pb.ControlResponse, pb.ControlMessage]
 	stopc               chan struct{}
+	cancelMonitor       context.CancelFunc
 	connectionFailed    bool
 	settingsState       *state.SettingsState
 }
@@ -94,10 +95,16 @@ func (v *VoiceControlClient) ConnectControlServer() error {
 }
 
 func (v *VoiceControlClient) establishConnection() error {
+	if v.cancelMonitor != nil {
+		v.cancelMonitor()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	v.cancelMonitor = cancel
+
 	go func() {
 		lastState := v.conn.GetState()
 		for {
-			if !v.conn.WaitForStateChange(context.Background(), lastState) {
+			if !v.conn.WaitForStateChange(ctx, lastState) {
 				return
 			}
 			newState := v.conn.GetState()
@@ -203,6 +210,9 @@ func (v *VoiceControlClient) handleReconnection() {
 }
 
 func (v *VoiceControlClient) Close() error {
+	if v.cancelMonitor != nil {
+		v.cancelMonitor()
+	}
 	if v.stopc != nil {
 		close(v.stopc)
 	}

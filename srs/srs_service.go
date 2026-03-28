@@ -24,6 +24,8 @@ type SimpleRadioServer struct {
 	settingsState *state.SettingsState
 	eventBus      *events.EventBus
 	streams       map[uuid.UUID]grpc.ServerStreamingServer[pb.ServerUpdate]
+	stopChan      chan struct{}
+	stopOnce      sync.Once
 }
 
 func NewSimpleRadioServer(serverState *state.ServerState, settingsState *state.SettingsState, logger *slog.Logger, bus *events.EventBus) *SimpleRadioServer {
@@ -34,6 +36,7 @@ func NewSimpleRadioServer(serverState *state.ServerState, settingsState *state.S
 		logger:        logger,
 		mu:            sync.Mutex{},
 		streams:       make(map[uuid.UUID]grpc.ServerStreamingServer[pb.ServerUpdate]),
+		stopChan:      make(chan struct{}),
 	}
 	server.StartCleanupRoutine(time.Second*15, time.Minute*10)
 	return &server
@@ -324,24 +327,35 @@ func (s *SimpleRadioServer) cleanupClientState(clientID uuid.UUID) {
 // StartCleanupRoutine launches a goroutine that periodically removes stale clients.
 func (s *SimpleRadioServer) StartCleanupRoutine(interval time.Duration, staleAfter time.Duration) {
 	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
 		for {
-			time.Sleep(interval)
-			now := time.Now()
-			for clientID, stream := range s.streams {
-				s.serverState.RLock()
-				client, exists := s.serverState.Clients[clientID]
-				s.serverState.RUnlock()
-				if !exists || now.Sub(client.LastUpdate) > staleAfter {
-					if stream != nil {
-						stream.Context().Done()
+			select {
+			case <-s.stopChan:
+				return
+			case <-ticker.C:
+				now := time.Now()
+				s.mu.Lock()
+				for clientID, stream := range s.streams {
+					s.serverState.RLock()
+					client, exists := s.serverState.Clients[clientID]
+					s.serverState.RUnlock()
+					if !exists || now.Sub(client.LastUpdate) > staleAfter {
+						if stream != nil {
+							stream.Context().Done()
+						}
+						s.cleanupClientState(clientID)
+						delete(s.streams, clientID)
+						s.logger.Info("Cleaned up stale client", "client_id", clientID)
 					}
-					s.cleanupClientState(clientID)
-					s.mu.Lock()
-					delete(s.streams, clientID)
-					s.mu.Unlock()
-					s.logger.Info("Cleaned up stale client", "client_id", clientID)
 				}
+				s.mu.Unlock()
 			}
 		}
 	}()
+}
+
+// Stop signals the cleanup goroutine to exit.
+func (s *SimpleRadioServer) Stop() {
+	s.stopOnce.Do(func() { close(s.stopChan) })
 }

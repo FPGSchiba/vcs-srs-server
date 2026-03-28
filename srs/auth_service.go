@@ -433,10 +433,10 @@ func (s *AuthServer) StartAuth(ctx context.Context, request *pb.StartAuthRequest
 
 	switch loginResponse.GetStatus() {
 	case authpb.AuthStepStatus_AUTH_CONTINUE:
-		s.mu.RLock()
+		s.mu.Lock()
 		s.authenticatingClients[clientGuid].PluginUsed = request.AuthenticationPlugin
 		s.authenticatingClients[clientGuid].SessionId = loginResponse.SessionId
-		s.mu.RUnlock()
+		s.mu.Unlock()
 		return handleAuthContinue(loginResponse)
 	case authpb.AuthStepStatus_AUTH_FAILED:
 		errMsg := loginResponse.StepResult.(*authpb.AuthStepResponse_ErrorMessage)

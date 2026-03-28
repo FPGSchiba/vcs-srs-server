@@ -120,38 +120,35 @@ func (a *VCSApplication) stopHTTPServer() {
 
 func (a *VCSApplication) startVoiceServer() {
 	a.AdminState.Lock()
-	defer a.AdminState.Unlock()
-
 	if a.AdminState.VoiceStatus.IsRunning {
+		a.AdminState.Unlock()
 		a.Notify(events.NewNotification("Voice server error", "voice server is already running", "warning"))
 		return
 	}
-
 	stopChan := make(chan struct{})
 	a.StopSignals["voice"] = stopChan
+	a.AdminState.Unlock()
+
+	a.SettingsState.RLock()
+	serverHost := fmt.Sprintf("%s:%d", a.SettingsState.Servers.Voice.Host, a.SettingsState.Servers.Voice.Port)
+	a.SettingsState.RUnlock()
 
 	go func() {
 		a.voiceServer = voice.NewServer(a.ServerState, a.Logger, a.DistributionState, a.SettingsState)
 
-		// Update status
 		a.AdminState.Lock()
 		a.AdminState.VoiceStatus.IsRunning = true
 		a.AdminState.VoiceStatus.Error = ""
 		a.AdminState.Unlock()
 
-		a.SettingsState.Lock()
-		serverHost := fmt.Sprintf("%s:%d", a.SettingsState.Servers.Voice.Host, a.SettingsState.Servers.Voice.Port)
-		a.SettingsState.Unlock()
 		if err := a.voiceServer.Listen(serverHost, stopChan); err != nil {
 			a.AdminState.Lock()
 			a.AdminState.VoiceStatus.Error = err.Error()
 			a.AdminState.VoiceStatus.IsRunning = false
 			a.AdminState.Unlock()
-
 			a.Notify(events.NewNotification("voice server error", "Could not start Voice server", "error"))
 			a.Logger.Error("voice server error", "error", err)
 		}
-
 	}()
 
 	a.EmitEvent(events.Event{

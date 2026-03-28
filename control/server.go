@@ -47,6 +47,7 @@ type Server struct {
 	settingsState     *state.SettingsState
 	distributionState *state.DistributionState
 	eventBus          *events.EventBus // Add event bus for handling events
+	srsServer         *srs.SimpleRadioServer
 	isRunning         bool
 	stopOnce          sync.Once // Add this to ensure we only stop once
 }
@@ -103,6 +104,7 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 	)
 
 	srsServer := srs.NewSimpleRadioServer(s.serverState, s.settingsState, s.logger, s.eventBus)
+	s.srsServer = srsServer
 	authServer := srs.NewAuthServer(s.serverState, s.settingsState, s.logger, s.distributionState, s.eventBus)
 	srspb.RegisterSRSServiceServer(s.clientGrpcServer, srsServer)
 	srspb.RegisterAuthServiceServer(s.clientGrpcServer, authServer)
@@ -239,6 +241,10 @@ func (s *Server) Stop() error {
 		s.mu.Unlock()
 
 		s.logger.Info("Stopping gRPC server")
+
+		if s.srsServer != nil {
+			s.srsServer.Stop()
+		}
 
 		// GracefulStop will automatically close the clientListener
 		if s.clientGrpcServer != nil {

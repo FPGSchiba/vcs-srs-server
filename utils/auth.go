@@ -9,14 +9,17 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
 
 var (
-	privateKey *ecdsa.PrivateKey
-	publicKey  *ecdsa.PublicKey
+	keysOnce   sync.Once
+	cachedPriv *ecdsa.PrivateKey
+	cachedPub  *ecdsa.PublicKey
+	keysErr    error
 )
 
 const (
@@ -50,14 +53,10 @@ type TokenClaims struct {
 }
 
 func getKeys(privateKeyFile, publicKeyFile string) (*ecdsa.PrivateKey, *ecdsa.PublicKey, error) {
-	if privateKey == nil {
-		var err error
-		privateKey, publicKey, err = generateKey(privateKeyFile, publicKeyFile)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-	return privateKey, publicKey, nil
+	keysOnce.Do(func() {
+		cachedPriv, cachedPub, keysErr = generateKey(privateKeyFile, publicKeyFile)
+	})
+	return cachedPriv, cachedPub, keysErr
 }
 
 func generateKey(privateKeyFile, publicKeyFile string) (*ecdsa.PrivateKey, *ecdsa.PublicKey, error) {

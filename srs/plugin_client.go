@@ -25,6 +25,7 @@ type PluginClient struct {
 	address          string
 	pluginName       string
 	stopc            chan struct{}
+	cancelMonitor    context.CancelFunc
 	configuredFlows  []string
 	config           *state.FlowConfiguration
 }
@@ -78,10 +79,16 @@ func (v *PluginClient) ConnectPlugin() error {
 }
 
 func (v *PluginClient) establishConnection() error {
+	if v.cancelMonitor != nil {
+		v.cancelMonitor()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	v.cancelMonitor = cancel
+
 	go func() {
 		lastState := v.conn.GetState()
 		for {
-			if !v.conn.WaitForStateChange(context.Background(), lastState) {
+			if !v.conn.WaitForStateChange(ctx, lastState) {
 				return
 			}
 			newState := v.conn.GetState()
@@ -248,6 +255,9 @@ func (v *PluginClient) configureFlows(configurableFlows []string) error {
 }
 
 func (v *PluginClient) Close() error {
+	if v.cancelMonitor != nil {
+		v.cancelMonitor()
+	}
 	if v.stopc != nil {
 		close(v.stopc)
 	}

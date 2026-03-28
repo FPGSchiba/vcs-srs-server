@@ -1,7 +1,6 @@
 package app
 
 import (
-	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -298,13 +297,14 @@ func (a *VCSApplication) handleNotificationEvent(channel chan events.Event) {
 
 func (a *VCSApplication) handleFrontendEmits(channel chan events.Event) {
 	a.DistributionState.RLock()
-	fmt.Println("Current Runtime mode: ", a.DistributionState.RuntimeMode)
-	if a.DistributionState.RuntimeMode == state.RuntimeModeGUI {
-		a.DistributionState.RUnlock()
-		for event := range channel {
-			fmt.Println("Received event from event bus: ", event.Name)
-			a.App.Event.EmitEvent(&application.CustomEvent{Name: event.Name, Data: event.Data})
-		}
+	isGUI := a.DistributionState.RuntimeMode == state.RuntimeModeGUI
+	a.DistributionState.RUnlock()
+
+	if !isGUI {
+		return
 	}
-	a.DistributionState.RUnlock() // In headless mode, we don't emit events to the frontend
+	for event := range channel {
+		a.Logger.Debug("Received event from event bus", "name", event.Name)
+		a.App.Event.EmitEvent(&application.CustomEvent{Name: event.Name, Data: event.Data})
+	}
 }
