@@ -19,10 +19,10 @@ func checkUsername(username string) bool {
 	return len(username) > 0 && len(username) <= 32
 }
 
+var unitIDRegex = regexp.MustCompile(`^[A-Z0-9]{2,4}$`)
+
 func checkUnitId(unitId string) bool {
-	re := `^[A-Z0-9]{2,4}$`
-	matched, _ := regexp.MatchString(re, unitId)
-	return matched
+	return unitIDRegex.MatchString(unitId)
 }
 
 func getSelectedUnit(authClient *AuthenticatingClient, unitId string) *pb.UnitSelection {
