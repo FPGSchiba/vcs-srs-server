@@ -11,3 +11,4 @@ bin/
 *.pb.go
 *.pem
 coverage.out
+.claude/
