@@ -108,14 +108,11 @@ func (v *Server) Listen(address string, stopChan chan struct{}) error {
 
 			v.serverState.RLock()
 			_, banned := utils.FindByFunc(v.serverState.BannedState.BannedClients, func(bc state.BannedClient) bool {
-				if bc.IPAddress == conn.RemoteAddr().String() {
-					return true
-				}
-				return false
+				return bc.IPAddress == remoteAddr.IP.String()
 			})
 			v.serverState.RUnlock()
 			if banned {
-				v.logger.Warn("Banned client attempted to initialize", "IP", conn.RemoteAddr().String())
+				v.logger.Warn("Banned client attempted to connect", "IP", remoteAddr.IP.String())
 				continue
 			}
 

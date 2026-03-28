@@ -7,8 +7,8 @@ import (
 )
 
 func (a *VCSApplication) GetSettings() *state.SettingsState {
-	a.SettingsState.Lock()
-	defer a.SettingsState.Unlock()
+	a.SettingsState.RLock()
+	defer a.SettingsState.RUnlock()
 	return a.SettingsState
 }
 

@@ -1,24 +1,13 @@
 package utils
 
-func indexOf[K comparable](element K, data []K) int {
-	for k, v := range data {
-		if element == v {
-			return k
+func Remove[K comparable](s []K, e K) []K {
+	result := make([]K, 0, len(s))
+	for _, v := range s {
+		if v != e {
+			result = append(result, v)
 		}
 	}
-	return -1 //not found.
-}
-
-func Remove[K comparable](s []K, e K) []K {
-	if len(s) <= 1 {
-		return []K{}
-	}
-	i := indexOf(e, s)
-	if i == -1 {
-		return s
-	}
-	s[i] = s[len(s)-1]
-	return s[:len(s)-1]
+	return result
 }
 
 func FindByFunc[K any](s []K, f func(K) bool) (K, bool) {

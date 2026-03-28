@@ -11,6 +11,7 @@ import (
 	"github.com/FPGSchiba/vcs-srs-server/events"
 	pb "github.com/FPGSchiba/vcs-srs-server/srspb"
 	"github.com/FPGSchiba/vcs-srs-server/state"
+	"github.com/FPGSchiba/vcs-srs-server/utils"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
@@ -111,7 +112,7 @@ func (s *SimpleRadioServer) GetServerSettings(_ context.Context, _ *pb.Empty) (*
 }
 
 func (s *SimpleRadioServer) Disconnect(ctx context.Context, _ *pb.Empty) (*pb.ServerResponse, error) {
-	clientID, err := uuid.Parse(ctx.Value("client_id").(string))
+	clientID, err := uuid.Parse(ctx.Value(utils.ClientIDKey).(string))
 	if err != nil {
 		s.logger.Error("Disconnect failed: invalid client ID", "error", err)
 		return &pb.ServerResponse{
@@ -147,7 +148,7 @@ func (s *SimpleRadioServer) Disconnect(ctx context.Context, _ *pb.Empty) (*pb.Se
 }
 
 func (s *SimpleRadioServer) UpdateClientInfo(ctx context.Context, req *pb.ClientInfo) (*pb.ServerResponse, error) {
-	clientID, err := uuid.Parse(ctx.Value("client_id").(string))
+	clientID, err := uuid.Parse(ctx.Value(utils.ClientIDKey).(string))
 	if err != nil {
 		s.logger.Error("UpdateClientInfo failed: invalid client ID", "error", err)
 		return &pb.ServerResponse{
@@ -231,7 +232,7 @@ func (s *SimpleRadioServer) UpdateClientInfo(ctx context.Context, req *pb.Client
 }
 
 func (s *SimpleRadioServer) UpdateRadioInfo(ctx context.Context, req *pb.RadioInfo) (*pb.ServerResponse, error) {
-	clientID, err := uuid.Parse(ctx.Value("client_id").(string))
+	clientID, err := uuid.Parse(ctx.Value(utils.ClientIDKey).(string))
 	if err != nil {
 		s.logger.Error("UpdateRadioInfo failed: invalid client ID", "error", err)
 		return &pb.ServerResponse{
@@ -268,7 +269,7 @@ func (s *SimpleRadioServer) UpdateRadioInfo(ctx context.Context, req *pb.RadioIn
 }
 
 func (s *SimpleRadioServer) SubscribeToUpdates(_ *pb.Empty, stream grpc.ServerStreamingServer[pb.ServerUpdate]) error {
-	clientID, err := uuid.Parse(stream.Context().Value("client_id").(string))
+	clientID, err := uuid.Parse(stream.Context().Value(utils.ClientIDKey).(string))
 	if err != nil {
 		s.logger.Error("SubscribeToUpdates failed: invalid client ID", "error", err)
 		return err

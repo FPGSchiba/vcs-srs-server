@@ -139,10 +139,10 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 }
 
 func (s *Server) initControlServer(controlServer voicecontrolpb.VoiceControlServiceServer) {
-	s.serverState.RLock()
+	s.settingsState.RLock()
 	privateKeyFileName := s.settingsState.VoiceControl.PrivateKeyFile
 	certificateFileName := s.settingsState.VoiceControl.CertificateFile
-	s.serverState.RUnlock()
+	s.settingsState.RUnlock()
 	cert, _, err := voiceontrol.LoadOrGenerateKeyPair(privateKeyFileName, certificateFileName)
 	if err != nil {
 		s.logger.Error("Failed to load TLS certificate for control server", "error", err)
@@ -323,7 +323,7 @@ func (s *Server) authInterceptor(ctx context.Context, req interface{}, info *grp
 		return nil, fmt.Errorf("unauthenticated request to %s", info.FullMethod)
 	}
 
-	ctx = context.WithValue(ctx, "client_id", claims.ClientGuid)
+	ctx = context.WithValue(ctx, utils.ClientIDKey, claims.ClientGuid)
 
 	return handler(ctx, req)
 }
