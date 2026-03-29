@@ -236,11 +236,13 @@ func (v *Server) handleVoicePacket(packet *VCSPacket) {
 func (v *Server) handleTestFrequencyPacket(packet *VCSPacket) {
 	v.Lock()
 	client, exists := v.clients[packet.SenderID]
-	if exists {
+	var addr *net.UDPAddr
+	if exists && client != nil {
 		client.LastSeen = time.Now()
+		addr = client.Addr
 	}
 	v.Unlock()
-	if !exists || client == nil {
+	if !exists || addr == nil {
 		v.logger.Warn("Test frequency from unknown client", "sender_id", packet.SenderID)
 		return
 	}
@@ -249,8 +251,6 @@ func (v *Server) handleTestFrequencyPacket(packet *VCSPacket) {
 		v.logger.Warn("No UDP connection available to echo test packet")
 		return
 	}
-
-	addr := client.Addr
 	_, err := v.conn.WriteToUDP(packet.SerializePacket(), addr)
 	if err != nil {
 		v.logger.Error("Failed to echo test frequency packet to client", "to", addr.String(), "error", err)
