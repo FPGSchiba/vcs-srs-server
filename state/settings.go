@@ -68,10 +68,11 @@ type SecuritySettings struct {
 }
 
 type PluginSettings struct {
-	Name           string            `yaml:"name"`
-	Enabled        bool              `yaml:"enabled"`
-	Address        string            `yaml:"address"`
-	Configurations FlowConfiguration `yaml:"configurations"`
+	Name            string            `yaml:"name"`
+	Enabled         bool              `yaml:"enabled"`
+	Address         string            `yaml:"address"`
+	CertificateFile string            `yaml:"certificateFile"` // path to plugin's TLS cert (PEM); empty = insecure
+	Configurations  FlowConfiguration `yaml:"configurations"`
 }
 
 type FlowConfiguration struct {
@@ -213,6 +214,17 @@ func (s *SettingsState) GetPluginAddress(pluginName string) (string, bool) {
 	for _, plugin := range s.Security.Plugins {
 		if plugin.Name == pluginName {
 			return plugin.Address, true
+		}
+	}
+	return "", false
+}
+
+func (s *SettingsState) GetPluginCertificateFile(pluginName string) (string, bool) {
+	s.RLock()
+	defer s.RUnlock()
+	for _, plugin := range s.Security.Plugins {
+		if plugin.Name == pluginName {
+			return plugin.CertificateFile, true
 		}
 	}
 	return "", false

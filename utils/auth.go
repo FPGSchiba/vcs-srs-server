@@ -189,14 +189,23 @@ func getJWTClaims(tokenString, privateKeyFile, publicKeyFile string) (*TokenClai
 	if err != nil {
 		return nil, err
 	}
-	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
-		tokenClaims := &TokenClaims{
-			ClientGuid: claims["client_guid"].(string),
-			RoleId:     uint8(claims["role_id"].(float64)),
-		}
-		return tokenClaims, nil
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok || !token.Valid {
+		return nil, errors.New("invalid token")
 	}
-	return nil, errors.New("invalid token")
+
+	guidRaw, ok := claims["client_guid"].(string)
+	if !ok || guidRaw == "" {
+		return nil, errors.New("missing or invalid client_guid claim")
+	}
+	roleRaw, ok := claims["role_id"].(float64)
+	if !ok {
+		return nil, errors.New("missing or invalid role_id claim")
+	}
+	return &TokenClaims{
+		ClientGuid: guidRaw,
+		RoleId:     uint8(roleRaw),
+	}, nil
 }
 
 func GetTokenClaims(tokenString string, minRole uint8, privateKeyFile, publicKeyFile string) (*TokenClaims, error) {

@@ -68,7 +68,8 @@ func initializePluginClients(settingsState *state.SettingsState, logger *slog.Lo
 			logger.Warn("Plugin address not found or empty", "name", plugin)
 			continue
 		}
-		client := NewPluginClient(logger, settingsState, plugin, address, conf)
+		certFile, _ := settingsState.GetPluginCertificateFile(plugin)
+		client := NewPluginClient(logger, settingsState, plugin, address, certFile, conf)
 		if err := client.ConnectPlugin(); err != nil {
 			logger.Error("Failed to connect to plugin", "name", plugin, "error", err)
 			err := settingsState.SetPluginEnabled(plugin, false)
@@ -441,12 +442,16 @@ func (s *AuthServer) StartAuth(ctx context.Context, request *pb.StartAuthRequest
 		s.mu.Unlock()
 		return handleAuthContinue(loginResponse)
 	case authpb.AuthStepStatus_AUTH_FAILED:
-		errMsg := loginResponse.StepResult.(*authpb.AuthStepResponse_ErrorMessage)
-		s.logger.Warn("Plugin Login failed", "plugin-name", request.AuthenticationPlugin, "Error", errMsg.ErrorMessage)
+		errResult, ok := loginResponse.StepResult.(*authpb.AuthStepResponse_ErrorMessage)
+		errMsgText := "unknown error"
+		if ok && errResult != nil {
+			errMsgText = errResult.ErrorMessage
+		}
+		s.logger.Warn("Plugin Login failed", "plugin-name", request.AuthenticationPlugin, "Error", errMsgText)
 		return &pb.AuthStepResponse{
 			Success:   false,
 			SessionId: loginResponse.SessionId,
-			Result:    &pb.AuthStepResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("Login failed: %s", errMsg.ErrorMessage)},
+			Result:    &pb.AuthStepResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("Login failed: %s", errMsgText)},
 		}, nil
 	case authpb.AuthStepStatus_AUTH_COMPLETE:
 		return s.handleAuthComplete(clientGuid, loginResponse)
@@ -470,7 +475,15 @@ func (s *AuthServer) handleAuthComplete(clientGuid uuid.UUID, response *authpb.A
 		}, nil
 	}
 
-	result := response.StepResult.(*authpb.AuthStepResponse_Complete).Complete
+	completeResult, ok := response.StepResult.(*authpb.AuthStepResponse_Complete)
+	if !ok || completeResult == nil || completeResult.Complete == nil {
+		s.logger.Error("handleAuthComplete: plugin returned AUTH_COMPLETE but result payload is missing")
+		return &pb.AuthStepResponse{
+			Success: false,
+			Result:  &pb.AuthStepResponse_ErrorMessage{ErrorMessage: "plugin returned AUTH_COMPLETE but result payload is missing"},
+		}, nil
+	}
+	result := completeResult.Complete
 	var availableRoles []uint8
 	for _, role := range result.AvailableRoles {
 		availableRoles = append(availableRoles, uint8(role))
@@ -641,12 +654,16 @@ func (s *AuthServer) ContinueAuth(ctx context.Context, request *pb.ContinueAuthR
 	case authpb.AuthStepStatus_AUTH_CONTINUE:
 		return handleAuthContinue(loginResponse)
 	case authpb.AuthStepStatus_AUTH_FAILED:
-		errMsg := loginResponse.StepResult.(*authpb.AuthStepResponse_ErrorMessage)
-		s.logger.Warn("Plugin ContinueAuth failed", "plugin-name", authenticatedClient.PluginUsed, "Error", errMsg.ErrorMessage)
+		errResult, ok := loginResponse.StepResult.(*authpb.AuthStepResponse_ErrorMessage)
+		errMsgText := "unknown error"
+		if ok && errResult != nil {
+			errMsgText = errResult.ErrorMessage
+		}
+		s.logger.Warn("Plugin ContinueAuth failed", "plugin-name", authenticatedClient.PluginUsed, "Error", errMsgText)
 		return &pb.AuthStepResponse{
 			Success:   false,
 			SessionId: loginResponse.SessionId,
-			Result:    &pb.AuthStepResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("ContinueAuth failed: %s", errMsg.ErrorMessage)},
+			Result:    &pb.AuthStepResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("ContinueAuth failed: %s", errMsgText)},
 		}, nil
 	case authpb.AuthStepStatus_AUTH_COMPLETE:
 		return s.handleAuthComplete(clientGuid, loginResponse)

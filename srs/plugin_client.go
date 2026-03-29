@@ -2,8 +2,12 @@ package srs
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/FPGSchiba/vcs-srs-server/state"
@@ -11,6 +15,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 )
@@ -24,18 +29,20 @@ type PluginClient struct {
 	connectionFailed bool
 	address          string
 	pluginName       string
+	caCertFile       string // path to plugin server's TLS cert; empty = insecure
 	stopc            chan struct{}
 	cancelMonitor    context.CancelFunc
 	configuredFlows  []string
 	config           *state.FlowConfiguration
 }
 
-func NewPluginClient(logger *slog.Logger, settingsState *state.SettingsState, name, address string, configuration *state.FlowConfiguration) *PluginClient {
+func NewPluginClient(logger *slog.Logger, settingsState *state.SettingsState, name, address, caCertFile string, configuration *state.FlowConfiguration) *PluginClient {
 	return &PluginClient{
 		logger:        logger,
 		settingsState: settingsState,
 		pluginName:    name,
 		address:       address,
+		caCertFile:    caCertFile,
 		config:        configuration,
 	}
 }
@@ -43,8 +50,22 @@ func NewPluginClient(logger *slog.Logger, settingsState *state.SettingsState, na
 func (v *PluginClient) ConnectPlugin() error {
 	v.logger.Info("Connecting to plugin", "plugin-name", v.pluginName, "address", v.address)
 
+	tlsCfg, err := loadPluginTLSConfig(v.caCertFile)
+	if err != nil {
+		v.logger.Warn("Failed to load plugin TLS cert, falling back to insecure", "plugin", v.pluginName, "error", err)
+	}
+
+	var transportOpt grpc.DialOption
+	if tlsCfg != nil {
+		transportOpt = grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
+		v.logger.Info("Plugin connection using TLS", "plugin", v.pluginName)
+	} else {
+		transportOpt = grpc.WithTransportCredentials(insecure.NewCredentials())
+		v.logger.Warn("Plugin connection is NOT encrypted (no certificateFile configured)", "plugin", v.pluginName)
+	}
+
 	opts := []grpc.DialOption{
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		transportOpt,
 		grpc.WithConnectParams(grpc.ConnectParams{
 			Backoff: backoff.Config{
 				BaseDelay:  1 * time.Second,
@@ -76,6 +97,30 @@ func (v *PluginClient) ConnectPlugin() error {
 		return err
 	}
 	return nil
+}
+
+// loadPluginTLSConfig loads the plugin server's certificate from certFile and
+// returns a tls.Config that trusts it. Returns nil, nil if certFile is empty,
+// indicating the caller should fall back to insecure transport.
+func loadPluginTLSConfig(certFile string) (*tls.Config, error) {
+	if certFile == "" {
+		return nil, nil
+	}
+	certData, err := os.ReadFile(certFile)
+	if err != nil {
+		return nil, fmt.Errorf("loadPluginTLSConfig: read cert %s: %w", certFile, err)
+	}
+	block, _ := pem.Decode(certData)
+	if block == nil {
+		return nil, fmt.Errorf("loadPluginTLSConfig: failed to decode PEM from %s", certFile)
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("loadPluginTLSConfig: parse certificate: %w", err)
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(cert)
+	return &tls.Config{RootCAs: pool, InsecureSkipVerify: false}, nil
 }
 
 func (v *PluginClient) establishConnection() error {
