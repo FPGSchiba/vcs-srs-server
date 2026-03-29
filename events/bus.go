@@ -28,8 +28,22 @@ func (eb *EventBus) startPublisher() {
 		case event := <-eb.queue:
 			eb.dispatch(event)
 		case <-eb.stop:
+			eb.closeSubscribers()
 			return
 		}
+	}
+}
+
+// closeSubscribers closes all subscriber channels so that range-based consumers exit cleanly.
+// Called from startPublisher when the bus shuts down.
+func (eb *EventBus) closeSubscribers() {
+	eb.mu.Lock()
+	defer eb.mu.Unlock()
+	for name, subs := range eb.subscribers {
+		for _, ch := range subs {
+			close(ch)
+		}
+		delete(eb.subscribers, name)
 	}
 }
 
