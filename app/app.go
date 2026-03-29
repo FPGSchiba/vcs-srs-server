@@ -248,7 +248,7 @@ func (a *VCSApplication) StopServer() {
 	}
 	a.DistributionState.RUnlock()
 
-	return
+	a.eventBus.Stop()
 }
 
 // GetServerStatus returns the status of the Control, HTTP and Voice servers
@@ -301,6 +301,10 @@ func (a *VCSApplication) handleFrontendEmits(channel chan events.Event) {
 	a.DistributionState.RUnlock()
 
 	if !isGUI {
+		// Drain the channel so events don't silently back up when the bus is running.
+		// The loop exits when the channel is closed by EventBus.Stop().
+		for range channel {
+		}
 		return
 	}
 	for event := range channel {

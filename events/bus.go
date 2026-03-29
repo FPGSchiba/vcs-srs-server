@@ -1,48 +1,42 @@
 package events
 
-import (
-	"sync"
-	"time"
-)
+import "sync"
 
+// EventBus dispatches events to registered subscribers via a buffered channel.
 type EventBus struct {
-	// Subscribe subscribes to an event with a given name and returns a channel to receive events.
-	sync.RWMutex
-	subscribers  map[string][]chan Event
-	publishQueue []Event
+	mu          sync.RWMutex
+	subscribers map[string][]chan Event
+	queue       chan Event
+	stop        chan struct{}
+	once        sync.Once
 }
 
 func NewEventBus() *EventBus {
 	eb := &EventBus{
-		subscribers:  make(map[string][]chan Event),
-		publishQueue: make([]Event, 0),
+		subscribers: make(map[string][]chan Event),
+		queue:       make(chan Event, 256),
+		stop:        make(chan struct{}),
 	}
 	go eb.startPublisher()
 	return eb
 }
 
-// startPublisher runs in a goroutine and dispatches events from the publishQueue.
+// startPublisher dispatches events from the queue until Stop is called.
 func (eb *EventBus) startPublisher() {
 	for {
-		eb.Lock()
-		if len(eb.publishQueue) == 0 {
-			eb.Unlock()
-			// Sleep briefly to avoid busy waiting
-			time.Sleep(10 * time.Millisecond)
-			continue
+		select {
+		case event := <-eb.queue:
+			eb.dispatch(event)
+		case <-eb.stop:
+			return
 		}
-		event := eb.publishQueue[0]
-		eb.publishQueue = eb.publishQueue[1:]
-		eb.Unlock()
-
-		eb.dispatch(event)
 	}
 }
 
-// dispatch sends the event to all subscribers.
+// dispatch sends the event to all matching and wildcard subscribers.
 func (eb *EventBus) dispatch(event Event) {
-	eb.RLock()
-	defer eb.RUnlock()
+	eb.mu.RLock()
+	defer eb.mu.RUnlock()
 	var subsList [][]chan Event
 	if subs, ok := eb.subscribers[event.Name]; ok {
 		subsList = append(subsList, subs)
@@ -55,24 +49,46 @@ func (eb *EventBus) dispatch(event Event) {
 			select {
 			case sub <- event:
 			default:
+				// channel full — drop to avoid blocking publisher
 			}
 		}
 	}
 }
 
-// Subscribe adds a new subscriber for a specific event type.
+// Subscribe registers a channel to receive events with the given name.
+// Use "*" to receive all events.
 func (eb *EventBus) Subscribe(eventName string) chan Event {
-	eb.Lock()
-	defer eb.Unlock()
-
-	ch := make(chan Event, 10) // Buffered channel to avoid blocking
+	eb.mu.Lock()
+	defer eb.mu.Unlock()
+	ch := make(chan Event, 10)
 	eb.subscribers[eventName] = append(eb.subscribers[eventName], ch)
 	return ch
 }
 
-// Publish enqueues an event for dispatching.
+// Unsubscribe removes the channel from all subscriber lists.
+func (eb *EventBus) Unsubscribe(ch chan Event) {
+	eb.mu.Lock()
+	defer eb.mu.Unlock()
+	for name, subs := range eb.subscribers {
+		for i, sub := range subs {
+			if sub == ch {
+				eb.subscribers[name] = append(subs[:i], subs[i+1:]...)
+				break
+			}
+		}
+	}
+}
+
+// Publish enqueues an event for dispatching. Non-blocking: drops if queue is full.
 func (eb *EventBus) Publish(event Event) {
-	eb.Lock()
-	defer eb.Unlock()
-	eb.publishQueue = append(eb.publishQueue, event)
+	select {
+	case eb.queue <- event:
+	default:
+		// queue full — drop event
+	}
+}
+
+// Stop shuts down the publisher goroutine. Safe to call multiple times.
+func (eb *EventBus) Stop() {
+	eb.once.Do(func() { close(eb.stop) })
 }

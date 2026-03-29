@@ -21,6 +21,7 @@ type SimpleRadioServer struct {
 	pb.UnimplementedSRSServiceServer
 	logger        *slog.Logger
 	mu            sync.Mutex
+	wg            sync.WaitGroup
 	serverState   *state.ServerState
 	settingsState *state.SettingsState
 	eventBus      *events.EventBus
@@ -282,15 +283,45 @@ func (s *SimpleRadioServer) SubscribeToUpdates(_ *pb.Empty, stream grpc.ServerSt
 		s.logger.Error("SubscribeToUpdates failed: invalid client ID", "error", err)
 		return err
 	}
+
+	ch := s.eventBus.Subscribe("*")
+	defer s.eventBus.Unsubscribe(ch)
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if _, exists := s.streams[clientID]; exists {
-		s.logger.Warn("SubscribeToUpdates: client already subscribed", "client_id", clientID)
+		s.mu.Unlock()
 		return fmt.Errorf("client %s is already subscribed to updates", clientID)
 	}
 	s.streams[clientID] = stream
+	s.mu.Unlock()
+
+	defer func() {
+		s.mu.Lock()
+		delete(s.streams, clientID)
+		s.mu.Unlock()
+	}()
+
 	s.logger.Info("Client subscribed to updates", "client_id", clientID)
-	return nil
+
+	for {
+		select {
+		case <-stream.Context().Done():
+			s.logger.Info("Client unsubscribed from updates", "client_id", clientID)
+			return nil
+		case event, ok := <-ch:
+			if !ok {
+				return nil
+			}
+			update := s.buildServerUpdate(event)
+			if update == nil {
+				continue
+			}
+			if err := stream.Send(update); err != nil {
+				s.logger.Error("Failed to send update to client", "client_id", clientID, "error", err)
+				return err
+			}
+		}
+	}
 }
 
 func (s *SimpleRadioServer) buildServerSettings() *pb.ServerSettings {
@@ -335,7 +366,9 @@ func (s *SimpleRadioServer) cleanupClientState(clientID uuid.UUID) {
 
 // StartCleanupRoutine launches a goroutine that periodically removes stale clients.
 func (s *SimpleRadioServer) StartCleanupRoutine(interval time.Duration, staleAfter time.Duration) {
+	s.wg.Add(1)
 	go func() {
+		defer s.wg.Done()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -345,14 +378,11 @@ func (s *SimpleRadioServer) StartCleanupRoutine(interval time.Duration, staleAft
 			case <-ticker.C:
 				now := time.Now()
 				s.mu.Lock()
-				for clientID, stream := range s.streams {
+				for clientID := range s.streams {
 					s.serverState.RLock()
 					client, exists := s.serverState.Clients[clientID]
 					s.serverState.RUnlock()
 					if !exists || now.Sub(client.LastUpdate) > staleAfter {
-						if stream != nil {
-							stream.Context().Done()
-						}
 						s.cleanupClientState(clientID)
 						delete(s.streams, clientID)
 						s.logger.Info("Cleaned up stale client", "client_id", clientID)
@@ -364,7 +394,30 @@ func (s *SimpleRadioServer) StartCleanupRoutine(interval time.Duration, staleAft
 	}()
 }
 
-// Stop signals the cleanup goroutine to exit.
+// Stop signals the cleanup goroutine to exit and waits for it to finish.
 func (s *SimpleRadioServer) Stop() {
 	s.stopOnce.Do(func() { close(s.stopChan) })
+	s.wg.Wait()
+}
+
+// buildServerUpdate converts a bus event into a pb.ServerUpdate to send to
+// subscribed clients. Returns nil for event types that should not be forwarded.
+func (s *SimpleRadioServer) buildServerUpdate(event events.Event) *pb.ServerUpdate {
+	switch event.Name {
+	case events.ClientsChanged:
+		return &pb.ServerUpdate{
+			Type: pb.ServerUpdate_CLIENT_INFO_UPDATE,
+		}
+	case events.RadioClientsChanged:
+		return &pb.ServerUpdate{
+			Type: pb.ServerUpdate_CLIENT_RADIO_UPDATE,
+		}
+	case events.SettingsChanged, events.CoalitionsChanged:
+		return &pb.ServerUpdate{
+			Type:   pb.ServerUpdate_SERVER_SETTINGS_CHANGED,
+			Update: &pb.ServerUpdate_SettingsUpdate{SettingsUpdate: s.buildServerSettings()},
+		}
+	default:
+		return nil
+	}
 }
