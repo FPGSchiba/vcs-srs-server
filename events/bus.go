@@ -1,6 +1,19 @@
 package events
 
-import "sync"
+import (
+	"sync"
+)
+
+// safeSend sends event to ch without panicking if ch is closed.
+// A closed channel send panics unconditionally; recover() catches it.
+func safeSend(ch chan Event, event Event) {
+	defer func() { recover() }() //nolint:errcheck
+	select {
+	case ch <- event:
+	default:
+		// channel full — drop to avoid blocking publisher
+	}
+}
 
 // EventBus dispatches events to registered subscribers via a buffered channel.
 type EventBus struct {
@@ -60,11 +73,7 @@ func (eb *EventBus) dispatch(event Event) {
 	}
 	for _, subs := range subsList {
 		for _, sub := range subs {
-			select {
-			case sub <- event:
-			default:
-				// channel full — drop to avoid blocking publisher
-			}
+			safeSend(sub, event)
 		}
 	}
 }
