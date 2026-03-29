@@ -15,6 +15,10 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// keysOnce ensures keys are loaded from disk exactly once per process lifetime.
+// Changing the key file paths in settings requires a server restart to take effect.
+// A future improvement would replace this package-level singleton with a per-instance
+// key cache to allow runtime key rotation without a restart.
 var (
 	keysOnce   sync.Once
 	cachedPriv *ecdsa.PrivateKey
@@ -30,7 +34,7 @@ const (
 )
 
 var (
-	SrsServiceMinimumRoleMap = map[string]uint8{
+	srsServiceMinimumRoleMap = map[string]uint8{
 		"UpdateClientInfo":   GuestRole,
 		"UpdateRadioInfo":    GuestRole,
 		"SyncClient":         GuestRole,
@@ -45,6 +49,13 @@ var (
 		AdminRole:   "Admin",
 	}
 )
+
+// GetMinimumRoleForMethod returns the minimum required role for the given gRPC
+// method name, and whether the method is in the role map at all.
+func GetMinimumRoleForMethod(methodName string) (uint8, bool) {
+	role, ok := srsServiceMinimumRoleMap[methodName]
+	return role, ok
+}
 
 type TokenClaims struct {
 	ClientGuid string `json:"client_guid"`

@@ -18,11 +18,13 @@ import (
 	"github.com/FPGSchiba/vcs-srs-server/voicecontrolpb"
 	"github.com/FPGSchiba/vcs-srs-server/voiceontrol"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/status"
 )
 
 var (
@@ -287,32 +289,39 @@ func (s *Server) loggingInterceptor(ctx context.Context, req interface{}, info *
 
 func (s *Server) authInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 	elements := strings.Split(info.FullMethod, "/")
-	fullServiceName := elements[1] // Get the service name from the method path
-	pathName := elements[2]        // Get the method name from the method path
-	serviceName := strings.Split(fullServiceName, ".")[1]
+	if len(elements) < 3 {
+		return nil, status.Errorf(codes.Unauthenticated, "malformed method path: %s", info.FullMethod)
+	}
+	fullServiceName := elements[1]
+	pathName := elements[2]
+
+	parts := strings.Split(fullServiceName, ".")
+	if len(parts) < 2 {
+		return nil, status.Errorf(codes.Unauthenticated, "malformed service name: %s", fullServiceName)
+	}
+	serviceName := parts[len(parts)-1]
 
 	if serviceName == "AuthService" || serviceName == "VoiceControlService" {
-		// Skip authentication for AuthService and VoiceControlService
 		return handler(ctx, req)
-	} else {
-		// For other services, perform authentication
-		s.logger.Debug("Authentication required for service", "service", serviceName, "method", info.FullMethod)
 	}
+
+	s.logger.Debug("Authentication required for service", "service", serviceName, "method", info.FullMethod)
 
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
 		return nil, fmt.Errorf("unauthenticated request to %s: missing metadata", info.FullMethod)
 	}
 
-	tokens := md.Get("authorization") // Check for an "authorization" header
+	tokens := md.Get("authorization")
 	if len(tokens) == 0 {
 		return nil, fmt.Errorf("unauthenticated request to %s: missing authorization token", info.FullMethod)
 	}
-	token := strings.TrimPrefix(tokens[0], "Bearer ") // Remove "Bearer " prefix if present
+	token := strings.TrimPrefix(tokens[0], "Bearer ")
 
-	// Placeholder for authentication logic
+	minRole, _ := utils.GetMinimumRoleForMethod(pathName)
+
 	s.settingsState.RLock()
-	claims, err := utils.GetTokenClaims(token, utils.SrsServiceMinimumRoleMap[pathName], s.settingsState.Security.Token.PrivateKeyFile, s.settingsState.Security.Token.PublicKeyFile)
+	claims, err := utils.GetTokenClaims(token, minRole, s.settingsState.Security.Token.PrivateKeyFile, s.settingsState.Security.Token.PublicKeyFile)
 	s.settingsState.RUnlock()
 	if err != nil {
 		s.logger.Error("Authentication error", "method", info.FullMethod, "error", err)
@@ -324,6 +333,5 @@ func (s *Server) authInterceptor(ctx context.Context, req interface{}, info *grp
 	}
 
 	ctx = context.WithValue(ctx, utils.ClientIDKey, claims.ClientGuid)
-
 	return handler(ctx, req)
 }

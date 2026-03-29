@@ -172,13 +172,10 @@ func (a *VCSApplication) HeadlessStartup(logger *slog.Logger, configFilePath, ba
 	switch distributionMode {
 	case state.DistributionModeStandalone:
 		a.StartStandaloneServer()
-		break
 	case state.DistributionModeControl:
 		a.StartControlServer()
-		break
 	case state.DistributionModeVoice:
 		a.StartVoiceServer()
-		break
 	}
 }
 
