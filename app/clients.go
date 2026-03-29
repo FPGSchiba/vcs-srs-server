@@ -93,14 +93,16 @@ func (a *VCSApplication) BanClient(clientId string, reason string) {
 	delete(a.ServerState.Clients, clientGuid)
 	a.ServerState.Unlock()
 
-	a.EmitEvent(events.Event{
-		Name: events.ClientsChanged,
-		Data: a.ServerState.Clients,
-	})
-	a.EmitEvent(events.Event{
-		Name: events.BannedClientsChanged,
-		Data: a.ServerState.BannedState.BannedClients,
-	})
+	a.ServerState.RLock()
+	clientsSnap := make(map[uuid.UUID]*state.ClientState, len(a.ServerState.Clients))
+	for k, v := range a.ServerState.Clients {
+		clientsSnap[k] = v
+	}
+	bannedSnap := make([]state.BannedClient, len(a.ServerState.BannedState.BannedClients))
+	copy(bannedSnap, a.ServerState.BannedState.BannedClients)
+	a.ServerState.RUnlock()
+	a.EmitEvent(events.Event{Name: events.ClientsChanged, Data: clientsSnap})
+	a.EmitEvent(events.Event{Name: events.BannedClientsChanged, Data: bannedSnap})
 	a.Notify(events.NewNotification("Ban succeeded", "Client banned successfully", "success"))
 	a.Logger.Info("Client banned", "clientId", clientId, "reason", reason)
 }
@@ -137,10 +139,11 @@ func (a *VCSApplication) UnbanClient(clientId string) {
 	}
 	a.ServerState.Unlock()
 
-	a.EmitEvent(events.Event{
-		Name: events.BannedClientsChanged,
-		Data: a.ServerState.BannedState.BannedClients,
-	})
+	a.ServerState.RLock()
+	bannedSnap := make([]state.BannedClient, len(a.ServerState.BannedState.BannedClients))
+	copy(bannedSnap, a.ServerState.BannedState.BannedClients)
+	a.ServerState.RUnlock()
+	a.EmitEvent(events.Event{Name: events.BannedClientsChanged, Data: bannedSnap})
 	a.Notify(events.NewNotification("Unban succeeded", "Client successfully unbanned", "success"))
 }
 
@@ -156,10 +159,13 @@ func (a *VCSApplication) KickClient(clientId string, reason string) { // TODO: I
 	delete(a.ServerState.Clients, clientGuid)
 	a.ServerState.Unlock()
 
-	a.EmitEvent(events.Event{
-		Name: events.ClientsChanged,
-		Data: a.ServerState.Clients,
-	})
+	a.ServerState.RLock()
+	clientsSnap := make(map[uuid.UUID]*state.ClientState, len(a.ServerState.Clients))
+	for k, v := range a.ServerState.Clients {
+		clientsSnap[k] = v
+	}
+	a.ServerState.RUnlock()
+	a.EmitEvent(events.Event{Name: events.ClientsChanged, Data: clientsSnap})
 	a.Notify(events.NewNotification("Kick succeeded", "Client kicked successfully", "success"))
 	a.Logger.Info("Client kicked", "clientId", clientId, "reason", reason)
 }
@@ -184,10 +190,13 @@ func (a *VCSApplication) MuteClient(clientId string) { // TODO: Implement Backen
 	a.ServerState.RadioClients[clientGuid] = client
 	a.ServerState.Unlock()
 
-	a.EmitEvent(events.Event{
-		Name: events.RadioClientsChanged,
-		Data: a.ServerState.RadioClients,
-	})
+	a.ServerState.RLock()
+	radioSnap := make(map[uuid.UUID]*state.RadioState, len(a.ServerState.RadioClients))
+	for k, v := range a.ServerState.RadioClients {
+		radioSnap[k] = v
+	}
+	a.ServerState.RUnlock()
+	a.EmitEvent(events.Event{Name: events.RadioClientsChanged, Data: radioSnap})
 	a.Notify(events.NewNotification("Mute succeeded", "Client muted successfully", "success"))
 	a.Logger.Info("Client muted", "clientId", clientId)
 }
@@ -212,10 +221,13 @@ func (a *VCSApplication) UnmuteClient(clientId string) { // TODO: Implement Back
 	a.ServerState.RadioClients[clientGuid] = client
 	a.ServerState.Unlock()
 
-	a.EmitEvent(events.Event{
-		Name: events.RadioClientsChanged,
-		Data: a.ServerState.RadioClients,
-	})
+	a.ServerState.RLock()
+	radioSnap := make(map[uuid.UUID]*state.RadioState, len(a.ServerState.RadioClients))
+	for k, v := range a.ServerState.RadioClients {
+		radioSnap[k] = v
+	}
+	a.ServerState.RUnlock()
+	a.EmitEvent(events.Event{Name: events.RadioClientsChanged, Data: radioSnap})
 	a.Notify(events.NewNotification("Unmute succeeded", "Client unmuted successfully", "success"))
 	a.Logger.Info("Client unmuted", "clientId", clientId)
 }

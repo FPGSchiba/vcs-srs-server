@@ -7,6 +7,7 @@ import (
 	"github.com/FPGSchiba/vcs-srs-server/control"
 	"github.com/FPGSchiba/vcs-srs-server/events"
 	"github.com/FPGSchiba/vcs-srs-server/rest"
+	"github.com/FPGSchiba/vcs-srs-server/state"
 	"github.com/FPGSchiba/vcs-srs-server/voice"
 	"github.com/gin-gonic/gin"
 	"net/http"
@@ -66,9 +67,16 @@ func (a *VCSApplication) startHTTPServer() {
 		a.Logger.Info("HTTP server stopped listening")
 	}()
 
+	a.AdminState.RLock()
+	adminSnap := state.AdminStateSnapshot{
+		HTTPStatus:    a.AdminState.HTTPStatus,
+		VoiceStatus:   a.AdminState.VoiceStatus,
+		ControlStatus: a.AdminState.ControlStatus,
+	}
+	a.AdminState.RUnlock()
 	a.EmitEvent(events.Event{
 		Name: events.AdminChanged,
-		Data: a.AdminState,
+		Data: adminSnap,
 	})
 }
 
@@ -98,9 +106,16 @@ func (a *VCSApplication) stopHTTPServer() {
 		a.AdminState.HTTPStatus.Error = err.Error()
 		a.AdminState.Unlock()
 
+		a.AdminState.RLock()
+		adminSnap := state.AdminStateSnapshot{
+			HTTPStatus:    a.AdminState.HTTPStatus,
+			VoiceStatus:   a.AdminState.VoiceStatus,
+			ControlStatus: a.AdminState.ControlStatus,
+		}
+		a.AdminState.RUnlock()
 		a.EmitEvent(events.Event{
 			Name: events.AdminChanged,
-			Data: a.AdminState,
+			Data: adminSnap,
 		})
 		a.Notify(events.NewNotification("HTTP server error", "Could not stop HTTP Server.", "error"))
 		return
@@ -112,9 +127,16 @@ func (a *VCSApplication) stopHTTPServer() {
 	a.AdminState.HTTPStatus.Error = ""
 	a.AdminState.Unlock()
 
+	a.AdminState.RLock()
+	adminSnap := state.AdminStateSnapshot{
+		HTTPStatus:    a.AdminState.HTTPStatus,
+		VoiceStatus:   a.AdminState.VoiceStatus,
+		ControlStatus: a.AdminState.ControlStatus,
+	}
+	a.AdminState.RUnlock()
 	a.EmitEvent(events.Event{
 		Name: events.AdminChanged,
-		Data: a.AdminState,
+		Data: adminSnap,
 	})
 }
 
@@ -151,9 +173,16 @@ func (a *VCSApplication) startVoiceServer() {
 		}
 	}()
 
+	a.AdminState.RLock()
+	adminSnap := state.AdminStateSnapshot{
+		HTTPStatus:    a.AdminState.HTTPStatus,
+		VoiceStatus:   a.AdminState.VoiceStatus,
+		ControlStatus: a.AdminState.ControlStatus,
+	}
+	a.AdminState.RUnlock()
 	a.EmitEvent(events.Event{
 		Name: events.AdminChanged,
-		Data: a.AdminState,
+		Data: adminSnap,
 	})
 }
 
@@ -188,9 +217,16 @@ func (a *VCSApplication) stopVoiceServer() {
 	a.AdminState.VoiceStatus.Error = ""
 	a.AdminState.Unlock()
 
+	a.AdminState.RLock()
+	adminSnap := state.AdminStateSnapshot{
+		HTTPStatus:    a.AdminState.HTTPStatus,
+		VoiceStatus:   a.AdminState.VoiceStatus,
+		ControlStatus: a.AdminState.ControlStatus,
+	}
+	a.AdminState.RUnlock()
 	a.EmitEvent(events.Event{
 		Name: events.AdminChanged,
-		Data: a.AdminState,
+		Data: adminSnap,
 	})
 }
 
@@ -230,9 +266,16 @@ func (a *VCSApplication) startGrpcServer() {
 	a.AdminState.ControlStatus.Error = ""
 	a.AdminState.Unlock()
 
+	a.AdminState.RLock()
+	adminSnap := state.AdminStateSnapshot{
+		HTTPStatus:    a.AdminState.HTTPStatus,
+		VoiceStatus:   a.AdminState.VoiceStatus,
+		ControlStatus: a.AdminState.ControlStatus,
+	}
+	a.AdminState.RUnlock()
 	a.EmitEvent(events.Event{
 		Name: events.AdminChanged,
-		Data: a.AdminState,
+		Data: adminSnap,
 	})
 }
 
@@ -268,8 +311,15 @@ func (a *VCSApplication) stopControlServer() {
 	a.AdminState.ControlStatus.Error = ""
 	a.AdminState.Unlock()
 
+	a.AdminState.RLock()
+	adminSnap := state.AdminStateSnapshot{
+		HTTPStatus:    a.AdminState.HTTPStatus,
+		VoiceStatus:   a.AdminState.VoiceStatus,
+		ControlStatus: a.AdminState.ControlStatus,
+	}
+	a.AdminState.RUnlock()
 	a.EmitEvent(events.Event{
 		Name: events.AdminChanged,
-		Data: a.AdminState,
+		Data: adminSnap,
 	})
 }

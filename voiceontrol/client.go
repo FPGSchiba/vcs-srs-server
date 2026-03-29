@@ -37,10 +37,15 @@ func NewVoiceControlClient(serverId string, settingsState *state.SettingsState, 
 		serverId:      serverId,
 		logger:        logger,
 		settingsState: settingsState,
+		stopc:         make(chan struct{}),
 	}
 }
 
 func (v *VoiceControlClient) ConnectControlServer() error {
+	// Re-initialize stopc on every connect so that a previous Close() doesn't
+	// leave a closed channel that causes the next stream goroutine to exit immediately.
+	v.stopc = make(chan struct{})
+
 	v.settingsState.RLock()
 	address := fmt.Sprintf("%s:%d", v.settingsState.VoiceControl.RemoteHost, v.settingsState.VoiceControl.Port)
 	v.settingsState.RUnlock()
@@ -153,9 +158,6 @@ func (v *VoiceControlClient) establishStream() error {
 		return fmt.Errorf("failed to establish stream: %v", err)
 	}
 	v.stream = stream
-	if v.stopc == nil {
-		v.stopc = make(chan struct{})
-	}
 	go func() {
 		for {
 			select {

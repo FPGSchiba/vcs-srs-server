@@ -6,10 +6,17 @@ import (
 	"github.com/FPGSchiba/vcs-srs-server/state"
 )
 
-func (a *VCSApplication) GetSettings() *state.SettingsState {
+func (a *VCSApplication) GetSettings() state.SettingsSnapshot {
 	a.SettingsState.RLock()
 	defer a.SettingsState.RUnlock()
-	return a.SettingsState
+	return state.SettingsSnapshot{
+		Servers:      a.SettingsState.Servers,
+		Coalitions:   a.SettingsState.Coalitions,
+		Frequencies:  a.SettingsState.Frequencies,
+		General:      a.SettingsState.General,
+		Security:     a.SettingsState.Security,
+		VoiceControl: a.SettingsState.VoiceControl,
+	}
 }
 
 func (a *VCSApplication) SaveGeneralSettings(newSettings *state.GeneralSettings) {
@@ -22,11 +29,15 @@ func (a *VCSApplication) SaveGeneralSettings(newSettings *state.GeneralSettings)
 		a.Notify(events.NewNotification("Failed to save settings", "Failed to save settings", "error"))
 		return
 	}
-	event := events.Event{
-		Name: events.SettingsChanged,
-		Data: a.SettingsState,
+	snap := state.SettingsSnapshot{
+		Servers:      a.SettingsState.Servers,
+		Coalitions:   a.SettingsState.Coalitions,
+		Frequencies:  a.SettingsState.Frequencies,
+		General:      a.SettingsState.General,
+		Security:     a.SettingsState.Security,
+		VoiceControl: a.SettingsState.VoiceControl,
 	}
-	a.EmitEvent(event)
+	a.EmitEvent(events.Event{Name: events.SettingsChanged, Data: snap})
 	a.Notify(events.NewNotification("Settings saved", "General Settings were successfully saved", "info"))
 }
 
@@ -40,11 +51,15 @@ func (a *VCSApplication) SaveServerSettings(newSettings *state.ServerSettings) {
 		a.Notify(events.NewNotification("Failed to save settings", "Failed to save settings", "error"))
 		return
 	}
-	event := events.Event{
-		Name: events.SettingsChanged,
-		Data: a.SettingsState,
+	snap := state.SettingsSnapshot{
+		Servers:      a.SettingsState.Servers,
+		Coalitions:   a.SettingsState.Coalitions,
+		Frequencies:  a.SettingsState.Frequencies,
+		General:      a.SettingsState.General,
+		Security:     a.SettingsState.Security,
+		VoiceControl: a.SettingsState.VoiceControl,
 	}
-	a.EmitEvent(event)
+	a.EmitEvent(events.Event{Name: events.SettingsChanged, Data: snap})
 	a.Notify(events.NewNotification("Settings saved", "Server Settings were successfully saved", "info"))
 }
 
@@ -58,10 +73,14 @@ func (a *VCSApplication) SaveFrequencySettings(newSettings *state.FrequencySetti
 		a.Notify(events.NewNotification("Failed to save settings", "Failed to save settings", "error"))
 		return
 	}
-	event := events.Event{
-		Name: events.SettingsChanged,
-		Data: a.SettingsState,
+	snap := state.SettingsSnapshot{
+		Servers:      a.SettingsState.Servers,
+		Coalitions:   a.SettingsState.Coalitions,
+		Frequencies:  a.SettingsState.Frequencies,
+		General:      a.SettingsState.General,
+		Security:     a.SettingsState.Security,
+		VoiceControl: a.SettingsState.VoiceControl,
 	}
-	a.EmitEvent(event)
+	a.EmitEvent(events.Event{Name: events.SettingsChanged, Data: snap})
 	a.Notify(events.NewNotification("Settings saved", "Frequency Settings were successfully saved", "info"))
 }

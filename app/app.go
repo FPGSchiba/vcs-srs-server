@@ -184,47 +184,18 @@ func (a *VCSApplication) HeadlessStartup(logger *slog.Logger, configFilePath, ba
 
 // StartStandaloneServer starts the Control, HTTP and Voice servers
 func (a *VCSApplication) StartStandaloneServer() {
-	a.AdminState.Lock()
-	if a.AdminState.HTTPStatus.IsRunning ||
-		a.AdminState.VoiceStatus.IsRunning ||
-		a.AdminState.ControlStatus.IsRunning {
-		a.AdminState.Unlock()
-		return
-	}
-	a.AdminState.Unlock()
-
 	a.startGrpcServer()
 	a.startVoiceServer()
 	a.startHTTPServer()
-
-	return
 }
 
 func (a *VCSApplication) StartControlServer() {
-	a.AdminState.Lock()
-	if a.AdminState.ControlStatus.IsRunning {
-		a.AdminState.Unlock()
-		return
-	}
-	a.AdminState.Unlock()
-
 	a.startGrpcServer()
 	a.startHTTPServer()
-
-	return
 }
 
 func (a *VCSApplication) StartVoiceServer() {
-	a.AdminState.Lock()
-	if a.AdminState.VoiceStatus.IsRunning {
-		a.AdminState.Unlock()
-		return
-	}
-	a.AdminState.Unlock()
-
 	a.startVoiceServer()
-
-	return
 }
 
 // StopServer stops the Control, HTTP and Voice servers
@@ -252,10 +223,14 @@ func (a *VCSApplication) StopServer() {
 }
 
 // GetServerStatus returns the status of the Control, HTTP and Voice servers
-func (a *VCSApplication) GetServerStatus() *state.AdminState {
+func (a *VCSApplication) GetServerStatus() state.AdminStateSnapshot {
 	a.AdminState.RLock()
 	defer a.AdminState.RUnlock()
-	return a.AdminState
+	return state.AdminStateSnapshot{
+		HTTPStatus:    a.AdminState.HTTPStatus,
+		VoiceStatus:   a.AdminState.VoiceStatus,
+		ControlStatus: a.AdminState.ControlStatus,
+	}
 }
 
 func (a *VCSApplication) GetServerVersion() string {

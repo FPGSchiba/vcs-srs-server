@@ -99,10 +99,13 @@ func (s *SimpleRadioServer) SyncClient(_ context.Context, _ *pb.Empty) (*pb.Sync
 		s.serverState.RUnlock()
 	}
 
-	s.eventBus.Publish(events.Event{
-		Name: events.ClientsChanged,
-		Data: s.serverState.Clients,
-	})
+	s.serverState.RLock()
+	clientsSnap := make(map[uuid.UUID]*state.ClientState, len(s.serverState.Clients))
+	for k, v := range s.serverState.Clients {
+		clientsSnap[k] = v
+	}
+	s.serverState.RUnlock()
+	s.eventBus.Publish(events.Event{Name: events.ClientsChanged, Data: clientsSnap})
 
 	return &pb.SyncResponse{
 		Success: true,
@@ -145,10 +148,13 @@ func (s *SimpleRadioServer) Disconnect(ctx context.Context, _ *pb.Empty) (*pb.Se
 
 	s.logger.Info("Disconnecting client", "client_id", clientID, "client_name", client.Name)
 	s.cleanupClientState(clientID)
-	s.eventBus.Publish(events.Event{
-		Name: events.ClientsChanged,
-		Data: s.serverState.Clients,
-	})
+	s.serverState.RLock()
+	clientsSnap := make(map[uuid.UUID]*state.ClientState, len(s.serverState.Clients))
+	for k, v := range s.serverState.Clients {
+		clientsSnap[k] = v
+	}
+	s.serverState.RUnlock()
+	s.eventBus.Publish(events.Event{Name: events.ClientsChanged, Data: clientsSnap})
 
 	return &pb.ServerResponse{
 		Success:      true,
@@ -229,10 +235,13 @@ func (s *SimpleRadioServer) UpdateClientInfo(ctx context.Context, req *pb.Client
 		}, nil
 	}
 
-	s.eventBus.Publish(events.Event{
-		Name: events.ClientsChanged,
-		Data: s.serverState.Clients,
-	})
+	s.serverState.RLock()
+	clientsSnap := make(map[uuid.UUID]*state.ClientState, len(s.serverState.Clients))
+	for k, v := range s.serverState.Clients {
+		clientsSnap[k] = v
+	}
+	s.serverState.RUnlock()
+	s.eventBus.Publish(events.Event{Name: events.ClientsChanged, Data: clientsSnap})
 
 	return &pb.ServerResponse{
 		Success:      true,
@@ -266,10 +275,13 @@ func (s *SimpleRadioServer) UpdateRadioInfo(ctx context.Context, req *pb.RadioIn
 	s.serverState.RadioClients[clientID] = convertRadioInfo(req)
 	s.serverState.Unlock()
 
-	s.eventBus.Publish(events.Event{
-		Name: events.RadioClientsChanged,
-		Data: s.serverState.RadioClients,
-	})
+	s.serverState.RLock()
+	radioSnap := make(map[uuid.UUID]*state.RadioState, len(s.serverState.RadioClients))
+	for k, v := range s.serverState.RadioClients {
+		radioSnap[k] = v
+	}
+	s.serverState.RUnlock()
+	s.eventBus.Publish(events.Event{Name: events.RadioClientsChanged, Data: radioSnap})
 
 	return &pb.ServerResponse{
 		Success:      true,
