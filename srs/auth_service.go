@@ -354,9 +354,15 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.GuestLoginReque
 	}
 
 	s.logger.Info("guest login succeeded for ", "Guest Name", request.Name, "UnitId", request.UnitId, "Coalition", selectedCoalition.Name, "ClientGuid", clientGuid)
+	s.serverState.RLock()
+	clientsSnap := make(map[uuid.UUID]*state.ClientState, len(s.serverState.Clients))
+	for k, v := range s.serverState.Clients {
+		clientsSnap[k] = v
+	}
+	s.serverState.RUnlock()
 	s.eventBus.Publish(events.Event{
 		Name: events.ClientsChanged,
-		Data: s.serverState.Clients,
+		Data: clientsSnap,
 	})
 	return &pb.GuestLoginResponse{
 		Success: true,
@@ -775,9 +781,15 @@ func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.UnitSelectReque
 		}, err
 	}
 
+	s.serverState.RLock()
+	clientsSnap := make(map[uuid.UUID]*state.ClientState, len(s.serverState.Clients))
+	for k, v := range s.serverState.Clients {
+		clientsSnap[k] = v
+	}
+	s.serverState.RUnlock()
 	s.eventBus.Publish(events.Event{
 		Name: events.ClientsChanged,
-		Data: s.serverState.Clients,
+		Data: clientsSnap,
 	})
 
 	return &pb.UnitSelectResponse{

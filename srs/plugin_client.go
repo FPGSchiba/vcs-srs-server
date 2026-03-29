@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/FPGSchiba/vcs-srs-server/state"
@@ -31,6 +32,7 @@ type PluginClient struct {
 	pluginName       string
 	caCertFile       string // path to plugin server's TLS cert; empty = insecure
 	stopc            chan struct{}
+	closeOnce        sync.Once
 	cancelMonitor    context.CancelFunc
 	configuredFlows  []string
 	config           *state.FlowConfiguration
@@ -44,6 +46,7 @@ func NewPluginClient(logger *slog.Logger, settingsState *state.SettingsState, na
 		address:       address,
 		caCertFile:    caCertFile,
 		config:        configuration,
+		stopc:         make(chan struct{}),
 	}
 }
 
@@ -303,9 +306,7 @@ func (v *PluginClient) Close() error {
 	if v.cancelMonitor != nil {
 		v.cancelMonitor()
 	}
-	if v.stopc != nil {
-		close(v.stopc)
-	}
+	v.closeOnce.Do(func() { close(v.stopc) })
 	if v.conn != nil {
 		return v.conn.Close()
 	}

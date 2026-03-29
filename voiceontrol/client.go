@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/FPGSchiba/vcs-srs-server/state"
@@ -27,6 +28,7 @@ type VoiceControlClient struct {
 	logger              *slog.Logger
 	stream              grpc.BidiStreamingClient[pb.ControlResponse, pb.ControlMessage]
 	stopc               chan struct{}
+	closeOnce           sync.Once
 	cancelMonitor       context.CancelFunc
 	connectionFailed    bool
 	settingsState       *state.SettingsState
@@ -215,9 +217,7 @@ func (v *VoiceControlClient) Close() error {
 	if v.cancelMonitor != nil {
 		v.cancelMonitor()
 	}
-	if v.stopc != nil {
-		close(v.stopc)
-	}
+	v.closeOnce.Do(func() { close(v.stopc) })
 	if v.conn != nil {
 		return v.conn.Close()
 	}
