@@ -31,6 +31,7 @@ type Server struct {
 	logger            *slog.Logger
 	running           bool
 	stopChan          chan struct{}
+	stopOnce          sync.Once
 	controlClient     *voiceontrol.VoiceControlClient
 	serverId          string
 }
@@ -117,7 +118,9 @@ func (v *Server) Listen(address string, stopChan chan struct{}) error {
 			}
 
 			// Handle the received packet
-			go v.handlePacket(buffer[:n], remoteAddr)
+			pkt := make([]byte, n)
+			copy(pkt, buffer[:n])
+			go v.handlePacket(pkt, remoteAddr)
 		}
 	}
 }
@@ -175,17 +178,23 @@ func (v *Server) handleHelloPacket(packet *VCSPacket, addr *net.UDPAddr) {
 }
 
 func (v *Server) handleKeepalivePacket(packet *VCSPacket, addr *net.UDPAddr) {
-	v.RLock()
+	v.Lock()
 	client, exists := v.clients[packet.SenderID]
-	v.RUnlock()
+	if exists {
+		client.LastSeen = time.Now()
+	}
+	v.Unlock()
 	if !exists {
 		v.logger.Warn("Received keepalive from unknown client", "sender_id", packet.SenderID)
 		return
 	}
-	v.Lock()
-	client.LastSeen = time.Now()
-	v.Unlock()
 	v.logger.Debug("Updated last seen for client", "sender_id", packet.SenderID, "addr", addr.String())
+
+	if v.conn == nil {
+		v.logger.Warn("No UDP connection available to send keepalive acknowledgment")
+		return
+	}
+
 	ackPacket := NewVCSKeepalivePacket(packet.SenderID)
 	ackData := ackPacket.SerializePacket()
 	_, err := v.conn.WriteToUDP(ackData, addr)
@@ -193,37 +202,30 @@ func (v *Server) handleKeepalivePacket(packet *VCSPacket, addr *net.UDPAddr) {
 		v.logger.Error("Failed to send keepalive acknowledgment",
 			"to", addr.String(),
 			"error", err)
-		return
 	}
 }
 
 func (v *Server) handleVoicePacket(packet *VCSPacket) {
-	// If this is a test frequency, handle it separately and don't broadcast
 	if v.settingsState.IsFrequencyTest(packet.FrequencyAsFloat32()) {
 		v.handleTestFrequencyPacket(packet)
 		return
 	}
 
-	v.RLock()
+	v.Lock()
 	client, exists := v.clients[packet.SenderID]
-	v.RUnlock()
+	if exists {
+		client.LastSeen = time.Now()
+	}
+	v.Unlock()
 	if !exists {
 		v.logger.Warn("Received voice packet from unknown client", "sender_id", packet.SenderID)
 		return
 	}
 
-	// Update last seen time
-	v.Lock()
-	client.LastSeen = time.Now()
-	v.Unlock()
-
-	// Broadcast the voice data to other clients
 	if len(packet.Payload) > 5 {
-		// Ignore very small packets (could be keepalive or empty)
 		v.broadcastVoice(packet, packet.SenderID)
 	}
 
-	// Optionally, you can log the received voice packet
 	v.logger.Debug("Received voice packet",
 		"sender_id", packet.SenderID,
 		"frequency", packet.FrequencyAsFloat32(),
@@ -232,9 +234,12 @@ func (v *Server) handleVoicePacket(packet *VCSPacket) {
 
 // handleTestFrequencyPacket echoes the received packet back to the sender so the client hears it.
 func (v *Server) handleTestFrequencyPacket(packet *VCSPacket) {
-	v.RLock()
+	v.Lock()
 	client, exists := v.clients[packet.SenderID]
-	v.RUnlock()
+	if exists {
+		client.LastSeen = time.Now()
+	}
+	v.Unlock()
 	if !exists || client == nil {
 		v.logger.Warn("Test frequency from unknown client", "sender_id", packet.SenderID)
 		return
@@ -245,12 +250,13 @@ func (v *Server) handleTestFrequencyPacket(packet *VCSPacket) {
 		return
 	}
 
-	_, err := v.conn.WriteToUDP(packet.SerializePacket(), client.Addr)
+	addr := client.Addr
+	_, err := v.conn.WriteToUDP(packet.SerializePacket(), addr)
 	if err != nil {
-		v.logger.Error("Failed to echo test frequency packet to client", "to", client.Addr.String(), "error", err)
+		v.logger.Error("Failed to echo test frequency packet to client", "to", addr.String(), "error", err)
 		return
 	}
-	v.logger.Debug("Echoed test frequency packet to client", "to", client.Addr.String(), "sender_id", packet.SenderID)
+	v.logger.Debug("Echoed test frequency packet to client", "to", addr.String(), "sender_id", packet.SenderID)
 }
 
 func (v *Server) handleGoodbyePacket(packet *VCSPacket) {
@@ -309,7 +315,7 @@ func (v *Server) Stop() error {
 		return nil
 	}
 
-	close(v.stopChan)
+	v.stopOnce.Do(func() { close(v.stopChan) })
 
 	if v.conn != nil {
 		err := v.conn.Close()
@@ -335,18 +341,17 @@ func (v *Server) GetConnectedClients() []uuid.UUID {
 }
 
 func (v *Server) DisconnectClient(clientID uuid.UUID) {
-	v.RLock()
-	if client, exists := v.clients[clientID]; exists {
-		v.RUnlock()
-		v.Lock()
+	v.Lock()
+	client, exists := v.clients[clientID]
+	if exists {
 		delete(v.clients, clientID)
-		v.Unlock()
+	}
+	v.Unlock()
+	if exists {
 		v.logger.Info("Disconnected voice client",
 			"id", clientID,
 			"addr", client.Addr.String())
-		return
 	}
-	v.RUnlock()
 }
 
 func (v *Server) isRunning() bool {
