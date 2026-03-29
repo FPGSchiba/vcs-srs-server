@@ -377,18 +377,22 @@ func (s *SimpleRadioServer) StartCleanupRoutine(interval time.Duration, staleAft
 				return
 			case <-ticker.C:
 				now := time.Now()
+				var stale []uuid.UUID
 				s.mu.Lock()
 				for clientID := range s.streams {
 					s.serverState.RLock()
 					client, exists := s.serverState.Clients[clientID]
 					s.serverState.RUnlock()
 					if !exists || now.Sub(client.LastUpdate) > staleAfter {
-						s.cleanupClientState(clientID)
+						stale = append(stale, clientID)
 						delete(s.streams, clientID)
-						s.logger.Info("Cleaned up stale client", "client_id", clientID)
 					}
 				}
 				s.mu.Unlock()
+				for _, id := range stale {
+					s.cleanupClientState(id)
+					s.logger.Info("Cleaned up stale client", "client_id", id)
+				}
 			}
 		}
 	}()

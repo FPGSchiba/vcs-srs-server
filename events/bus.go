@@ -79,17 +79,28 @@ func (eb *EventBus) Subscribe(eventName string) chan Event {
 	return ch
 }
 
-// Unsubscribe removes the channel from all subscriber lists.
+// Unsubscribe removes the channel from all subscriber lists and closes it
+// so that range-based consumers exit cleanly.
 func (eb *EventBus) Unsubscribe(ch chan Event) {
 	eb.mu.Lock()
-	defer eb.mu.Unlock()
+	found := false
 	for name, subs := range eb.subscribers {
 		for i, sub := range subs {
 			if sub == ch {
 				eb.subscribers[name] = append(subs[:i], subs[i+1:]...)
+				found = true
 				break
 			}
 		}
+	}
+	eb.mu.Unlock()
+	if found {
+		// Close the channel so range-based consumers exit.
+		// Use recover in case closeSubscribers already closed it in a race.
+		func() {
+			defer func() { recover() }() //nolint:errcheck
+			close(ch)
+		}()
 	}
 }
 
