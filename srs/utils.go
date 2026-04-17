@@ -57,10 +57,11 @@ func convertRadios(radio []state.Radio) []*pb.Radio {
 
 func convertSingleRadio(r *state.Radio) *pb.Radio {
 	return &pb.Radio{
-		Id:        r.ID,
-		Name:      r.Name,
-		Frequency: r.Frequency,
-		Enabled:   r.Enabled,
+		Id:         r.ID,
+		Name:       r.Name,
+		Frequency:  r.Frequency,
+		Enabled:    r.Enabled,
+		IsIntercom: r.IsIntercom,
 	}
 }
 
@@ -101,9 +102,10 @@ func convertRadioInfo(radio *pb.RadioInfo) *state.RadioState {
 
 func convertSingleRadioState(r *pb.Radio) state.Radio {
 	return state.Radio{
-		ID:        r.Id,
-		Name:      r.Name,
-		Frequency: r.Frequency,
-		Enabled:   r.Enabled,
+		ID:         r.Id,
+		Name:       r.Name,
+		Frequency:  r.Frequency,
+		Enabled:    r.Enabled,
+		IsIntercom: r.IsIntercom,
 	}
 }
