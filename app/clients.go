@@ -96,7 +96,8 @@ func (a *VCSApplication) BanClient(clientId string, reason string) {
 	a.ServerState.RLock()
 	clientsSnap := make(map[uuid.UUID]*state.ClientState, len(a.ServerState.Clients))
 	for k, v := range a.ServerState.Clients {
-		clientsSnap[k] = v
+		cp := *v
+		clientsSnap[k] = &cp
 	}
 	bannedSnap := make([]state.BannedClient, len(a.ServerState.BannedState.BannedClients))
 	copy(bannedSnap, a.ServerState.BannedState.BannedClients)
@@ -169,7 +170,8 @@ func (a *VCSApplication) KickClient(clientId string, reason string) {
 	a.ServerState.RLock()
 	clientsSnap := make(map[uuid.UUID]*state.ClientState, len(a.ServerState.Clients))
 	for k, v := range a.ServerState.Clients {
-		clientsSnap[k] = v
+		cp := *v
+		clientsSnap[k] = &cp
 	}
 	a.ServerState.RUnlock()
 	a.EmitEvent(events.Event{
@@ -207,7 +209,8 @@ func (a *VCSApplication) MuteClient(clientId string) {
 	a.ServerState.RLock()
 	radioSnap := make(map[uuid.UUID]*state.RadioState, len(a.ServerState.RadioClients))
 	for k, v := range a.ServerState.RadioClients {
-		radioSnap[k] = v
+		cp := *v
+		radioSnap[k] = &cp
 	}
 	a.ServerState.RUnlock()
 	a.EmitEvent(events.Event{
@@ -245,7 +248,8 @@ func (a *VCSApplication) UnmuteClient(clientId string) {
 	a.ServerState.RLock()
 	radioSnap := make(map[uuid.UUID]*state.RadioState, len(a.ServerState.RadioClients))
 	for k, v := range a.ServerState.RadioClients {
-		radioSnap[k] = v
+		cp := *v
+		radioSnap[k] = &cp
 	}
 	a.ServerState.RUnlock()
 	a.EmitEvent(events.Event{
