@@ -101,8 +101,15 @@ func (a *VCSApplication) BanClient(clientId string, reason string) {
 	bannedSnap := make([]state.BannedClient, len(a.ServerState.BannedState.BannedClients))
 	copy(bannedSnap, a.ServerState.BannedState.BannedClients)
 	a.ServerState.RUnlock()
-	a.EmitEvent(events.Event{Name: events.ClientsChanged, Data: clientsSnap})
+	a.EmitEvent(events.Event{
+		Name: events.ClientsChanged,
+		Data: events.ClientChangeEvent{Type: events.ClientLeft, ClientID: clientGuid, Clients: clientsSnap},
+	})
 	a.EmitEvent(events.Event{Name: events.BannedClientsChanged, Data: bannedSnap})
+	a.EmitEvent(events.Event{
+		Name: events.ServerAction,
+		Data: events.ServerActionEvent{ActionType: events.ActionBan, TargetClientID: clientGuid, Reason: reason},
+	})
 	a.Notify(events.NewNotification("Ban succeeded", "Client banned successfully", "success"))
 	a.Logger.Info("Client banned", "clientId", clientId, "reason", reason)
 }
@@ -147,7 +154,7 @@ func (a *VCSApplication) UnbanClient(clientId string) {
 	a.Notify(events.NewNotification("Unban succeeded", "Client successfully unbanned", "success"))
 }
 
-func (a *VCSApplication) KickClient(clientId string, reason string) { // TODO: Implement Backend Logic to kick a client
+func (a *VCSApplication) KickClient(clientId string, reason string) {
 	a.ServerState.Lock()
 	clientGuid, err := uuid.Parse(clientId)
 	if err != nil {
@@ -165,12 +172,19 @@ func (a *VCSApplication) KickClient(clientId string, reason string) { // TODO: I
 		clientsSnap[k] = v
 	}
 	a.ServerState.RUnlock()
-	a.EmitEvent(events.Event{Name: events.ClientsChanged, Data: clientsSnap})
+	a.EmitEvent(events.Event{
+		Name: events.ClientsChanged,
+		Data: events.ClientChangeEvent{Type: events.ClientLeft, ClientID: clientGuid, Clients: clientsSnap},
+	})
+	a.EmitEvent(events.Event{
+		Name: events.ServerAction,
+		Data: events.ServerActionEvent{ActionType: events.ActionKick, TargetClientID: clientGuid, Reason: reason},
+	})
 	a.Notify(events.NewNotification("Kick succeeded", "Client kicked successfully", "success"))
 	a.Logger.Info("Client kicked", "clientId", clientId, "reason", reason)
 }
 
-func (a *VCSApplication) MuteClient(clientId string) { // TODO: Implement Backend Logic to mute a client and notify the Client
+func (a *VCSApplication) MuteClient(clientId string) {
 	a.ServerState.Lock()
 	clientGuid, err := uuid.Parse(clientId)
 	if err != nil {
@@ -196,12 +210,19 @@ func (a *VCSApplication) MuteClient(clientId string) { // TODO: Implement Backen
 		radioSnap[k] = v
 	}
 	a.ServerState.RUnlock()
-	a.EmitEvent(events.Event{Name: events.RadioClientsChanged, Data: radioSnap})
+	a.EmitEvent(events.Event{
+		Name: events.RadioClientsChanged,
+		Data: events.RadioChangeEvent{Type: events.RadioUpdated, ClientID: clientGuid, Radios: radioSnap},
+	})
+	a.EmitEvent(events.Event{
+		Name: events.ServerAction,
+		Data: events.ServerActionEvent{ActionType: events.ActionMute, TargetClientID: clientGuid},
+	})
 	a.Notify(events.NewNotification("Mute succeeded", "Client muted successfully", "success"))
 	a.Logger.Info("Client muted", "clientId", clientId)
 }
 
-func (a *VCSApplication) UnmuteClient(clientId string) { // TODO: Implement Backend Logic to unmute a client and notify the Client
+func (a *VCSApplication) UnmuteClient(clientId string) {
 	a.ServerState.Lock()
 	clientGuid, err := uuid.Parse(clientId)
 	if err != nil {
@@ -227,7 +248,14 @@ func (a *VCSApplication) UnmuteClient(clientId string) { // TODO: Implement Back
 		radioSnap[k] = v
 	}
 	a.ServerState.RUnlock()
-	a.EmitEvent(events.Event{Name: events.RadioClientsChanged, Data: radioSnap})
+	a.EmitEvent(events.Event{
+		Name: events.RadioClientsChanged,
+		Data: events.RadioChangeEvent{Type: events.RadioUpdated, ClientID: clientGuid, Radios: radioSnap},
+	})
+	a.EmitEvent(events.Event{
+		Name: events.ServerAction,
+		Data: events.ServerActionEvent{ActionType: events.ActionUnmute, TargetClientID: clientGuid},
+	})
 	a.Notify(events.NewNotification("Unmute succeeded", "Client unmuted successfully", "success"))
 	a.Logger.Info("Client unmuted", "clientId", clientId)
 }
