@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -106,12 +107,10 @@ func (s *AuthServer) InitAuth(ctx context.Context, request *pb.AuthInitRequest) 
 
 	s.removeExpiredAuthenticatingClients()
 
+	peerHost, _, _ := net.SplitHostPort(p.Addr.String())
 	s.serverState.RLock()
 	_, banned := utils.FindByFunc(s.serverState.BannedState.BannedClients, func(bc state.BannedClient) bool {
-		if bc.IPAddress == p.Addr.String() {
-			return true
-		}
-		return false
+		return bc.IPAddress == peerHost
 	})
 	s.serverState.RUnlock()
 	if banned {
