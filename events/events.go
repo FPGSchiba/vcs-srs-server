@@ -1,6 +1,7 @@
 package events
 
 import (
+	"github.com/FPGSchiba/vcs-srs-server/state"
 	"github.com/google/uuid"
 )
 
@@ -24,6 +25,34 @@ const (
 	NotificationEvent = "notification"
 )
 
+const (
+	LogEntry      = "logs/entry"
+	ServerAction  = "admin/server-action"
+)
+
+type ClientChangeType int
+
+const (
+	ClientJoined ClientChangeType = iota
+	ClientLeft
+	ClientInfoUpdated
+)
+
+type RadioChangeType int
+
+const (
+	RadioUpdated RadioChangeType = iota
+)
+
+type ActionType int
+
+const (
+	ActionKick ActionType = iota
+	ActionBan
+	ActionMute
+	ActionUnmute
+)
+
 type Notification struct {
 	Title   string `json:"title"`
 	Message string `json:"message"`
@@ -34,6 +63,24 @@ type Notification struct {
 type Event struct {
 	Name string // Name of the event
 	Data interface{}
+}
+
+type ClientChangeEvent struct {
+	Type     ClientChangeType
+	ClientID uuid.UUID
+	Clients  map[uuid.UUID]*state.ClientState
+}
+
+type RadioChangeEvent struct {
+	Type     RadioChangeType
+	ClientID uuid.UUID
+	Radios   map[uuid.UUID]*state.RadioState
+}
+
+type ServerActionEvent struct {
+	ActionType     ActionType
+	TargetClientID uuid.UUID
+	Reason         string
 }
 
 func NewNotification(title, message, level string) Notification {
