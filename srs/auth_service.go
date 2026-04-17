@@ -361,7 +361,7 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.GuestLoginReque
 	s.serverState.RUnlock()
 	s.eventBus.Publish(events.Event{
 		Name: events.ClientsChanged,
-		Data: clientsSnap,
+		Data: events.ClientChangeEvent{Type: events.ClientJoined, ClientID: clientGuid, Clients: clientsSnap},
 	})
 	return &pb.GuestLoginResponse{
 		Success: true,
@@ -788,7 +788,7 @@ func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.UnitSelectReque
 	s.serverState.RUnlock()
 	s.eventBus.Publish(events.Event{
 		Name: events.ClientsChanged,
-		Data: clientsSnap,
+		Data: events.ClientChangeEvent{Type: events.ClientJoined, ClientID: clientGuid, Clients: clientsSnap},
 	})
 
 	return &pb.UnitSelectResponse{

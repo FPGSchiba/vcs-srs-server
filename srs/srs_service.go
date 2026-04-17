@@ -105,7 +105,10 @@ func (s *SimpleRadioServer) SyncClient(_ context.Context, _ *pb.Empty) (*pb.Sync
 		clientsSnap[k] = v
 	}
 	s.serverState.RUnlock()
-	s.eventBus.Publish(events.Event{Name: events.ClientsChanged, Data: clientsSnap})
+	s.eventBus.Publish(events.Event{
+		Name: events.ClientsChanged,
+		Data: events.ClientChangeEvent{Type: events.ClientInfoUpdated, Clients: clientsSnap},
+	})
 
 	return &pb.SyncResponse{
 		Success: true,
@@ -154,7 +157,10 @@ func (s *SimpleRadioServer) Disconnect(ctx context.Context, _ *pb.Empty) (*pb.Se
 		clientsSnap[k] = v
 	}
 	s.serverState.RUnlock()
-	s.eventBus.Publish(events.Event{Name: events.ClientsChanged, Data: clientsSnap})
+	s.eventBus.Publish(events.Event{
+		Name: events.ClientsChanged,
+		Data: events.ClientChangeEvent{Type: events.ClientLeft, ClientID: clientID, Clients: clientsSnap},
+	})
 
 	return &pb.ServerResponse{
 		Success:      true,
@@ -241,7 +247,10 @@ func (s *SimpleRadioServer) UpdateClientInfo(ctx context.Context, req *pb.Client
 		clientsSnap[k] = v
 	}
 	s.serverState.RUnlock()
-	s.eventBus.Publish(events.Event{Name: events.ClientsChanged, Data: clientsSnap})
+	s.eventBus.Publish(events.Event{
+		Name: events.ClientsChanged,
+		Data: events.ClientChangeEvent{Type: events.ClientInfoUpdated, ClientID: clientID, Clients: clientsSnap},
+	})
 
 	return &pb.ServerResponse{
 		Success:      true,
@@ -281,7 +290,10 @@ func (s *SimpleRadioServer) UpdateRadioInfo(ctx context.Context, req *pb.RadioIn
 		radioSnap[k] = v
 	}
 	s.serverState.RUnlock()
-	s.eventBus.Publish(events.Event{Name: events.RadioClientsChanged, Data: radioSnap})
+	s.eventBus.Publish(events.Event{
+		Name: events.RadioClientsChanged,
+		Data: events.RadioChangeEvent{Type: events.RadioUpdated, ClientID: clientID, Radios: radioSnap},
+	})
 
 	return &pb.ServerResponse{
 		Success:      true,
