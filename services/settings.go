@@ -59,6 +59,41 @@ func (s *SettingsService) SaveServerSettings(newSettings *state.ServerSettings) 
 	s.App.Notify(events.NewNotification("Settings saved", "Server Settings were successfully saved", "info"))
 }
 
+func (s *SettingsService) SaveSecuritySettings(enableGuestAuth bool, enablePluginAuth bool) {
+	s.App.SettingsState.Lock()
+	defer s.App.SettingsState.Unlock()
+	s.App.SettingsState.Security.EnableGuestAuth = enableGuestAuth
+	s.App.SettingsState.Security.EnablePluginAuth = enablePluginAuth
+	err := s.App.SettingsState.Save()
+	if err != nil {
+		s.App.Logger.Error(fmt.Sprintf("Failed to save security settings: %v", err))
+		s.App.Notify(events.NewNotification("Failed to save settings", "Failed to save settings", "error"))
+		return
+	}
+	s.App.App.Event.EmitEvent(&application.CustomEvent{
+		Name: events.SettingsChanged,
+		Data: s.App.SettingsState,
+	})
+	s.App.Notify(events.NewNotification("Settings saved", "Security Settings were successfully saved", "info"))
+}
+
+func (s *SettingsService) SaveVoiceControlSettings(newSettings *state.VoiceControlSettings) {
+	s.App.SettingsState.Lock()
+	defer s.App.SettingsState.Unlock()
+	s.App.SettingsState.VoiceControl = *newSettings
+	err := s.App.SettingsState.Save()
+	if err != nil {
+		s.App.Logger.Error(fmt.Sprintf("Failed to save voice control settings: %v", err))
+		s.App.Notify(events.NewNotification("Failed to save settings", "Failed to save settings", "error"))
+		return
+	}
+	s.App.App.Event.EmitEvent(&application.CustomEvent{
+		Name: events.SettingsChanged,
+		Data: s.App.SettingsState,
+	})
+	s.App.Notify(events.NewNotification("Settings saved", "VoiceControl Settings were successfully saved", "info"))
+}
+
 func (s *SettingsService) SaveFrequencySettings(newSettings *state.FrequencySettings) {
 	s.App.SettingsState.Lock()
 	defer s.App.SettingsState.Unlock()
