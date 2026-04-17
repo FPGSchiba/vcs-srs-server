@@ -4,14 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"time"
+
+	"github.com/99designs/gqlgen/graphql/handler"
 	"github.com/FPGSchiba/vcs-srs-server/control"
 	"github.com/FPGSchiba/vcs-srs-server/events"
+	gql "github.com/FPGSchiba/vcs-srs-server/graphql"
+	"github.com/FPGSchiba/vcs-srs-server/graphql/generated"
 	"github.com/FPGSchiba/vcs-srs-server/rest"
 	"github.com/FPGSchiba/vcs-srs-server/state"
 	"github.com/FPGSchiba/vcs-srs-server/voice"
 	"github.com/gin-gonic/gin"
-	"net/http"
-	"time"
 )
 
 func (a *VCSApplication) startHTTPServer() {
@@ -32,6 +36,16 @@ func (a *VCSApplication) startHTTPServer() {
 	go func() {
 		gin.SetMode(gin.ReleaseMode)
 		r := rest.GetRouter(a.Logger)
+
+		// Mount GraphQL API with API key protection
+		gqlResolver := gql.NewResolver(a)
+		gqlSrv := handler.NewDefaultServer(
+			generated.NewExecutableSchema(generated.Config{Resolvers: gqlResolver}),
+		)
+		apiV1 := r.Group("/api/v1")
+		apiV1.POST("/graphql", rest.ApiKeyMiddleware(a.SettingsState), func(c *gin.Context) {
+			gqlSrv.ServeHTTP(c.Writer, c.Request)
+		})
 
 		a.SettingsState.Lock()
 
