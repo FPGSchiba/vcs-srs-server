@@ -142,3 +142,36 @@ func TestBuildServerUpdate_BadPayload_ReturnsNil(t *testing.T) {
 		t.Fatal("expected nil when payload is wrong type")
 	}
 }
+
+func TestBuildServerUpdate_ClientInfoUpdated(t *testing.T) {
+	s := newTestServer()
+	id := uuid.New()
+	evt := events.Event{
+		Name: events.ClientsChanged,
+		Data: events.ClientChangeEvent{
+			Type:     events.ClientInfoUpdated,
+			ClientID: id,
+			Clients:  map[uuid.UUID]*state.ClientState{id: {Name: "Bob", Coalition: "Red"}},
+		},
+	}
+	update := s.buildServerUpdate(evt)
+	if update == nil || update.Type != pb.ServerUpdate_CLIENT_INFO_UPDATE {
+		t.Fatalf("expected CLIENT_INFO_UPDATE, got %v", update)
+	}
+	cu := update.GetClientUpdate()
+	if cu == nil || cu.GetClientGuid() != id.String() {
+		t.Fatal("expected ClientUpdate with correct guid")
+	}
+	if cu.GetClientInfo() == nil || cu.GetClientInfo().Name != "Bob" {
+		t.Fatal("expected ClientInfo with Name=Bob")
+	}
+}
+
+func TestBuildServerUpdate_SettingsChanged(t *testing.T) {
+	s := newTestServer()
+	evt := events.Event{Name: events.SettingsChanged, Data: nil}
+	update := s.buildServerUpdate(evt)
+	if update == nil || update.Type != pb.ServerUpdate_SERVER_SETTINGS_CHANGED {
+		t.Fatalf("expected SERVER_SETTINGS_CHANGED, got %v", update)
+	}
+}

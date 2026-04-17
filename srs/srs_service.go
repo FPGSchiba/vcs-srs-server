@@ -487,6 +487,7 @@ func (s *SimpleRadioServer) buildServerUpdate(event events.Event) *pb.ServerUpda
 				},
 			}
 		}
+		return nil
 
 	case events.RadioClientsChanged:
 		re, ok := event.Data.(events.RadioChangeEvent)
@@ -532,6 +533,8 @@ func (s *SimpleRadioServer) buildServerUpdate(event events.Event) *pb.ServerUpda
 			actionType = pb.ServerAction_MUTE
 		case events.ActionUnmute:
 			actionType = pb.ServerAction_UNMUTE
+		default:
+			return nil
 		}
 		return &pb.ServerUpdate{
 			Type: pb.ServerUpdate_SERVER_ACTION,
