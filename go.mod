@@ -3,15 +3,17 @@ module github.com/FPGSchiba/vcs-srs-server
 go 1.25.0
 
 require (
+	github.com/99designs/gqlgen v0.17.89
 	github.com/gin-gonic/gin v1.11.0
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
 	github.com/samber/slog-multi v1.6.0
 	github.com/sethvargo/go-diceware v0.5.0
+	github.com/vektah/gqlparser/v2 v2.5.32
 	github.com/wailsapp/wails/v3 v3.0.0-alpha.43
-	golang.org/x/crypto v0.46.0
+	golang.org/x/crypto v0.48.0
 	google.golang.org/grpc v1.77.0
-	google.golang.org/protobuf v1.36.10
+	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -20,6 +22,7 @@ require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/ProtonMail/go-crypto v1.1.6 // indirect
 	github.com/adrg/xdg v0.5.3 // indirect
+	github.com/agnivade/levenshtein v1.2.1 // indirect
 	github.com/bep/debounce v1.2.1 // indirect
 	github.com/bytedance/gopkg v0.1.3 // indirect
 	github.com/bytedance/sonic v1.14.1 // indirect
@@ -39,7 +42,7 @@ require (
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/go-playground/validator/v10 v10.27.0 // indirect
 	github.com/goccy/go-json v0.10.5 // indirect
-	github.com/goccy/go-yaml v1.18.0 // indirect
+	github.com/goccy/go-yaml v1.19.2 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
@@ -65,6 +68,7 @@ require (
 	github.com/samber/slog-common v0.19.0 // indirect
 	github.com/sergi/go-diff v1.3.2-0.20230802210424-5b0b94c5c0d3 // indirect
 	github.com/skeema/knownhosts v1.3.1 // indirect
+	github.com/sosodev/duration v1.4.0 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.0 // indirect
 	github.com/wailsapp/go-webview2 v1.0.22 // indirect
@@ -72,12 +76,12 @@ require (
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
 	go.uber.org/mock v0.6.0 // indirect
 	golang.org/x/arch v0.21.0 // indirect
-	golang.org/x/mod v0.30.0 // indirect
-	golang.org/x/net v0.47.0 // indirect
-	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/sys v0.39.0 // indirect
-	golang.org/x/text v0.32.0 // indirect
-	golang.org/x/tools v0.39.0 // indirect
+	golang.org/x/mod v0.33.0 // indirect
+	golang.org/x/net v0.51.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/sys v0.42.0 // indirect
+	golang.org/x/text v0.34.0 // indirect
+	golang.org/x/tools v0.42.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251022142026-3a174f9686a8 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect

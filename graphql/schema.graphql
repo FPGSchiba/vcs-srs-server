@@ -1,0 +1,107 @@
+type Query {
+  systemInfo: SystemInfo!
+  clients: [Client!]!
+  bannedClients: [BannedClient!]!
+  settings: Settings!
+}
+
+type Mutation {
+  # Settings
+  updateGeneralSettings(input: GeneralSettingsInput!): MutationResult!
+  updateSecuritySettings(input: SecuritySettingsInput!): MutationResult!
+  updateVoiceControlSettings(input: VoiceControlSettingsInput!): MutationResult!
+  updateFrequencySettings(input: FrequencySettingsInput!): MutationResult!
+  updateCoalitions(coalitions: [CoalitionInput!]!): MutationResult!
+  updateServerSettings(input: ServerSettingsInput!): MutationResult!
+  # Server control
+  startServer: MutationResult!
+  stopServer: MutationResult!
+  # Client management
+  kickClient(clientId: ID!, reason: String!): MutationResult!
+  banClient(clientId: ID!, reason: String!): MutationResult!
+  unbanClient(clientId: ID!): MutationResult!
+  muteClient(clientId: ID!): MutationResult!
+  unmuteClient(clientId: ID!): MutationResult!
+}
+
+type SystemInfo {
+  version: String!
+  httpStatus: ServiceStatus!
+  voiceStatus: ServiceStatus!
+  controlStatus: ServiceStatus!
+}
+
+type ServiceStatus {
+  isRunning: Boolean!
+  error: String!
+}
+
+type Client {
+  id: ID!
+  name: String!
+  coalition: String!
+  unitId: String!
+  roleId: Int!
+  lastUpdate: String!
+  muted: Boolean!
+}
+
+type BannedClient {
+  id: ID!
+  name: String!
+  ipAddress: String!
+  reason: String!
+}
+
+type Settings {
+  general: GeneralSettings!
+  security: SecuritySettings!
+  voiceControl: VoiceControlSettings!
+  frequencies: FrequencySettings!
+  coalitions: [Coalition!]!
+  servers: ServerSettings!
+}
+
+type GeneralSettings { maxRadiosPerUser: Int! }
+type SecuritySettings {
+  enablePluginAuth: Boolean!
+  enableGuestAuth: Boolean!
+  plugins: [PluginSettings!]!
+}
+type PluginSettings { name: String!, enabled: Boolean!, address: String! }
+type VoiceControlSettings {
+  port: Int!
+  remoteHost: String!
+  listenHost: String!
+  certificateFile: String!
+  privateKeyFile: String!
+}
+type FrequencySettings {
+  testFrequencies: [Float!]!
+  globalFrequencies: [Float!]!
+}
+type Coalition { name: String!, color: String!, description: String! }
+type ServerSettings { http: ServerSetting!, voice: ServerSetting!, control: ServerSetting! }
+type ServerSetting { host: String!, port: Int! }
+type MutationResult { success: Boolean!, message: String }
+
+input GeneralSettingsInput { maxRadiosPerUser: Int! }
+input SecuritySettingsInput { enablePluginAuth: Boolean!, enableGuestAuth: Boolean! }
+input VoiceControlSettingsInput {
+  port: Int!
+  remoteHost: String!
+  listenHost: String!
+  certificateFile: String!
+  privateKeyFile: String!
+}
+input FrequencySettingsInput {
+  testFrequencies: [Float!]!
+  globalFrequencies: [Float!]!
+}
+input CoalitionInput { name: String!, color: String!, description: String!, password: String }
+input ServerSettingsInput {
+  http: ServerSettingInput!
+  voice: ServerSettingInput!
+  control: ServerSettingInput!
+}
+input ServerSettingInput { host: String!, port: Int! }

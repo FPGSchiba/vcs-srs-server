@@ -104,3 +104,17 @@ tasks:
       - protoc --go_out=./srspb --go_opt=paths=source_relative --go-grpc_out=./srspb --go-grpc_opt=paths=source_relative srs.proto
       - protoc --go_out=./voicecontrolpb --go_opt=paths=source_relative --go-grpc_out=./voicecontrolpb --go-grpc_opt=paths=source_relative control.proto
       - protoc --go_out=./vcsauthpb --go_opt=paths=source_relative --go-grpc_out=./vcsauthpb --go-grpc_opt=paths=source_relative vcs-auth-plugin.proto
+
+  generate:graphql:
+    summary: Generates GraphQL server code via gqlgen
+    sources:
+      - "graphql/schema.graphql"
+      - "gqlgen.yml"
+    generates:
+      - "graphql/generated/generated.go"
+      - "graphql/generated/models_gen.go"
+    preconditions:
+      - sh: which gqlgen
+        msg: "Install gqlgen: go install github.com/99designs/gqlgen@latest"
+    cmds:
+      - go run github.com/99designs/gqlgen generate
