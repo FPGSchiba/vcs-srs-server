@@ -35,7 +35,10 @@ func (h *BusHandler) Enabled(_ context.Context, _ slog.Level) bool {
 
 // Handle converts the record to LogEntry and publishes it.
 func (h *BusHandler) Handle(_ context.Context, r slog.Record) error {
-	attrs := make(map[string]any, len(h.attrs)+r.NumAttrs())
+	var attrs map[string]any
+	if cap := len(h.attrs) + r.NumAttrs(); cap > 0 {
+		attrs = make(map[string]any, cap)
+	}
 
 	for _, a := range h.attrs {
 		attrs[a.Key] = a.Value.Any()
@@ -69,7 +72,11 @@ func (h *BusHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 }
 
 // WithGroup returns a new BusHandler with the given group prefix.
+// Per slog.Handler contract, returns the receiver unchanged if name is empty.
 func (h *BusHandler) WithGroup(name string) slog.Handler {
+	if name == "" {
+		return h
+	}
 	g := name
 	if h.group != "" {
 		g = h.group + "." + name
