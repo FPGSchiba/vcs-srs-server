@@ -7,94 +7,253 @@ package graphql
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/FPGSchiba/vcs-srs-server/graphql/generated"
+	"github.com/FPGSchiba/vcs-srs-server/state"
 )
+
+// --- Query resolvers ---
+
+// SystemInfo resolves Query.systemInfo
+func (r *queryResolver) SystemInfo(ctx context.Context) (*generated.SystemInfo, error) {
+	status := r.App.GetServerStatus()
+	return &generated.SystemInfo{
+		Version: r.App.GetServerVersion(),
+		HTTPStatus: &generated.ServiceStatus{
+			IsRunning: status.HTTPStatus.IsRunning,
+			Error:     status.HTTPStatus.Error,
+		},
+		VoiceStatus: &generated.ServiceStatus{
+			IsRunning: status.VoiceStatus.IsRunning,
+			Error:     status.VoiceStatus.Error,
+		},
+		ControlStatus: &generated.ServiceStatus{
+			IsRunning: status.ControlStatus.IsRunning,
+			Error:     status.ControlStatus.Error,
+		},
+	}, nil
+}
+
+// Clients resolves Query.clients
+func (r *queryResolver) Clients(ctx context.Context) ([]*generated.Client, error) {
+	clients := r.App.GetClientMap()
+	radios := r.App.GetRadioClientMap()
+
+	result := make([]*generated.Client, 0, len(clients))
+	for id, c := range clients {
+		muted := false
+		if radio, ok := radios[id]; ok {
+			muted = radio.Muted
+		}
+		result = append(result, &generated.Client{
+			ID:         id.String(),
+			Name:       c.Name,
+			Coalition:  c.Coalition,
+			UnitID:     c.UnitId,
+			RoleID:     int(c.Role),
+			LastUpdate: c.LastUpdate.Format("2006-01-02T15:04:05Z07:00"),
+			Muted:      muted,
+		})
+	}
+	return result, nil
+}
+
+// BannedClients resolves Query.bannedClients
+func (r *queryResolver) BannedClients(ctx context.Context) ([]*generated.BannedClient, error) {
+	banned := r.App.GetBannedClients()
+	result := make([]*generated.BannedClient, 0, len(banned))
+	for _, b := range banned {
+		result = append(result, &generated.BannedClient{
+			ID:        b.ID.String(),
+			Name:      b.Name,
+			IPAddress: b.IPAddress,
+			Reason:    b.Reason,
+		})
+	}
+	return result, nil
+}
+
+// Settings resolves Query.settings
+func (r *queryResolver) Settings(ctx context.Context) (*generated.Settings, error) {
+	snap := r.App.GetSettingsSnapshot()
+
+	plugins := make([]*generated.PluginSettings, 0, len(snap.Security.Plugins))
+	for _, p := range snap.Security.Plugins {
+		plugins = append(plugins, &generated.PluginSettings{
+			Name:    p.Name,
+			Enabled: p.Enabled,
+			Address: p.Address,
+		})
+	}
+
+	coalitions := make([]*generated.Coalition, 0, len(snap.Coalitions))
+	for _, c := range snap.Coalitions {
+		coalitions = append(coalitions, &generated.Coalition{
+			Name:        c.Name,
+			Color:       c.Color,
+			Description: c.Description,
+		})
+	}
+
+	testFreqs := make([]float64, len(snap.Frequencies.TestFrequencies))
+	for i, f := range snap.Frequencies.TestFrequencies {
+		testFreqs[i] = float64(f)
+	}
+	globalFreqs := make([]float64, len(snap.Frequencies.GlobalFrequencies))
+	for i, f := range snap.Frequencies.GlobalFrequencies {
+		globalFreqs[i] = float64(f)
+	}
+
+	return &generated.Settings{
+		General: &generated.GeneralSettings{
+			MaxRadiosPerUser: snap.General.MaxRadiosPerUser,
+		},
+		Security: &generated.SecuritySettings{
+			EnablePluginAuth: snap.Security.EnablePluginAuth,
+			EnableGuestAuth:  snap.Security.EnableGuestAuth,
+			Plugins:          plugins,
+		},
+		VoiceControl: &generated.VoiceControlSettings{
+			Port:            snap.VoiceControl.Port,
+			RemoteHost:      snap.VoiceControl.RemoteHost,
+			ListenHost:      snap.VoiceControl.ListenHost,
+			CertificateFile: snap.VoiceControl.CertificateFile,
+			PrivateKeyFile:  snap.VoiceControl.PrivateKeyFile,
+		},
+		Frequencies: &generated.FrequencySettings{
+			TestFrequencies:   testFreqs,
+			GlobalFrequencies: globalFreqs,
+		},
+		Coalitions: coalitions,
+		Servers: &generated.ServerSettings{
+			HTTP: &generated.ServerSetting{
+				Host: snap.Servers.HTTP.Host,
+				Port: snap.Servers.HTTP.Port,
+			},
+			Voice: &generated.ServerSetting{
+				Host: snap.Servers.Voice.Host,
+				Port: snap.Servers.Voice.Port,
+			},
+			Control: &generated.ServerSetting{
+				Host: snap.Servers.Control.Host,
+				Port: snap.Servers.Control.Port,
+			},
+		},
+	}, nil
+}
+
+// --- Mutation resolvers ---
 
 // UpdateGeneralSettings is the resolver for the updateGeneralSettings field.
 func (r *mutationResolver) UpdateGeneralSettings(ctx context.Context, input generated.GeneralSettingsInput) (*generated.MutationResult, error) {
-	panic(fmt.Errorf("not implemented: UpdateGeneralSettings - updateGeneralSettings"))
+	r.App.SaveGeneralSettings(&state.GeneralSettings{MaxRadiosPerUser: input.MaxRadiosPerUser})
+	return ok("General settings updated"), nil
 }
 
 // UpdateSecuritySettings is the resolver for the updateSecuritySettings field.
 func (r *mutationResolver) UpdateSecuritySettings(ctx context.Context, input generated.SecuritySettingsInput) (*generated.MutationResult, error) {
-	panic(fmt.Errorf("not implemented: UpdateSecuritySettings - updateSecuritySettings"))
+	r.App.SaveSecuritySettings(input.EnableGuestAuth, input.EnablePluginAuth)
+	return ok("Security settings updated"), nil
 }
 
 // UpdateVoiceControlSettings is the resolver for the updateVoiceControlSettings field.
 func (r *mutationResolver) UpdateVoiceControlSettings(ctx context.Context, input generated.VoiceControlSettingsInput) (*generated.MutationResult, error) {
-	panic(fmt.Errorf("not implemented: UpdateVoiceControlSettings - updateVoiceControlSettings"))
+	r.App.SaveVoiceControlSettings(state.VoiceControlSettings{
+		Port:            input.Port,
+		RemoteHost:      input.RemoteHost,
+		ListenHost:      input.ListenHost,
+		CertificateFile: input.CertificateFile,
+		PrivateKeyFile:  input.PrivateKeyFile,
+	})
+	return ok("VoiceControl settings updated"), nil
 }
 
 // UpdateFrequencySettings is the resolver for the updateFrequencySettings field.
 func (r *mutationResolver) UpdateFrequencySettings(ctx context.Context, input generated.FrequencySettingsInput) (*generated.MutationResult, error) {
-	panic(fmt.Errorf("not implemented: UpdateFrequencySettings - updateFrequencySettings"))
+	testFreqs := make([]float32, len(input.TestFrequencies))
+	for i, f := range input.TestFrequencies {
+		testFreqs[i] = float32(f)
+	}
+	globalFreqs := make([]float32, len(input.GlobalFrequencies))
+	for i, f := range input.GlobalFrequencies {
+		globalFreqs[i] = float32(f)
+	}
+	r.App.SaveFrequencySettings(&state.FrequencySettings{
+		TestFrequencies:   testFreqs,
+		GlobalFrequencies: globalFreqs,
+	})
+	return ok("Frequency settings updated"), nil
 }
 
 // UpdateCoalitions is the resolver for the updateCoalitions field.
 func (r *mutationResolver) UpdateCoalitions(ctx context.Context, coalitions []*generated.CoalitionInput) (*generated.MutationResult, error) {
-	panic(fmt.Errorf("not implemented: UpdateCoalitions - updateCoalitions"))
+	stateCoalitions := make([]state.Coalition, 0, len(coalitions))
+	for _, c := range coalitions {
+		password := ""
+		if c.Password != nil {
+			password = *c.Password
+		}
+		stateCoalitions = append(stateCoalitions, state.Coalition{
+			Name:        c.Name,
+			Color:       c.Color,
+			Description: c.Description,
+			Password:    password,
+		})
+	}
+	r.App.SaveCoalitions(stateCoalitions)
+	return ok("Coalitions updated"), nil
 }
 
 // UpdateServerSettings is the resolver for the updateServerSettings field.
 func (r *mutationResolver) UpdateServerSettings(ctx context.Context, input generated.ServerSettingsInput) (*generated.MutationResult, error) {
-	panic(fmt.Errorf("not implemented: UpdateServerSettings - updateServerSettings"))
+	r.App.SaveServerSettings(&state.ServerSettings{
+		HTTP:    state.ServerSetting{Host: input.HTTP.Host, Port: input.HTTP.Port},
+		Voice:   state.ServerSetting{Host: input.Voice.Host, Port: input.Voice.Port},
+		Control: state.ServerSetting{Host: input.Control.Host, Port: input.Control.Port},
+	})
+	return ok("Server settings updated"), nil
 }
 
 // StartServer is the resolver for the startServer field.
 func (r *mutationResolver) StartServer(ctx context.Context) (*generated.MutationResult, error) {
-	panic(fmt.Errorf("not implemented: StartServer - startServer"))
+	r.App.StartServer()
+	return ok("Server started"), nil
 }
 
 // StopServer is the resolver for the stopServer field.
 func (r *mutationResolver) StopServer(ctx context.Context) (*generated.MutationResult, error) {
-	panic(fmt.Errorf("not implemented: StopServer - stopServer"))
+	r.App.StopServer()
+	return ok("Server stopped"), nil
 }
 
 // KickClient is the resolver for the kickClient field.
 func (r *mutationResolver) KickClient(ctx context.Context, clientID string, reason string) (*generated.MutationResult, error) {
-	panic(fmt.Errorf("not implemented: KickClient - kickClient"))
+	r.App.KickClient(clientID, reason)
+	return ok("Client kicked"), nil
 }
 
 // BanClient is the resolver for the banClient field.
 func (r *mutationResolver) BanClient(ctx context.Context, clientID string, reason string) (*generated.MutationResult, error) {
-	panic(fmt.Errorf("not implemented: BanClient - banClient"))
+	r.App.BanClient(clientID, reason)
+	return ok("Client banned"), nil
 }
 
 // UnbanClient is the resolver for the unbanClient field.
 func (r *mutationResolver) UnbanClient(ctx context.Context, clientID string) (*generated.MutationResult, error) {
-	panic(fmt.Errorf("not implemented: UnbanClient - unbanClient"))
+	r.App.UnbanClient(clientID)
+	return ok("Client unbanned"), nil
 }
 
 // MuteClient is the resolver for the muteClient field.
 func (r *mutationResolver) MuteClient(ctx context.Context, clientID string) (*generated.MutationResult, error) {
-	panic(fmt.Errorf("not implemented: MuteClient - muteClient"))
+	r.App.MuteClient(clientID)
+	return ok("Client muted"), nil
 }
 
 // UnmuteClient is the resolver for the unmuteClient field.
 func (r *mutationResolver) UnmuteClient(ctx context.Context, clientID string) (*generated.MutationResult, error) {
-	panic(fmt.Errorf("not implemented: UnmuteClient - unmuteClient"))
-}
-
-// SystemInfo is the resolver for the systemInfo field.
-func (r *queryResolver) SystemInfo(ctx context.Context) (*generated.SystemInfo, error) {
-	panic(fmt.Errorf("not implemented: SystemInfo - systemInfo"))
-}
-
-// Clients is the resolver for the clients field.
-func (r *queryResolver) Clients(ctx context.Context) ([]*generated.Client, error) {
-	panic(fmt.Errorf("not implemented: Clients - clients"))
-}
-
-// BannedClients is the resolver for the bannedClients field.
-func (r *queryResolver) BannedClients(ctx context.Context) ([]*generated.BannedClient, error) {
-	panic(fmt.Errorf("not implemented: BannedClients - bannedClients"))
-}
-
-// Settings is the resolver for the settings field.
-func (r *queryResolver) Settings(ctx context.Context) (*generated.Settings, error) {
-	panic(fmt.Errorf("not implemented: Settings - settings"))
+	r.App.UnmuteClient(clientID)
+	return ok("Client unmuted"), nil
 }
 
 // Mutation returns generated.MutationResolver implementation.
@@ -105,3 +264,8 @@ func (r *Resolver) Query() generated.QueryResolver { return &queryResolver{r} }
 
 type mutationResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
+
+// ok returns a successful MutationResult.
+func ok(msg string) *generated.MutationResult {
+	return &generated.MutationResult{Success: true, Message: &msg}
+}

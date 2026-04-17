@@ -279,6 +279,10 @@ func (a *VCSApplication) startGrpcServer() {
 	})
 }
 
+func (a *VCSApplication) StartServer() {
+	a.StartStandaloneServer()
+}
+
 func (a *VCSApplication) stopControlServer() {
 	a.AdminState.Lock()
 	if !a.AdminState.ControlStatus.IsRunning {

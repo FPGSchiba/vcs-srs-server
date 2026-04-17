@@ -264,6 +264,28 @@ func (a *VCSApplication) UnmuteClient(clientId string) {
 	a.Logger.Info("Client unmuted", "clientId", clientId)
 }
 
+func (a *VCSApplication) GetClientMap() map[uuid.UUID]*state.ClientState {
+	a.ServerState.RLock()
+	defer a.ServerState.RUnlock()
+	snap := make(map[uuid.UUID]*state.ClientState, len(a.ServerState.Clients))
+	for k, v := range a.ServerState.Clients {
+		cp := *v
+		snap[k] = &cp
+	}
+	return snap
+}
+
+func (a *VCSApplication) GetRadioClientMap() map[uuid.UUID]*state.RadioState {
+	a.ServerState.RLock()
+	defer a.ServerState.RUnlock()
+	snap := make(map[uuid.UUID]*state.RadioState, len(a.ServerState.RadioClients))
+	for k, v := range a.ServerState.RadioClients {
+		cp := *v
+		snap[k] = &cp
+	}
+	return snap
+}
+
 func (a *VCSApplication) IsClientMuted(clientId string) bool {
 	failedEvent := events.NewNotification("Check Mute Status Failed", "Failed to check if client is muted or not", "error")
 	clientGuid, err := uuid.Parse(clientId)

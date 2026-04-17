@@ -238,6 +238,10 @@ func (a *VCSApplication) GetEventBus() *events.EventBus {
 	return a.eventBus
 }
 
+func (a *VCSApplication) GetSettingsSnapshot() state.SettingsSnapshot {
+	return a.SettingsState.Snapshot()
+}
+
 func (a *VCSApplication) Notify(notification events.Notification) {
 	a.EmitEvent(events.Event{
 		Name: events.NotificationEvent,
