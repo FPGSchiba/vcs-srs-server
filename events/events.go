@@ -26,8 +26,8 @@ const (
 )
 
 const (
-	LogEntry      = "logs/entry"
-	ServerAction  = "admin/server-action"
+	LogEntry     = "logs/entry"
+	ServerAction = "admin/server-action"
 )
 
 type ClientChangeType int
