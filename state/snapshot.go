@@ -10,6 +10,24 @@ type SettingsSnapshot struct {
 	General      GeneralSettings
 	Security     SecuritySettings
 	VoiceControl VoiceControlSettings
+	Api          ApiSettings
+}
+
+// Snapshot returns a copy of SettingsState under a read lock.
+func (s *SettingsState) Snapshot() SettingsSnapshot {
+	s.RLock()
+	defer s.RUnlock()
+	coalitions := make([]Coalition, len(s.Coalitions))
+	copy(coalitions, s.Coalitions)
+	return SettingsSnapshot{
+		Servers:      s.Servers,
+		Coalitions:   coalitions,
+		Frequencies:  s.Frequencies,
+		General:      s.General,
+		Security:     s.Security,
+		VoiceControl: s.VoiceControl,
+		Api:          s.Api,
+	}
 }
 
 // AdminStateSnapshot is a lock-free copy of AdminState for read-only consumers.

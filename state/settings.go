@@ -26,6 +26,7 @@ type SettingsState struct {
 	General      GeneralSettings      `yaml:"general"`
 	Security     SecuritySettings     `yaml:"security"`
 	VoiceControl VoiceControlSettings `yaml:"voiceControl"`
+	Api          ApiSettings          `yaml:"api"`
 	file         string               `yaml:"-"`
 }
 
@@ -101,6 +102,10 @@ type VoiceControlSettings struct {
 	PrivateKeyFile  string `yaml:"privateKeyFile"`
 }
 
+type ApiSettings struct {
+	Key string `yaml:"key"`
+}
+
 func GetSettingsState(file string) (*SettingsState, error) {
 	// Load values from file if it exists
 	yamlFile, err := os.ReadFile(file)
@@ -149,6 +154,9 @@ func GetSettingsState(file string) (*SettingsState, error) {
 					ListenHost:      DefaultVoiceControlHost,
 					CertificateFile: "/path/to/voicecontrol-cert.pem",
 					PrivateKeyFile:  "/path/to/voicecontrol-private-key.pem",
+				},
+				Api: ApiSettings{
+					Key: "",
 				},
 			}
 			err = settings.Save()
