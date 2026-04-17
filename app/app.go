@@ -288,7 +288,6 @@ func (a *VCSApplication) handleFrontendEmits(channel chan events.Event) {
 		return
 	}
 	for event := range channel {
-		a.Logger.Debug("Received event from event bus", "name", event.Name)
 		a.App.Event.EmitEvent(&application.CustomEvent{Name: event.Name, Data: event.Data})
 	}
 }

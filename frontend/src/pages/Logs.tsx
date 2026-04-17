@@ -45,10 +45,11 @@ function LogsPage() {
     }, []);
 
     useEffect(() => {
-        Events.On('logs/entry', (event) => {
+        const off = Events.On('logs/entry', (event) => {
             const entry = event.data as LogEntry;
             appendEntry(entry);
         });
+        return off;
     }, [appendEntry]);
 
     useEffect(() => {

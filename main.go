@@ -17,11 +17,11 @@ var assets embed.FS
 
 func main() {
 	vcs := app.New()
-	configFilepath, bannedFilePath, _, autoStartServers, logger := parseFlags(false, vcs.GetEventBus())
+	configFilepath, bannedFilePath, _, autoStartServers, appLogger, wailsLogger := parseFlags(false, vcs.GetEventBus())
 
 	defer func() { // Ensure we catch any panics and log them
 		if err := recover(); err != nil { //catch
-			logger.Error("Application panicked", "error", err)
+			appLogger.Error("Application panicked", "error", err)
 			os.Exit(1)
 		}
 	}()
@@ -30,7 +30,7 @@ func main() {
 	appOptions := application.Options{
 		Name:        "vcs-server",
 		Description: "A Voice Communication Server for Vanguard",
-		Logger:      logger,
+		Logger:      wailsLogger,
 		LogLevel:    slog.LevelInfo,
 		Services: []application.Service{
 			application.NewService(services.NewNotificationService(vcs)),
@@ -48,6 +48,7 @@ func main() {
 
 	wails := application.New(appOptions)
 	vcs.StartUp(wails, configFilepath, bannedFilePath, autoStartServers)
+	vcs.Logger = appLogger // Override Wails-internal logger with BusHandler-equipped app logger
 
 	wails.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:           "VCS Server",
