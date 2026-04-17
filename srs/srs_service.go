@@ -433,18 +433,117 @@ func (s *SimpleRadioServer) Stop() {
 func (s *SimpleRadioServer) buildServerUpdate(event events.Event) *pb.ServerUpdate {
 	switch event.Name {
 	case events.ClientsChanged:
-		return &pb.ServerUpdate{
-			Type: pb.ServerUpdate_CLIENT_INFO_UPDATE,
+		ce, ok := event.Data.(events.ClientChangeEvent)
+		if !ok {
+			return nil
 		}
+		guid := ce.ClientID.String()
+		switch ce.Type {
+		case events.ClientJoined:
+			var clientInfo *pb.ClientInfo
+			if c, exists := ce.Clients[ce.ClientID]; exists {
+				clientInfo = &pb.ClientInfo{
+					Name:      c.Name,
+					Coalition: c.Coalition,
+					UnitId:    c.UnitId,
+					RoleId:    uint32(c.Role),
+				}
+			}
+			return &pb.ServerUpdate{
+				Type: pb.ServerUpdate_CLIENT_JOINED,
+				Update: &pb.ServerUpdate_ClientUpdate{
+					ClientUpdate: &pb.ClientUpdate{
+						ClientGuid: &guid,
+						ClientInfo: clientInfo,
+					},
+				},
+			}
+		case events.ClientLeft:
+			return &pb.ServerUpdate{
+				Type: pb.ServerUpdate_CLIENT_LEFT,
+				Update: &pb.ServerUpdate_ClientUpdate{
+					ClientUpdate: &pb.ClientUpdate{
+						ClientGuid: &guid,
+					},
+				},
+			}
+		default: // ClientInfoUpdated
+			var clientInfo *pb.ClientInfo
+			if c, exists := ce.Clients[ce.ClientID]; exists {
+				clientInfo = &pb.ClientInfo{
+					Name:      c.Name,
+					Coalition: c.Coalition,
+					UnitId:    c.UnitId,
+					RoleId:    uint32(c.Role),
+				}
+			}
+			return &pb.ServerUpdate{
+				Type: pb.ServerUpdate_CLIENT_INFO_UPDATE,
+				Update: &pb.ServerUpdate_ClientUpdate{
+					ClientUpdate: &pb.ClientUpdate{
+						ClientGuid: &guid,
+						ClientInfo: clientInfo,
+					},
+				},
+			}
+		}
+
 	case events.RadioClientsChanged:
+		re, ok := event.Data.(events.RadioChangeEvent)
+		if !ok {
+			return nil
+		}
+		guid := re.ClientID.String()
+		var radioInfo *pb.RadioInfo
+		if r, exists := re.Radios[re.ClientID]; exists {
+			radioInfo = &pb.RadioInfo{
+				Radios: convertRadios(r.Radios),
+				Muted:  r.Muted,
+			}
+		}
 		return &pb.ServerUpdate{
 			Type: pb.ServerUpdate_CLIENT_RADIO_UPDATE,
+			Update: &pb.ServerUpdate_ClientUpdate{
+				ClientUpdate: &pb.ClientUpdate{
+					ClientGuid: &guid,
+					RadioInfo:  radioInfo,
+				},
+			},
 		}
+
 	case events.SettingsChanged, events.CoalitionsChanged:
 		return &pb.ServerUpdate{
 			Type:   pb.ServerUpdate_SERVER_SETTINGS_CHANGED,
 			Update: &pb.ServerUpdate_SettingsUpdate{SettingsUpdate: s.buildServerSettings()},
 		}
+
+	case events.ServerAction:
+		ae, ok := event.Data.(events.ServerActionEvent)
+		if !ok {
+			return nil
+		}
+		var actionType pb.ServerAction_ActionType
+		switch ae.ActionType {
+		case events.ActionKick:
+			actionType = pb.ServerAction_KICK
+		case events.ActionBan:
+			actionType = pb.ServerAction_BAN
+		case events.ActionMute:
+			actionType = pb.ServerAction_MUTE
+		case events.ActionUnmute:
+			actionType = pb.ServerAction_UNMUTE
+		}
+		return &pb.ServerUpdate{
+			Type: pb.ServerUpdate_SERVER_ACTION,
+			Update: &pb.ServerUpdate_ServerAction{
+				ServerAction: &pb.ServerAction{
+					Type:             actionType,
+					TargetClientGuid: ae.TargetClientID.String(),
+					Reason:           ae.Reason,
+				},
+			},
+		}
+
 	default:
 		return nil
 	}
