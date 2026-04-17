@@ -8,10 +8,12 @@ import (
 	"path"
 
 	"github.com/FPGSchiba/vcs-srs-server/app"
+	"github.com/FPGSchiba/vcs-srs-server/events"
+	"github.com/FPGSchiba/vcs-srs-server/logging"
 	slogmulti "github.com/samber/slog-multi"
 )
 
-func parseFlags(isHeadless bool) (configFilepath, bannedFilePath, distributionMode string, autoStartServers bool, logger *slog.Logger) {
+func parseFlags(isHeadless bool, bus *events.EventBus) (configFilepath, bannedFilePath, distributionMode string, autoStartServers bool, logger *slog.Logger) {
 	var logFolder string
 	var fileLogEnabled bool
 	flag.StringVar(&configFilepath, "config", "config.yaml", "Path to the configuration file")
@@ -39,9 +41,13 @@ func parseFlags(isHeadless bool) (configFilepath, bannedFilePath, distributionMo
 		logger = slog.New(slogmulti.Fanout(
 			slog.NewTextHandler(os.Stdout, nil),
 			slog.NewJSONHandler(f, nil),
+			logging.NewBusHandler(bus),
 		))
 	} else {
-		logger = slog.New(slog.NewTextHandler(os.Stdout, nil))
+		logger = slog.New(slogmulti.Fanout(
+			slog.NewTextHandler(os.Stdout, nil),
+			logging.NewBusHandler(bus),
+		))
 	}
 
 	logger.Info("Auto-start servers", "autostart", autoStartServers)

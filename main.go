@@ -16,9 +16,8 @@ import (
 var assets embed.FS
 
 func main() {
-	configFilepath, bannedFilePath, _, autoStartServers, logger := parseFlags(false)
-
 	vcs := app.New()
+	configFilepath, bannedFilePath, _, autoStartServers, logger := parseFlags(false, vcs.GetEventBus())
 
 	defer func() { // Ensure we catch any panics and log them
 		if err := recover(); err != nil { //catch

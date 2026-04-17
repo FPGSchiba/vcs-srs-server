@@ -234,6 +234,10 @@ func (a *VCSApplication) GetServerVersion() string {
 	return Version
 }
 
+func (a *VCSApplication) GetEventBus() *events.EventBus {
+	return a.eventBus
+}
+
 func (a *VCSApplication) Notify(notification events.Notification) {
 	a.EmitEvent(events.Event{
 		Name: events.NotificationEvent,

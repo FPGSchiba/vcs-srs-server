@@ -10,7 +10,8 @@ import (
 
 func main() {
 	// In headless mode, we don't start the Wails application.
-	configFilepath, bannedFilePath, distributionModeFlag, _, logger := parseFlags(true)
+	vcs := app.New()
+	configFilepath, bannedFilePath, distributionModeFlag, _, logger := parseFlags(true, vcs.GetEventBus())
 	distributionMode := state.DistributionModeStandalone
 	switch distributionModeFlag {
 	case "standalone":
@@ -26,8 +27,6 @@ func main() {
 		logger.Error("Invalid distribution mode specified. Must be one of: standalone, control, voice")
 		return
 	}
-
-	vcs := app.New()
 
 	defer func() { // Ensure we catch any panics and log them
 		if err := recover(); err != nil { //catch
