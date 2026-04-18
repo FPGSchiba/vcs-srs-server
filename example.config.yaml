@@ -37,3 +37,5 @@ voiceControl: # Voice control configuration only needed if distribution is activ
   listenHost: 0.0.0.0 # Host to listen for voice control (for control distribution)
   certificateFile: /path/to/voicecontrol-cert.pem # Path to the certificate file
   privateKeyFile: /path/to/voicecontrol-private-key.pem # Path to the private key file
+api:
+  key: my-api # API key for external integrations, replace with a secure value
