@@ -302,7 +302,7 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.GuestLoginReque
 	var selectedCoalition state.Coalition
 	var coalitionFound bool
 	for _, coalition := range s.settingsState.Coalitions {
-		if utils.CheckPasswordHash(coalition.Password, request.Password) {
+		if utils.CheckPasswordHash(request.Password, coalition.Password) { // Password comes in hashed and we have the plaintext
 			selectedCoalition = coalition
 			coalitionFound = true
 			break
