@@ -118,6 +118,7 @@ func (s *ServerState) AddClient(clientGuid uuid.UUID, client *ClientState) {
 	if s.Clients == nil {
 		s.Clients = make(map[uuid.UUID]*ClientState)
 	}
+	client.LastUpdate = time.Now()
 	s.Clients[clientGuid] = client
 	s.RadioClients[clientGuid] = &RadioState{
 		Radios: []Radio{},

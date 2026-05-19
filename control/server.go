@@ -95,6 +95,7 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 
 	s.clientGrpcServer = grpc.NewServer(
 		grpc.ChainUnaryInterceptor(s.loggingInterceptor, s.authInterceptor),
+		grpc.ChainStreamInterceptor(s.authStreamInterceptor),
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
 			MinTime:             60 * time.Second, // allow pings every 60s
 			PermitWithoutStream: true,
@@ -334,4 +335,61 @@ func (s *Server) authInterceptor(ctx context.Context, req interface{}, info *grp
 
 	ctx = context.WithValue(ctx, utils.ClientIDKey, claims.ClientGuid)
 	return handler(ctx, req)
+}
+
+// wrappedStream overrides the context of a grpc.ServerStream.
+type wrappedStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (w *wrappedStream) Context() context.Context { return w.ctx }
+
+func (s *Server) authStreamInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	elements := strings.Split(info.FullMethod, "/")
+	if len(elements) < 3 {
+		return status.Errorf(codes.Unauthenticated, "malformed method path: %s", info.FullMethod)
+	}
+	fullServiceName := elements[1]
+	pathName := elements[2]
+
+	parts := strings.Split(fullServiceName, ".")
+	if len(parts) < 2 {
+		return status.Errorf(codes.Unauthenticated, "malformed service name: %s", fullServiceName)
+	}
+	serviceName := parts[len(parts)-1]
+
+	if serviceName == "AuthService" || serviceName == "VoiceControlService" {
+		return handler(srv, ss)
+	}
+
+	s.logger.Debug("Authentication required for streaming", "service", serviceName, "method", info.FullMethod)
+
+	md, ok := metadata.FromIncomingContext(ss.Context())
+	if !ok {
+		return status.Errorf(codes.Unauthenticated, "missing metadata for %s", info.FullMethod)
+	}
+
+	tokens := md.Get("authorization")
+	if len(tokens) == 0 {
+		return status.Errorf(codes.Unauthenticated, "missing authorization token for %s", info.FullMethod)
+	}
+	token := strings.TrimPrefix(tokens[0], "Bearer ")
+
+	minRole, _ := utils.GetMinimumRoleForMethod(pathName)
+
+	s.settingsState.RLock()
+	claims, err := utils.GetTokenClaims(token, minRole, s.settingsState.Security.Token.PrivateKeyFile, s.settingsState.Security.Token.PublicKeyFile)
+	s.settingsState.RUnlock()
+	if err != nil {
+		s.logger.Error("Stream authentication error", "method", info.FullMethod, "error", err)
+		return status.Errorf(codes.Unauthenticated, "authentication error for %s: %v", info.FullMethod, err)
+	}
+
+	if claims == nil {
+		return status.Errorf(codes.Unauthenticated, "unauthenticated streaming request to %s", info.FullMethod)
+	}
+
+	ctx := context.WithValue(ss.Context(), utils.ClientIDKey, claims.ClientGuid)
+	return handler(srv, &wrappedStream{ServerStream: ss, ctx: ctx})
 }
