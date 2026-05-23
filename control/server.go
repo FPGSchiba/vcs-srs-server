@@ -106,13 +106,13 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 		}),
 	)
 
-	srsServer := srs.NewSimpleRadioServer(s.serverState, s.settingsState, s.logger, s.eventBus)
+	controlServer := voiceontrol.NewVoiceControlServer(s.serverState, s.settingsState, s.eventBus, s.logger)
+
+	srsServer := srs.NewSimpleRadioServer(s.serverState, s.settingsState, s.logger, s.eventBus, controlServer)
 	s.srsServer = srsServer
 	authServer := srs.NewAuthServer(s.serverState, s.settingsState, s.logger, s.distributionState, s.eventBus)
 	srspb.RegisterSRSServiceServer(s.clientGrpcServer, srsServer)
 	srspb.RegisterAuthServiceServer(s.clientGrpcServer, authServer)
-
-	controlServer := voiceontrol.NewVoiceControlServer(s.serverState, s.settingsState, s.logger)
 
 	if s.isControlServer() {
 		s.initControlServer(controlServer)

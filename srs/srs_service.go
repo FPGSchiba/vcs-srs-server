@@ -17,6 +17,12 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 )
 
+// VoiceAddressProvider resolves UDP addresses for a given coalition.
+// VoiceControlServer implements this; standalone mode passes nil.
+type VoiceAddressProvider interface {
+	GetVoiceAddressForCoalition(coalition string) (coalitionAddr, globalAddr string)
+}
+
 type SimpleRadioServer struct {
 	pb.UnimplementedSRSServiceServer
 	logger        *slog.Logger
@@ -25,6 +31,7 @@ type SimpleRadioServer struct {
 	serverState   *state.ServerState
 	settingsState *state.SettingsState
 	eventBus      *events.EventBus
+	voiceRegistry VoiceAddressProvider
 	streams       map[uuid.UUID]grpc.ServerStreamingServer[pb.ServerUpdate]
 	stopChan      chan struct{}
 	stopOnce      sync.Once
@@ -38,18 +45,26 @@ func clientIDFromContext(ctx context.Context) (uuid.UUID, error) {
 	return uuid.Parse(rawID)
 }
 
-func NewSimpleRadioServer(serverState *state.ServerState, settingsState *state.SettingsState, logger *slog.Logger, bus *events.EventBus) *SimpleRadioServer {
+func NewSimpleRadioServer(serverState *state.ServerState, settingsState *state.SettingsState, logger *slog.Logger, bus *events.EventBus, voiceRegistry VoiceAddressProvider) *SimpleRadioServer {
 	server := SimpleRadioServer{
 		serverState:   serverState,
 		settingsState: settingsState,
 		eventBus:      bus,
 		logger:        logger,
+		voiceRegistry: voiceRegistry,
 		mu:            sync.Mutex{},
 		streams:       make(map[uuid.UUID]grpc.ServerStreamingServer[pb.ServerUpdate]),
 		stopChan:      make(chan struct{}),
 	}
 	server.StartCleanupRoutine(time.Second*15, time.Minute*10)
 	return &server
+}
+
+func (s *SimpleRadioServer) getVoiceAddresses(coalition string) (coalitionAddr, globalAddr string) {
+	if s.voiceRegistry != nil {
+		return s.voiceRegistry.GetVoiceAddressForCoalition(coalition)
+	}
+	return "", ""
 }
 
 func (s *SimpleRadioServer) GetServerState() healthpb.HealthCheckResponse_ServingStatus {
@@ -63,7 +78,7 @@ func (s *SimpleRadioServer) GetServerState() healthpb.HealthCheckResponse_Servin
 	return healthpb.HealthCheckResponse_SERVING
 }
 
-func (s *SimpleRadioServer) SyncClient(_ context.Context, _ *pb.Empty) (*pb.SyncResponse, error) {
+func (s *SimpleRadioServer) SyncClient(ctx context.Context, _ *pb.Empty) (*pb.SyncResponse, error) {
 	clients := s.serverState.GetAllClients()
 	radioClients := s.serverState.GetAllRadios()
 
@@ -110,13 +125,25 @@ func (s *SimpleRadioServer) SyncClient(_ context.Context, _ *pb.Empty) (*pb.Sync
 		Data: events.ClientChangeEvent{Type: events.ClientInfoUpdated, Clients: clientsSnap},
 	})
 
+	var coalition string
+	if clientID, err := clientIDFromContext(ctx); err == nil {
+		s.serverState.RLock()
+		if client, exists := s.serverState.Clients[clientID]; exists {
+			coalition = client.Coalition
+		}
+		s.serverState.RUnlock()
+	}
+	coalitionVoiceAddr, globalVoiceAddr := s.getVoiceAddresses(coalition)
+
 	return &pb.SyncResponse{
 		Success: true,
 		SyncResult: &pb.SyncResponse_Data{
 			Data: &pb.ServerSyncResult{
-				Clients:  srsClients,
-				Radios:   srsRadios,
-				Settings: s.buildServerSettings(),
+				Clients:            srsClients,
+				Radios:             srsRadios,
+				Settings:           s.buildServerSettings(),
+				CoalitionVoiceAddr: coalitionVoiceAddr,
+				GlobalVoiceAddr:    globalVoiceAddr,
 			},
 		},
 	}, nil
