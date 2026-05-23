@@ -17,4 +17,5 @@ type DistributionState struct {
 	sync.RWMutex
 	DistributionMode uint8
 	RuntimeMode      uint8
+	IsGlobal         bool // true when this node is the dedicated global-frequency voice node
 }

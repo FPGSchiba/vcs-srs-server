@@ -100,6 +100,8 @@ type VoiceControlSettings struct {
 	ListenHost      string `yaml:"listenHost"`
 	CertificateFile string `yaml:"certificateFile"`
 	PrivateKeyFile  string `yaml:"privateKeyFile"`
+	PublicAddr      string `yaml:"publicAddr"` // public UDP host:port of this voice node
+	Region          string `yaml:"region"`     // region hint: "eu", "us", "apac"
 }
 
 type ApiSettings struct {
@@ -154,6 +156,8 @@ func GetSettingsState(file string) (*SettingsState, error) {
 					ListenHost:      DefaultVoiceControlHost,
 					CertificateFile: "/path/to/voicecontrol-cert.pem",
 					PrivateKeyFile:  "/path/to/voicecontrol-private-key.pem",
+					PublicAddr:      "",
+					Region:          "",
 				},
 				Api: ApiSettings{
 					Key: "",

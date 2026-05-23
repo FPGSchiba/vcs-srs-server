@@ -17,7 +17,7 @@ import (
 //   - appLogger: includes BusHandler so log records stream to the frontend Logs tab
 //   - wailsLogger: file + console only; used for Wails internals to prevent an
 //     infinite loop (Wails logs each event it emits, which would re-trigger BusHandler)
-func parseFlags(isHeadless bool, bus *events.EventBus) (configFilepath, bannedFilePath, distributionMode string, autoStartServers bool, appLogger, wailsLogger *slog.Logger) {
+func parseFlags(isHeadless bool, bus *events.EventBus) (configFilepath, bannedFilePath, distributionMode string, autoStartServers bool, appLogger, wailsLogger *slog.Logger, isGlobal bool) {
 	var logFolder string
 	var fileLogEnabled bool
 	flag.StringVar(&configFilepath, "config", "config.yaml", "Path to the configuration file")
@@ -27,6 +27,7 @@ func parseFlags(isHeadless bool, bus *events.EventBus) (configFilepath, bannedFi
 	flag.BoolVar(&fileLogEnabled, "file-log", true, "Enable file logging")
 	if isHeadless {
 		flag.StringVar(&distributionMode, "mode", "standalone", "Distribution mode (standalone, control, voice)")
+		flag.BoolVar(&isGlobal, "global", false, "Run as global-frequency voice node (only valid with --mode voice)")
 	}
 	flag.Parse()
 
