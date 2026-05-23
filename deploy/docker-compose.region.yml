@@ -1,0 +1,16 @@
+networks:
+  vcs-net:
+    driver: bridge
+
+services:
+  voice-region:
+    image: ghcr.io/fpgschiba/vcs-srs-server:latest
+    command: ["--mode", "voice", "--config", "/config/voice-region.yaml"]
+    restart: unless-stopped
+    ports:
+      - "5002:5002/udp"
+    volumes:
+      - ./config:/config:ro
+      - ./certs:/certs:ro
+    networks:
+      - vcs-net
