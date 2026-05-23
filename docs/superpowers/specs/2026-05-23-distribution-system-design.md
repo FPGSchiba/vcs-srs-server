@@ -14,6 +14,8 @@ This spec covers the changes needed to make distributed voice fully operational 
 
 **Out of scope (deferred):** Messages, Briefings, Ship health data channels.
 
+**Hard constraint:** `DistributionModeStandalone` must continue to work without any configuration changes. All new fields (`coalition_voice_addr`, `global_voice_addr`, `IsGlobal`) must be optional / zero-valued in standalone mode. The standalone node serves as its own coalition voice and global voice simultaneously — clients in standalone mode receive `localhost` addresses for both UDP fields.
+
 ---
 
 ## Node Topology
