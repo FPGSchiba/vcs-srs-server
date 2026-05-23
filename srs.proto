@@ -354,9 +354,11 @@ message SyncResponse {
 }
 
 message ServerSyncResult {
-  map<string, ClientInfo> clients = 1; // List of clients currently connected
-  map<string, RadioInfo> radios = 2; // List of radio information
-  ServerSettings settings = 3; // Current server settings
+  map<string, ClientInfo> clients              = 1; // List of clients currently connected
+  map<string, RadioInfo>  radios               = 2; // List of radio information
+  ServerSettings          settings             = 3; // Current server settings
+  string                  coalition_voice_addr = 4; // UDP host:port for coalition audio
+  string                  global_voice_addr    = 5; // UDP host:port for global freq audio
 }
 
 // Generic server response
