@@ -57,7 +57,17 @@ func (v *Server) isDistributedServer() bool {
 func (v *Server) Listen(address string, stopChan chan struct{}) error {
 	if v.isDistributedServer() {
 		// Initialize control client if this is a distributed server
-		v.controlClient = voiceontrol.NewVoiceControlClient(v.serverId, v.settingsState, v.logger)
+		v.distributionState.RLock()
+		isGlobal := v.distributionState.IsGlobal
+		v.distributionState.RUnlock()
+
+		v.controlClient = voiceontrol.NewVoiceControlClient(
+			v.serverId,
+			v.settingsState,
+			v.serverState,
+			isGlobal,
+			v.logger,
+		)
 		if err := v.controlClient.ConnectControlServer(); err != nil {
 			v.logger.Error("Failed to connect to control server", "error", err)
 			return err
