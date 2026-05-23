@@ -74,7 +74,15 @@ func (a *VCSApplication) SaveSecuritySettings(enableGuestAuth bool, enablePlugin
 		a.Notify(events.NewNotification("Failed to save settings", "Failed to save settings", "error"))
 		return
 	}
-	a.EmitEvent(events.Event{Name: events.SettingsChanged, Data: nil})
+	snap := state.SettingsSnapshot{
+		Servers:      a.SettingsState.Servers,
+		Coalitions:   a.SettingsState.Coalitions,
+		Frequencies:  a.SettingsState.Frequencies,
+		General:      a.SettingsState.General,
+		Security:     a.SettingsState.Security,
+		VoiceControl: a.SettingsState.VoiceControl,
+	}
+	a.EmitEvent(events.Event{Name: events.SettingsChanged, Data: snap})
 }
 
 func (a *VCSApplication) SaveVoiceControlSettings(input state.VoiceControlSettings) {
@@ -87,7 +95,15 @@ func (a *VCSApplication) SaveVoiceControlSettings(input state.VoiceControlSettin
 		a.Notify(events.NewNotification("Failed to save settings", "Failed to save settings", "error"))
 		return
 	}
-	a.EmitEvent(events.Event{Name: events.SettingsChanged, Data: nil})
+	snap := state.SettingsSnapshot{
+		Servers:      a.SettingsState.Servers,
+		Coalitions:   a.SettingsState.Coalitions,
+		Frequencies:  a.SettingsState.Frequencies,
+		General:      a.SettingsState.General,
+		Security:     a.SettingsState.Security,
+		VoiceControl: a.SettingsState.VoiceControl,
+	}
+	a.EmitEvent(events.Event{Name: events.SettingsChanged, Data: snap})
 }
 
 func (a *VCSApplication) SaveCoalitions(coalitions []state.Coalition) {
@@ -100,7 +116,15 @@ func (a *VCSApplication) SaveCoalitions(coalitions []state.Coalition) {
 		a.Notify(events.NewNotification("Failed to save coalitions", "Failed to save coalitions", "error"))
 		return
 	}
-	a.EmitEvent(events.Event{Name: events.CoalitionsChanged, Data: nil})
+	snap := state.SettingsSnapshot{
+		Servers:      a.SettingsState.Servers,
+		Coalitions:   a.SettingsState.Coalitions,
+		Frequencies:  a.SettingsState.Frequencies,
+		General:      a.SettingsState.General,
+		Security:     a.SettingsState.Security,
+		VoiceControl: a.SettingsState.VoiceControl,
+	}
+	a.EmitEvent(events.Event{Name: events.CoalitionsChanged, Data: snap})
 }
 
 func (a *VCSApplication) SaveFrequencySettings(newSettings *state.FrequencySettings) {

@@ -222,6 +222,11 @@ func (v *Server) handleVoicePacket(packet *VCSPacket) {
 		return
 	}
 
+	if v.serverState.IsClientMuted(packet.SenderID) {
+		v.logger.Debug("Dropping voice packet from muted client", "sender_id", packet.SenderID)
+		return
+	}
+
 	if len(packet.Payload) > 5 {
 		v.broadcastVoice(packet, packet.SenderID)
 	}

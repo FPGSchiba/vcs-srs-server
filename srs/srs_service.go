@@ -279,9 +279,15 @@ func (s *SimpleRadioServer) UpdateRadioInfo(ctx context.Context, req *pb.RadioIn
 		}, nil
 	}
 
-	// Client has control over their own radios, so we don't need to check if the radios are valid or not.
+	// Client has control over their own radios, but the server owns the mute status.
 	s.serverState.Lock()
-	s.serverState.RadioClients[clientID] = convertRadioInfo(req)
+	existingMuted := false
+	if existing, exists := s.serverState.RadioClients[clientID]; exists {
+		existingMuted = existing.Muted
+	}
+	newState := convertRadioInfo(req)
+	newState.Muted = existingMuted
+	s.serverState.RadioClients[clientID] = newState
 	s.serverState.Unlock()
 
 	s.serverState.RLock()

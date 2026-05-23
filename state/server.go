@@ -208,3 +208,12 @@ func (s *ServerState) DoesClientExist(clientGuid uuid.UUID) bool {
 	}
 	return true
 }
+
+func (s *ServerState) IsClientMuted(clientGuid uuid.UUID) bool {
+	s.RLock()
+	defer s.RUnlock()
+	if radio, exists := s.RadioClients[clientGuid]; exists {
+		return radio.Muted
+	}
+	return false
+}
