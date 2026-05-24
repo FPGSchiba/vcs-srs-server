@@ -3,7 +3,7 @@ import { vi, beforeEach } from 'vitest'
 
 vi.mock('@wailsio/runtime', () => ({
   Events: {
-    On: vi.fn().mockReturnValue(() => {}),
+    On: vi.fn().mockImplementation(() => vi.fn()),
     Off: vi.fn(),
     Emit: vi.fn(),
   },
