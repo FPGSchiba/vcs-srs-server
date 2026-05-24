@@ -8,7 +8,6 @@ config.yaml
 banned_clients.json
 bin/
 .task/
-*.pb.go
 *.pem
 coverage.out
 .claude/
