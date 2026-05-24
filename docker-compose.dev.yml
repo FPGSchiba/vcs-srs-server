@@ -1,0 +1,84 @@
+# Local dev deployment — builds the image from source instead of pulling from ghcr.io.
+# Mirrors the central topology: one control node + one EU voice node + one global voice node.
+#
+# All TLS certs and JWT keys are auto-generated into dev/certs/ on first run
+# (writable bind mount). On subsequent runs the existing keys are reused.
+#
+# Usage:
+#   docker compose -f docker-compose.dev.yml up --build
+#
+# Control only (skip voice nodes):
+#   docker compose -f docker-compose.dev.yml up --build control
+#
+# Config files are pre-populated in dev/config/ — edit them as needed.
+# Key per-service fields are documented in each config file.
+
+networks:
+  vcs-net:
+    driver: bridge
+
+services:
+  control:
+    build: .
+    command:
+      - "--mode"
+      - "control"
+      - "--config"
+      - "/config/control.yaml"
+      - "--banned"
+      - "/tmp/banned_clients.json"
+      - "--file-log=false"
+    restart: "no"
+    ports:
+      - "14446:14446"   # SRS gRPC — client connections
+      - "14448:14448"   # VoiceControl gRPC — voice node connections
+      - "8080:80"       # HTTP / GraphQL API
+    volumes:
+      - ./dev/config:/config:ro
+      - ./dev/certs:/certs    # writable — certs are auto-generated on first run
+    networks:
+      - vcs-net
+
+  voice-eu:
+    build: .
+    command:
+      - "--mode"
+      - "voice"
+      - "--config"
+      - "/config/voice-eu.yaml"
+      - "--banned"
+      - "/tmp/banned_clients.json"
+      - "--file-log=false"
+    # on-failure so it retries if control hasn't written its cert yet on first run
+    restart: on-failure
+    ports:
+      - "5002:5002/udp"
+    volumes:
+      - ./dev/config:/config:ro
+      - ./dev/certs:/certs
+    networks:
+      - vcs-net
+    depends_on:
+      - control
+
+  voice-global:
+    build: .
+    command:
+      - "--mode"
+      - "voice"
+      - "--global"
+      - "--config"
+      - "/config/voice-global.yaml"
+      - "--banned"
+      - "/tmp/banned_clients.json"
+      - "--file-log=false"
+    restart: on-failure
+    ports:
+      - "5003:5003/udp"
+    volumes:
+      - ./dev/config:/config:ro
+      - ./dev/certs:/certs
+    networks:
+      - vcs-net
+    depends_on:
+      - control

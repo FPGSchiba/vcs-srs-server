@@ -56,11 +56,10 @@ func ensureBanFileExists(bannedFile string) error {
 		return err
 	}
 	if os.IsNotExist(err) {
-		f, createErr := os.Create(bannedFile)
-		if createErr != nil {
-			return createErr
+		// Write a valid empty JSON array so json.Decoder never returns io.EOF.
+		if writeErr := os.WriteFile(bannedFile, []byte("[]"), 0600); writeErr != nil {
+			return writeErr
 		}
-		f.Close()
 	}
 	return nil
 }
@@ -83,13 +82,11 @@ func GetBannedState(bannedFile string) (*BannedState, error) {
 		return nil, err
 	}
 	defer f.Close()
-	var bannedState BannedState
+	bannedState := BannedState{file: file, BannedClients: []BannedClient{}}
 	decoder := json.NewDecoder(f)
-	err = decoder.Decode(&bannedState.BannedClients)
-	if err != nil {
+	if err = decoder.Decode(&bannedState.BannedClients); err != nil {
 		return nil, err
 	}
-	bannedState.file = file
 	return &bannedState, nil
 }
 

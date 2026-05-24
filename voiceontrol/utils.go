@@ -15,9 +15,10 @@ import (
 )
 
 // LoadOrGenerateKeyPair ensures both private key and certificate exist, generating them if needed, and returns both.
-func LoadOrGenerateKeyPair(privateKeyFileName, certFileName string) (*tls.Certificate, *rsa.PrivateKey, error) {
+// extraHosts are added to the certificate's SANs alongside localhost/127.0.0.1.
+func LoadOrGenerateKeyPair(privateKeyFileName, certFileName string, extraHosts ...string) (*tls.Certificate, *rsa.PrivateKey, error) {
 	if _, err := os.Stat(privateKeyFileName); os.IsNotExist(err) {
-		cert, privateKey, err := generateSelfSignedCert()
+		cert, privateKey, err := generateSelfSignedCert(extraHosts...)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -71,29 +72,41 @@ func LoadCertificateOnly(certFileName string) (*x509.Certificate, error) {
 	return cert, nil
 }
 
-func CreateClientTLSConfig(cert *x509.Certificate) (*tls.Config, error) {
+// CreateClientTLSConfig creates a TLS config that pins the given certificate.
+// serverName overrides the hostname used during TLS handshake verification;
+// pass the value from VoiceControlSettings.ServerName so it matches the cert SANs.
+func CreateClientTLSConfig(cert *x509.Certificate, serverName string) (*tls.Config, error) {
 	certPool := x509.NewCertPool()
-
-	// Add the self-signed certificate to the cert pool
 	certPool.AddCert(cert)
 
-	// Create TLS configuration
 	tlsConfig := &tls.Config{
-		RootCAs:            certPool,
-		InsecureSkipVerify: false, // Ensure we're still verifying
+		RootCAs:    certPool,
+		ServerName: serverName,
 	}
 
 	return tlsConfig, nil
 }
 
-func generateSelfSignedCert() (*tls.Certificate, *rsa.PrivateKey, error) {
+func generateSelfSignedCert(extraHosts ...string) (*tls.Certificate, *rsa.PrivateKey, error) {
 	cert := &tls.Certificate{}
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	// Create certificate template
+	dnsNames := []string{"localhost"}
+	ipAddresses := []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback}
+	for _, host := range extraHosts {
+		if host == "" {
+			continue
+		}
+		if ip := net.ParseIP(host); ip != nil {
+			ipAddresses = append(ipAddresses, ip)
+		} else {
+			dnsNames = append(dnsNames, host)
+		}
+	}
+
 	template := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "Vanguard Communication System"},
@@ -102,8 +115,8 @@ func generateSelfSignedCert() (*tls.Certificate, *rsa.PrivateKey, error) {
 		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
-		DNSNames:              []string{"localhost"},
-		IPAddresses:           []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
+		DNSNames:              dnsNames,
+		IPAddresses:           ipAddresses,
 	}
 
 	cert.PrivateKey = privateKey

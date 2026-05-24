@@ -145,8 +145,9 @@ func (s *Server) initControlServer(controlServer voicecontrolpb.VoiceControlServ
 	s.settingsState.RLock()
 	privateKeyFileName := s.settingsState.VoiceControl.PrivateKeyFile
 	certificateFileName := s.settingsState.VoiceControl.CertificateFile
+	serverName := s.settingsState.VoiceControl.ServerName
 	s.settingsState.RUnlock()
-	cert, _, err := voiceontrol.LoadOrGenerateKeyPair(privateKeyFileName, certificateFileName)
+	cert, _, err := voiceontrol.LoadOrGenerateKeyPair(privateKeyFileName, certificateFileName, serverName)
 	if err != nil {
 		s.logger.Error("Failed to load TLS certificate for control server", "error", err)
 		return

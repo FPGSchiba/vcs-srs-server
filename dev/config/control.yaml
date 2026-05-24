@@ -1,0 +1,54 @@
+servers:
+  http:
+    host: 0.0.0.0
+    port: 80         # exposed on host as 8080 in docker-compose.dev.yml
+  control:
+    host: 0.0.0.0
+    port: 14446      # SRS gRPC port
+  voice:
+    host: 0.0.0.0
+    port: 5002       # not used by control mode
+
+coalitions:
+  - name: Blue
+    description: "Blue coalition"
+    color: "#0000FF"
+    password: "blue123"
+  - name: Red
+    description: "Red coalition"
+    color: "#FF0000"
+    password: "red123"
+
+frequencies:
+  testFrequencies:
+    - 247.2
+    - 120.3
+  globalFrequencies:
+    - 248.22
+
+general:
+  maxRadiosPerUser: 20
+
+security:
+  enablePluginAuth: false
+  plugins: []
+  enableGuestAuth: true
+  token:
+    expiration: 28800
+    privateKeyFile: /certs/ecdsa_key.pem        # auto-generated on first run
+    publicKeyFile: /certs/ecdsa_pubkey.pem       # auto-generated on first run
+    issuer: "https://vcs.dev.local"
+    subject: "vcs.dev.local"
+
+voiceControl:
+  port: 14448
+  remoteHost: localhost          # not used in control mode
+  listenHost: 0.0.0.0
+  certificateFile: /certs/voicecontrol-cert.pem       # auto-generated on first run
+  privateKeyFile: /certs/voicecontrol-private-key.pem # auto-generated on first run
+  serverName: control            # added to cert SANs so voice nodes can verify
+  publicAddr: ""
+  region: ""
+
+api:
+  key: dev-api-key

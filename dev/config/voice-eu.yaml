@@ -1,0 +1,42 @@
+servers:
+  http:
+    host: 0.0.0.0
+    port: 80         # not used by voice mode
+  control:
+    host: 0.0.0.0
+    port: 14446      # not used by voice mode
+  voice:
+    host: 0.0.0.0
+    port: 5002       # UDP voice port (exposed on host as 5002)
+
+coalitions: []
+frequencies:
+  testFrequencies: []
+  globalFrequencies: []
+
+general:
+  maxRadiosPerUser: 20
+
+security:
+  enablePluginAuth: false
+  plugins: []
+  enableGuestAuth: true
+  token:
+    expiration: 28800
+    privateKeyFile: /certs/ecdsa_key.pem
+    publicKeyFile: /certs/ecdsa_pubkey.pem
+    issuer: "https://vcs.dev.local"
+    subject: "vcs.dev.local"
+
+voiceControl:
+  port: 14448
+  remoteHost: control              # docker service name — resolves within vcs-net
+  listenHost: 0.0.0.0
+  certificateFile: /certs/voicecontrol-cert.pem        # written by control on first run
+  privateKeyFile: /certs/voicecontrol-private-key.pem  # written by control on first run
+  serverName: control              # must match serverName in control config
+  publicAddr: "127.0.0.1:5002"    # UDP address SRS clients use to reach this node
+  region: "eu"
+
+api:
+  key: dev-api-key

@@ -102,6 +102,7 @@ type VoiceControlSettings struct {
 	PrivateKeyFile  string `yaml:"privateKeyFile"`
 	PublicAddr      string `yaml:"publicAddr"` // public UDP host:port of this voice node
 	Region          string `yaml:"region"`     // region hint: "eu", "us", "apac"
+	ServerName      string `yaml:"serverName"` // TLS ServerName used by voice clients and cert SANs
 }
 
 type ApiSettings struct {
