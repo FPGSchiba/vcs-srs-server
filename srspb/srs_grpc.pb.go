@@ -326,6 +326,7 @@ const (
 	SRSService_UpdateRadioInfo_FullMethodName    = "/srspb.SRSService/UpdateRadioInfo"
 	SRSService_Disconnect_FullMethodName         = "/srspb.SRSService/Disconnect"
 	SRSService_GetServerSettings_FullMethodName  = "/srspb.SRSService/GetServerSettings"
+	SRSService_Ping_FullMethodName               = "/srspb.SRSService/Ping"
 	SRSService_SubscribeToUpdates_FullMethodName = "/srspb.SRSService/SubscribeToUpdates"
 )
 
@@ -345,6 +346,8 @@ type SRSServiceClient interface {
 	Disconnect(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*ServerResponse, error)
 	// Server settings request
 	GetServerSettings(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*ServerSettings, error)
+	// Latency probe — client calls periodically and reports its measured RTT
+	Ping(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PingResponse, error)
 	// Server-to-client updates stream
 	SubscribeToUpdates(ctx context.Context, in *Empty, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ServerUpdate], error)
 }
@@ -407,6 +410,16 @@ func (c *sRSServiceClient) GetServerSettings(ctx context.Context, in *Empty, opt
 	return out, nil
 }
 
+func (c *sRSServiceClient) Ping(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PingResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PingResponse)
+	err := c.cc.Invoke(ctx, SRSService_Ping_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *sRSServiceClient) SubscribeToUpdates(ctx context.Context, in *Empty, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ServerUpdate], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &SRSService_ServiceDesc.Streams[0], SRSService_SubscribeToUpdates_FullMethodName, cOpts...)
@@ -442,6 +455,8 @@ type SRSServiceServer interface {
 	Disconnect(context.Context, *Empty) (*ServerResponse, error)
 	// Server settings request
 	GetServerSettings(context.Context, *Empty) (*ServerSettings, error)
+	// Latency probe — client calls periodically and reports its measured RTT
+	Ping(context.Context, *PingRequest) (*PingResponse, error)
 	// Server-to-client updates stream
 	SubscribeToUpdates(*Empty, grpc.ServerStreamingServer[ServerUpdate]) error
 	mustEmbedUnimplementedSRSServiceServer()
@@ -468,6 +483,9 @@ func (UnimplementedSRSServiceServer) Disconnect(context.Context, *Empty) (*Serve
 }
 func (UnimplementedSRSServiceServer) GetServerSettings(context.Context, *Empty) (*ServerSettings, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetServerSettings not implemented")
+}
+func (UnimplementedSRSServiceServer) Ping(context.Context, *PingRequest) (*PingResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Ping not implemented")
 }
 func (UnimplementedSRSServiceServer) SubscribeToUpdates(*Empty, grpc.ServerStreamingServer[ServerUpdate]) error {
 	return status.Error(codes.Unimplemented, "method SubscribeToUpdates not implemented")
@@ -583,6 +601,24 @@ func _SRSService_GetServerSettings_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SRSService_Ping_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PingRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SRSServiceServer).Ping(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SRSService_Ping_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SRSServiceServer).Ping(ctx, req.(*PingRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _SRSService_SubscribeToUpdates_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(Empty)
 	if err := stream.RecvMsg(m); err != nil {
@@ -620,6 +656,10 @@ var SRSService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetServerSettings",
 			Handler:    _SRSService_GetServerSettings_Handler,
+		},
+		{
+			MethodName: "Ping",
+			Handler:    _SRSService_Ping_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
