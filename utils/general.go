@@ -4,13 +4,9 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// HashPassword TODO: Test this function and make sure the client can do this as well
-// HashPassword hashes the given password using bcrypt and returns the hashed password as a string.
-func HashPassword(password string) string {
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	if err != nil {
-		// In production, handle error properly. For now, return empty string on error.
-		return ""
-	}
-	return string(hash)
+// CheckPasswordHash compares a bcrypt hash with a plaintext password.
+// The first argument is the stored hash; the second is the plaintext to verify.
+func CheckPasswordHash(hash, plaintext string) bool {
+	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(plaintext))
+	return err == nil
 }

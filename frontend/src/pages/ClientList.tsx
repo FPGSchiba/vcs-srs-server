@@ -6,7 +6,6 @@ import {BanClient, GetClients, KickClient} from "../../bindings/github.com/FPGSc
 import {Notify} from "../../bindings/github.com/FPGSchiba/vcs-srs-server/services/notificationservice";
 import {Events} from "@wailsio/runtime";
 import ClientEntry from "../components/ClientEntry";
-import {WailsEvent} from "@wailsio/runtime/types/events";
 
 function ClientListPage() {
     const [clients, setClients] = React.useState<Record<string, ClientState> | null>(null);
@@ -34,9 +33,10 @@ function ClientListPage() {
 
     React.useEffect(() => {
         fetchClients();
-        Events.On("clients/changed", (event: WailsEvent) => {
-            const clients = event.data[0] as Record<string, ClientState>
-            setClients(clients);
+        Events.On("clients/changed", async (_event) => {
+            // ClientsChanged now carries a ClientChangeEvent payload — re-fetch instead of casting
+            const result = await GetClients();
+            setClients(result?.Clients ?? {});
         });
     }, []);
 

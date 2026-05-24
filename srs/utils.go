@@ -19,10 +19,10 @@ func checkUsername(username string) bool {
 	return len(username) > 0 && len(username) <= 32
 }
 
+var unitIDRegex = regexp.MustCompile(`^[A-Z0-9]{2,4}$`)
+
 func checkUnitId(unitId string) bool {
-	re := `^[A-Z0-9]{2,4}$`
-	matched, _ := regexp.MatchString(re, unitId)
-	return matched
+	return unitIDRegex.MatchString(unitId)
 }
 
 func getSelectedUnit(authClient *AuthenticatingClient, unitId string) *pb.UnitSelection {
@@ -57,10 +57,11 @@ func convertRadios(radio []state.Radio) []*pb.Radio {
 
 func convertSingleRadio(r *state.Radio) *pb.Radio {
 	return &pb.Radio{
-		Id:        r.ID,
-		Name:      r.Name,
-		Frequency: r.Frequency,
-		Enabled:   r.Enabled,
+		Id:         r.ID,
+		Name:       r.Name,
+		Frequency:  r.Frequency,
+		Enabled:    r.Enabled,
+		IsIntercom: r.IsIntercom,
 	}
 }
 
@@ -101,9 +102,10 @@ func convertRadioInfo(radio *pb.RadioInfo) *state.RadioState {
 
 func convertSingleRadioState(r *pb.Radio) state.Radio {
 	return state.Radio{
-		ID:        r.Id,
-		Name:      r.Name,
-		Frequency: r.Frequency,
-		Enabled:   r.Enabled,
+		ID:         r.Id,
+		Name:       r.Name,
+		Frequency:  r.Frequency,
+		Enabled:    r.Enabled,
+		IsIntercom: r.IsIntercom,
 	}
 }

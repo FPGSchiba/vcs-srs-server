@@ -15,7 +15,8 @@ function BanManagement() {
     React.useEffect(() => {
         fetchBannedClients();
         Events.On("clients/banned/changed", (event) => {
-            const bannedClients = event.data[0] as BannedClient[]
+            const bannedClients = event.data as BannedClient[]
+            console.log("Banned Clients changed...");
             setBannedClients(bannedClients);
         });
     }, []);

@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
-import { Box, Button, FormControl, FormLabel, Paper, TextField, Typography } from "@mui/material";
-import { GetSettings, SaveGeneralSettings, SaveServerSettings } from "../../bindings/github.com/FPGSchiba/vcs-srs-server/services/settingsservice";
+import { Box, Button, FormControl, FormLabel, Paper, Switch, TextField, Typography } from "@mui/material";
+import { GetSettings, SaveGeneralSettings, SaveServerSettings, SaveSecuritySettings, SaveVoiceControlSettings } from "../../bindings/github.com/FPGSchiba/vcs-srs-server/services/settingsservice";
 import { useForm, Controller } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -26,6 +26,17 @@ const settingsSchema = z.object({
             Host: z.string(),
         }),
     }),
+    Security: z.object({
+        EnableGuestAuth: z.boolean(),
+        EnablePluginAuth: z.boolean(),
+    }),
+    VoiceControl: z.object({
+        Port: z.number().min(1, "Required"),
+        ListenHost: z.string(),
+        RemoteHost: z.string(),
+        CertificateFile: z.string(),
+        PrivateKeyFile: z.string(),
+    }),
 });
 
 type SettingsFormType = z.infer<typeof settingsSchema>;
@@ -39,6 +50,14 @@ function SettingsPage() {
                 HTTP: { Port: 80, Host: "" },
                 Voice: { Port: 5002, Host: "" },
                 Control: { Port: 5002, Host: "" },
+            },
+            Security: { EnableGuestAuth: true, EnablePluginAuth: false },
+            VoiceControl: {
+                Port: 14448,
+                ListenHost: "0.0.0.0",
+                RemoteHost: "localhost",
+                CertificateFile: "",
+                PrivateKeyFile: "",
             },
         },
     });
@@ -68,6 +87,17 @@ function SettingsPage() {
                         Host: newSettings.Servers.Control.Host ?? "",
                     },
                 },
+                Security: {
+                    EnableGuestAuth: newSettings.Security.EnableGuestAuth ?? true,
+                    EnablePluginAuth: newSettings.Security.EnablePluginAuth ?? false,
+                },
+                VoiceControl: {
+                    Port: Number(newSettings.VoiceControl.Port) || 14448,
+                    ListenHost: newSettings.VoiceControl.ListenHost ?? "0.0.0.0",
+                    RemoteHost: newSettings.VoiceControl.RemoteHost ?? "localhost",
+                    CertificateFile: newSettings.VoiceControl.CertificateFile ?? "",
+                    PrivateKeyFile: newSettings.VoiceControl.PrivateKeyFile ?? "",
+                },
             });
         } catch (error) {
             console.error('Failed to fetch settings:', error);
@@ -78,6 +108,8 @@ function SettingsPage() {
         try {
             await SaveGeneralSettings(data.General);
             await SaveServerSettings({ ...data.Servers });
+            await SaveSecuritySettings(data.Security.EnableGuestAuth, data.Security.EnablePluginAuth);
+            await SaveVoiceControlSettings(data.VoiceControl);
             await fetchSettings();
         } catch (error) {
             console.error('Failed to save settings:', error);
@@ -85,7 +117,7 @@ function SettingsPage() {
     };
 
     const handleSettingsChange = async (event: WailsEvent) => {
-        const settings = event.data[0] as SettingsState;
+        const settings = event.data as SettingsState;
         reset({
             General: {
                 MaxRadiosPerUser: Number(settings.General.MaxRadiosPerUser) || 1,
@@ -104,8 +136,19 @@ function SettingsPage() {
                     Host: settings.Servers.Control.Host ?? "",
                 },
             },
-        })
-    }
+            Security: {
+                EnableGuestAuth: settings.Security.EnableGuestAuth ?? true,
+                EnablePluginAuth: settings.Security.EnablePluginAuth ?? false,
+            },
+            VoiceControl: {
+                Port: Number(settings.VoiceControl.Port) || 14448,
+                ListenHost: settings.VoiceControl.ListenHost ?? "0.0.0.0",
+                RemoteHost: settings.VoiceControl.RemoteHost ?? "localhost",
+                CertificateFile: settings.VoiceControl.CertificateFile ?? "",
+                PrivateKeyFile: settings.VoiceControl.PrivateKeyFile ?? "",
+            },
+        });
+    };
 
     useEffect(() => {
         fetchSettings();
@@ -243,6 +286,83 @@ function SettingsPage() {
                                 />
                             </FormControl>
                         </Box>
+                    </Box>
+                    <Box className="settings settings-security settings-security-wrapper">
+                        <Typography variant="h4">Security</Typography>
+                        <FormControl component="fieldset">
+                            <FormLabel>Enable Guest Authentication</FormLabel>
+                            <Controller
+                                name="Security.EnableGuestAuth"
+                                control={control}
+                                render={({ field }) => (
+                                    <Switch checked={field.value} onChange={field.onChange} />
+                                )}
+                            />
+                        </FormControl>
+                        <FormControl component="fieldset">
+                            <FormLabel>Enable Plugin Authentication</FormLabel>
+                            <Controller
+                                name="Security.EnablePluginAuth"
+                                control={control}
+                                render={({ field }) => (
+                                    <Switch checked={field.value} onChange={field.onChange} />
+                                )}
+                            />
+                        </FormControl>
+                    </Box>
+                    <Box className="settings settings-voicecontrol settings-voicecontrol-wrapper">
+                        <Typography variant="h4">Voice Control</Typography>
+                        <FormControl component="fieldset">
+                            <FormLabel>Listen Host</FormLabel>
+                            <Controller
+                                name="VoiceControl.ListenHost"
+                                control={control}
+                                render={({ field, fieldState }) => (
+                                    <TextField {...field} variant="outlined" error={!!fieldState.error} helperText={fieldState.error?.message} />
+                                )}
+                            />
+                        </FormControl>
+                        <FormControl component="fieldset">
+                            <FormLabel>Port</FormLabel>
+                            <Controller
+                                name="VoiceControl.Port"
+                                control={control}
+                                render={({ field, fieldState }) => (
+                                    <TextField {...field} type="number" variant="outlined" error={!!fieldState.error} helperText={fieldState.error?.message}
+                                        onChange={e => field.onChange(e.target.value === "" ? "" : Number(e.target.value))} />
+                                )}
+                            />
+                        </FormControl>
+                        <FormControl component="fieldset">
+                            <FormLabel>Remote Host</FormLabel>
+                            <Controller
+                                name="VoiceControl.RemoteHost"
+                                control={control}
+                                render={({ field, fieldState }) => (
+                                    <TextField {...field} variant="outlined" error={!!fieldState.error} helperText={fieldState.error?.message} />
+                                )}
+                            />
+                        </FormControl>
+                        <FormControl component="fieldset">
+                            <FormLabel>Certificate File</FormLabel>
+                            <Controller
+                                name="VoiceControl.CertificateFile"
+                                control={control}
+                                render={({ field, fieldState }) => (
+                                    <TextField {...field} variant="outlined" error={!!fieldState.error} helperText={fieldState.error?.message} />
+                                )}
+                            />
+                        </FormControl>
+                        <FormControl component="fieldset">
+                            <FormLabel>Private Key File</FormLabel>
+                            <Controller
+                                name="VoiceControl.PrivateKeyFile"
+                                control={control}
+                                render={({ field, fieldState }) => (
+                                    <TextField {...field} variant="outlined" error={!!fieldState.error} helperText={fieldState.error?.message} />
+                                )}
+                            />
+                        </FormControl>
                     </Box>
                 </Box>
             </Paper>

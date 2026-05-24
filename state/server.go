@@ -18,11 +18,12 @@ type ServerState struct {
 }
 
 type ClientState struct {
-	Name       string
-	UnitId     string
-	Coalition  string
-	Role       uint8
-	LastUpdate time.Time
+	Name               string
+	UnitId             string
+	Coalition          string
+	Role               uint8
+	LastUpdate         time.Time
+	LatencyToControlMs int64 // measured RTT to the SRS/control gRPC node
 }
 
 type RadioState struct {
@@ -44,22 +45,24 @@ type BannedState struct {
 }
 
 type BannedClient struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	IPAddress string `json:"ip_address"`
-	Reason    string `json:"reason"`
+	ID        uuid.UUID `json:"id"`
+	Name      string    `json:"name"`
+	IPAddress string    `json:"ip_address"`
+	Reason    string    `json:"reason"`
 }
 
 func ensureBanFileExists(bannedFile string) error {
 	_, err := os.Stat(bannedFile)
-	if os.IsNotExist(err) {
-		f, createErr := os.Create(bannedFile)
-		if createErr != nil {
-			return createErr
-		}
-		defer f.Close()
+	if err != nil && !os.IsNotExist(err) {
+		return err
 	}
-	return err
+	if os.IsNotExist(err) {
+		// Write a valid empty JSON array so json.Decoder never returns io.EOF.
+		if writeErr := os.WriteFile(bannedFile, []byte("[]"), 0600); writeErr != nil {
+			return writeErr
+		}
+	}
+	return nil
 }
 
 func getBanFile(bannedFile string) (string, error) {
@@ -80,13 +83,11 @@ func GetBannedState(bannedFile string) (*BannedState, error) {
 		return nil, err
 	}
 	defer f.Close()
-	var bannedState BannedState
+	bannedState := BannedState{file: file, BannedClients: []BannedClient{}}
 	decoder := json.NewDecoder(f)
-	err = decoder.Decode(&bannedState.BannedClients)
-	if err != nil {
+	if err = decoder.Decode(&bannedState.BannedClients); err != nil {
 		return nil, err
 	}
-	bannedState.file = file
 	return &bannedState, nil
 }
 
@@ -115,6 +116,7 @@ func (s *ServerState) AddClient(clientGuid uuid.UUID, client *ClientState) {
 	if s.Clients == nil {
 		s.Clients = make(map[uuid.UUID]*ClientState)
 	}
+	client.LastUpdate = time.Now()
 	s.Clients[clientGuid] = client
 	s.RadioClients[clientGuid] = &RadioState{
 		Radios: []Radio{},
@@ -203,4 +205,13 @@ func (s *ServerState) DoesClientExist(clientGuid uuid.UUID) bool {
 		return false
 	}
 	return true
+}
+
+func (s *ServerState) IsClientMuted(clientGuid uuid.UUID) bool {
+	s.RLock()
+	defer s.RUnlock()
+	if radio, exists := s.RadioClients[clientGuid]; exists {
+		return radio.Muted
+	}
+	return false
 }

@@ -34,7 +34,7 @@ function ClientEntry(props: Readonly<{ client: ClientState, clientId: string, ha
         }
         fetchRadioClient()
         Events.On("clients/radio/changed", (event) => {
-            const clients = event.data[0] as Record<string, RadioState>;
+            const clients = event.data as Record<string, RadioState>;
             if (clients[clientId]) {
                 setMuted(clients[clientId].Muted);
             }

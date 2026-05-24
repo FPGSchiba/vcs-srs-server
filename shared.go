@@ -8,10 +8,16 @@ import (
 	"path"
 
 	"github.com/FPGSchiba/vcs-srs-server/app"
+	"github.com/FPGSchiba/vcs-srs-server/events"
+	"github.com/FPGSchiba/vcs-srs-server/logging"
 	slogmulti "github.com/samber/slog-multi"
 )
 
-func parseFlags(isHeadless bool) (configFilepath, bannedFilePath, distributionMode string, autoStartServers bool, logger *slog.Logger) {
+// parseFlags parses CLI flags and builds two loggers:
+//   - appLogger: includes BusHandler so log records stream to the frontend Logs tab
+//   - wailsLogger: file + console only; used for Wails internals to prevent an
+//     infinite loop (Wails logs each event it emits, which would re-trigger BusHandler)
+func parseFlags(isHeadless bool, bus *events.EventBus) (configFilepath, bannedFilePath, distributionMode string, autoStartServers bool, appLogger, wailsLogger *slog.Logger, isGlobal bool) {
 	var logFolder string
 	var fileLogEnabled bool
 	flag.StringVar(&configFilepath, "config", "config.yaml", "Path to the configuration file")
@@ -21,6 +27,7 @@ func parseFlags(isHeadless bool) (configFilepath, bannedFilePath, distributionMo
 	flag.BoolVar(&fileLogEnabled, "file-log", true, "Enable file logging")
 	if isHeadless {
 		flag.StringVar(&distributionMode, "mode", "standalone", "Distribution mode (standalone, control, voice)")
+		flag.BoolVar(&isGlobal, "global", false, "Run as global-frequency voice node (only valid with --mode voice)")
 	}
 	flag.Parse()
 
@@ -36,24 +43,33 @@ func parseFlags(isHeadless bool) (configFilepath, bannedFilePath, distributionMo
 		if err != nil {
 			log.Fatalf("error opening log file: %v", err)
 		}
-		logger = slog.New(slogmulti.Fanout(
+		wailsLogger = slog.New(slogmulti.Fanout(
 			slog.NewTextHandler(os.Stdout, nil),
 			slog.NewJSONHandler(f, nil),
 		))
+		appLogger = slog.New(slogmulti.Fanout(
+			slog.NewTextHandler(os.Stdout, nil),
+			slog.NewJSONHandler(f, nil),
+			logging.NewBusHandler(bus),
+		))
 	} else {
-		logger = slog.New(slog.NewTextHandler(os.Stdout, nil))
+		wailsLogger = slog.New(slog.NewTextHandler(os.Stdout, nil))
+		appLogger = slog.New(slogmulti.Fanout(
+			slog.NewTextHandler(os.Stdout, nil),
+			logging.NewBusHandler(bus),
+		))
 	}
 
-	logger.Info("Auto-start servers", "autostart", autoStartServers)
-	logger.Info("Using config file", "config", configFilepath)
-	logger.Info("Using banned clients file", "bannedFile", bannedFilePath)
-	logger.Info("Using log folder", "logFolder", logFolder)
-	logger.Info("File logging enabled", "fileLogEnabled", fileLogEnabled)
-	logger.Info("Version", "version", app.Version)
+	appLogger.Info("Auto-start servers", "autostart", autoStartServers)
+	appLogger.Info("Using config file", "config", configFilepath)
+	appLogger.Info("Using banned clients file", "bannedFile", bannedFilePath)
+	appLogger.Info("Using log folder", "logFolder", logFolder)
+	appLogger.Info("File logging enabled", "fileLogEnabled", fileLogEnabled)
+	appLogger.Info("Version", "version", app.Version)
 	if isHeadless {
-		logger.Info("Distribution mode", "mode", distributionMode)
+		appLogger.Info("Distribution mode", "mode", distributionMode)
 	} else {
-		logger.Info("Running in GUI mode")
+		appLogger.Info("Running in GUI mode")
 	}
 
 	return

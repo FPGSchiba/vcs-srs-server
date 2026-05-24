@@ -34,8 +34,10 @@ func TestGetServerVersion(t *testing.T) {
 
 func TestGetServerStatus(t *testing.T) {
 	app := newTestApp()
+	// GetServerStatus returns a value type (AdminStateSnapshot), never nil.
+	// Verify it returns the zero-value snapshot for a freshly initialized AdminState.
 	status := app.GetServerStatus()
-	if status == nil {
-		t.Error("GetServerStatus() returned nil")
+	if status.HTTPStatus.IsRunning || status.VoiceStatus.IsRunning || status.ControlStatus.IsRunning {
+		t.Error("GetServerStatus() returned unexpected running state for a new app")
 	}
 }

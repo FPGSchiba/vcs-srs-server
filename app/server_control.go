@@ -4,13 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/FPGSchiba/vcs-srs-server/control"
-	"github.com/FPGSchiba/vcs-srs-server/events"
-	"github.com/FPGSchiba/vcs-srs-server/rest"
-	"github.com/FPGSchiba/vcs-srs-server/voice"
-	"github.com/gin-gonic/gin"
 	"net/http"
 	"time"
+
+	"github.com/99designs/gqlgen/graphql/handler"
+	"github.com/FPGSchiba/vcs-srs-server/control"
+	"github.com/FPGSchiba/vcs-srs-server/events"
+	gql "github.com/FPGSchiba/vcs-srs-server/graphql"
+	"github.com/FPGSchiba/vcs-srs-server/graphql/generated"
+	"github.com/FPGSchiba/vcs-srs-server/rest"
+	"github.com/FPGSchiba/vcs-srs-server/state"
+	"github.com/FPGSchiba/vcs-srs-server/voice"
+	"github.com/gin-gonic/gin"
 )
 
 func (a *VCSApplication) startHTTPServer() {
@@ -31,6 +36,16 @@ func (a *VCSApplication) startHTTPServer() {
 	go func() {
 		gin.SetMode(gin.ReleaseMode)
 		r := rest.GetRouter(a.Logger)
+
+		// Mount GraphQL API with API key protection
+		gqlResolver := gql.NewResolver(a)
+		gqlSrv := handler.NewDefaultServer(
+			generated.NewExecutableSchema(generated.Config{Resolvers: gqlResolver}),
+		)
+		apiV1 := r.Group("/api/v1")
+		apiV1.POST("/graphql", rest.ApiKeyMiddleware(a.SettingsState), func(c *gin.Context) {
+			gqlSrv.ServeHTTP(c.Writer, c.Request)
+		})
 
 		a.SettingsState.Lock()
 
@@ -66,9 +81,16 @@ func (a *VCSApplication) startHTTPServer() {
 		a.Logger.Info("HTTP server stopped listening")
 	}()
 
+	a.AdminState.RLock()
+	adminSnap := state.AdminStateSnapshot{
+		HTTPStatus:    a.AdminState.HTTPStatus,
+		VoiceStatus:   a.AdminState.VoiceStatus,
+		ControlStatus: a.AdminState.ControlStatus,
+	}
+	a.AdminState.RUnlock()
 	a.EmitEvent(events.Event{
 		Name: events.AdminChanged,
-		Data: a.AdminState,
+		Data: adminSnap,
 	})
 }
 
@@ -98,9 +120,16 @@ func (a *VCSApplication) stopHTTPServer() {
 		a.AdminState.HTTPStatus.Error = err.Error()
 		a.AdminState.Unlock()
 
+		a.AdminState.RLock()
+		adminSnap := state.AdminStateSnapshot{
+			HTTPStatus:    a.AdminState.HTTPStatus,
+			VoiceStatus:   a.AdminState.VoiceStatus,
+			ControlStatus: a.AdminState.ControlStatus,
+		}
+		a.AdminState.RUnlock()
 		a.EmitEvent(events.Event{
 			Name: events.AdminChanged,
-			Data: a.AdminState,
+			Data: adminSnap,
 		})
 		a.Notify(events.NewNotification("HTTP server error", "Could not stop HTTP Server.", "error"))
 		return
@@ -112,51 +141,62 @@ func (a *VCSApplication) stopHTTPServer() {
 	a.AdminState.HTTPStatus.Error = ""
 	a.AdminState.Unlock()
 
+	a.AdminState.RLock()
+	adminSnap := state.AdminStateSnapshot{
+		HTTPStatus:    a.AdminState.HTTPStatus,
+		VoiceStatus:   a.AdminState.VoiceStatus,
+		ControlStatus: a.AdminState.ControlStatus,
+	}
+	a.AdminState.RUnlock()
 	a.EmitEvent(events.Event{
 		Name: events.AdminChanged,
-		Data: a.AdminState,
+		Data: adminSnap,
 	})
 }
 
 func (a *VCSApplication) startVoiceServer() {
 	a.AdminState.Lock()
-	defer a.AdminState.Unlock()
-
 	if a.AdminState.VoiceStatus.IsRunning {
+		a.AdminState.Unlock()
 		a.Notify(events.NewNotification("Voice server error", "voice server is already running", "warning"))
 		return
 	}
-
 	stopChan := make(chan struct{})
 	a.StopSignals["voice"] = stopChan
+	a.AdminState.Unlock()
+
+	a.SettingsState.RLock()
+	serverHost := fmt.Sprintf("%s:%d", a.SettingsState.Servers.Voice.Host, a.SettingsState.Servers.Voice.Port)
+	a.SettingsState.RUnlock()
 
 	go func() {
 		a.voiceServer = voice.NewServer(a.ServerState, a.Logger, a.DistributionState, a.SettingsState)
 
-		// Update status
 		a.AdminState.Lock()
 		a.AdminState.VoiceStatus.IsRunning = true
 		a.AdminState.VoiceStatus.Error = ""
 		a.AdminState.Unlock()
 
-		a.SettingsState.Lock()
-		serverHost := fmt.Sprintf("%s:%d", a.SettingsState.Servers.Voice.Host, a.SettingsState.Servers.Voice.Port)
-		a.SettingsState.Unlock()
 		if err := a.voiceServer.Listen(serverHost, stopChan); err != nil {
 			a.AdminState.Lock()
 			a.AdminState.VoiceStatus.Error = err.Error()
 			a.AdminState.VoiceStatus.IsRunning = false
 			a.AdminState.Unlock()
-
 			a.Notify(events.NewNotification("voice server error", "Could not start Voice server", "error"))
 			a.Logger.Error("voice server error", "error", err)
 		}
-
 	}()
 
+	a.AdminState.RLock()
+	adminSnap := state.AdminStateSnapshot{
+		HTTPStatus:    a.AdminState.HTTPStatus,
+		VoiceStatus:   a.AdminState.VoiceStatus,
+		ControlStatus: a.AdminState.ControlStatus,
+	}
+	a.AdminState.RUnlock()
 	a.EmitEvent(events.Event{
 		Name: events.AdminChanged,
-		Data: a.AdminState,
+		Data: adminSnap,
 	})
 }
 
@@ -191,9 +231,16 @@ func (a *VCSApplication) stopVoiceServer() {
 	a.AdminState.VoiceStatus.Error = ""
 	a.AdminState.Unlock()
 
+	a.AdminState.RLock()
+	adminSnap := state.AdminStateSnapshot{
+		HTTPStatus:    a.AdminState.HTTPStatus,
+		VoiceStatus:   a.AdminState.VoiceStatus,
+		ControlStatus: a.AdminState.ControlStatus,
+	}
+	a.AdminState.RUnlock()
 	a.EmitEvent(events.Event{
 		Name: events.AdminChanged,
-		Data: a.AdminState,
+		Data: adminSnap,
 	})
 }
 
@@ -233,10 +280,21 @@ func (a *VCSApplication) startGrpcServer() {
 	a.AdminState.ControlStatus.Error = ""
 	a.AdminState.Unlock()
 
+	a.AdminState.RLock()
+	adminSnap := state.AdminStateSnapshot{
+		HTTPStatus:    a.AdminState.HTTPStatus,
+		VoiceStatus:   a.AdminState.VoiceStatus,
+		ControlStatus: a.AdminState.ControlStatus,
+	}
+	a.AdminState.RUnlock()
 	a.EmitEvent(events.Event{
 		Name: events.AdminChanged,
-		Data: a.AdminState,
+		Data: adminSnap,
 	})
+}
+
+func (a *VCSApplication) StartServer() {
+	a.StartStandaloneServer()
 }
 
 func (a *VCSApplication) stopControlServer() {
@@ -271,8 +329,15 @@ func (a *VCSApplication) stopControlServer() {
 	a.AdminState.ControlStatus.Error = ""
 	a.AdminState.Unlock()
 
+	a.AdminState.RLock()
+	adminSnap := state.AdminStateSnapshot{
+		HTTPStatus:    a.AdminState.HTTPStatus,
+		VoiceStatus:   a.AdminState.VoiceStatus,
+		ControlStatus: a.AdminState.ControlStatus,
+	}
+	a.AdminState.RUnlock()
 	a.EmitEvent(events.Event{
 		Name: events.AdminChanged,
-		Data: a.AdminState,
+		Data: adminSnap,
 	})
 }

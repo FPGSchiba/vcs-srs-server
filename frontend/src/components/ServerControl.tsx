@@ -39,12 +39,12 @@ const ServerControls: () => JSX.Element = () => {
     }
 
     const handleStatusChange = async (event: WailsEvent) => {
-        const status = event.data[0] as AdminState;
+        const status = event.data as AdminState;
         setStatus(status);
     }
 
     const handleSettingsChange = async (event: WailsEvent) => {
-        const settings = event.data[0] as SettingsState;
+        const settings = event.data as SettingsState;
         setSettings(settings);
     }
 
@@ -62,7 +62,7 @@ const ServerControls: () => JSX.Element = () => {
         Events.On("admin/changed", handleStatusChange);
         Events.On("settings/changed", handleSettingsChange);
         Events.On("clients/changed", (event: WailsEvent) => {
-            const clients = event.data[0] as Record<string, ClientState>
+            const clients = event.data as Record<string, ClientState>
             const numClients = Object.keys(clients).length;
             setNumClients(numClients);
         })

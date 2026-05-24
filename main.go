@@ -16,13 +16,12 @@ import (
 var assets embed.FS
 
 func main() {
-	configFilepath, bannedFilePath, _, autoStartServers, logger := parseFlags(false)
-
 	vcs := app.New()
+	configFilepath, bannedFilePath, _, autoStartServers, appLogger, wailsLogger, _ := parseFlags(false, vcs.GetEventBus())
 
-	defer func() {                        // Ensure we catch any panics and log them
+	defer func() { // Ensure we catch any panics and log them
 		if err := recover(); err != nil { //catch
-			logger.Error("Application panicked", "error", err)
+			appLogger.Error("Application panicked", "error", err)
 			os.Exit(1)
 		}
 	}()
@@ -31,7 +30,7 @@ func main() {
 	appOptions := application.Options{
 		Name:        "vcs-server",
 		Description: "A Voice Communication Server for Vanguard",
-		Logger:      logger,
+		Logger:      wailsLogger,
 		LogLevel:    slog.LevelInfo,
 		Services: []application.Service{
 			application.NewService(services.NewNotificationService(vcs)),
@@ -49,17 +48,19 @@ func main() {
 
 	wails := application.New(appOptions)
 	vcs.StartUp(wails, configFilepath, bannedFilePath, autoStartServers)
-	
+	vcs.Logger = appLogger // Override Wails-internal logger with BusHandler-equipped app logger
+
 	wails.Window.NewWithOptions(application.WebviewWindowOptions{
-		Title:          "VCS Server",
-		Width:          1080,
-		Height:         800,
-		MaxHeight:      800,
-		MaxWidth:       1080,
-		MinHeight:      800,
-		MinWidth:       1080,
-		BackgroundType: application.BackgroundTypeTransparent,
-		Frameless:      true,
+		Title:           "VCS Server",
+		DevToolsEnabled: true,
+		Width:           1080,
+		Height:          800,
+		MaxHeight:       800,
+		MaxWidth:        1080,
+		MinHeight:       800,
+		MinWidth:        1080,
+		BackgroundType:  application.BackgroundTypeTransparent,
+		Frameless:       true,
 		Mac: application.MacWindow{
 			InvisibleTitleBarHeight: 50,
 			Backdrop:                application.MacBackdropTransparent,

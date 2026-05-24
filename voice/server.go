@@ -1,34 +1,25 @@
 package voice
 
 import (
-	_ "encoding/binary"
-	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"sync"
 	"time"
 
 	"github.com/FPGSchiba/vcs-srs-server/state"
+	"github.com/FPGSchiba/vcs-srs-server/utils"
 	"github.com/FPGSchiba/vcs-srs-server/voiceontrol"
-	"github.com/faiface/beep"
-	"github.com/faiface/beep/speaker"
 	"github.com/google/uuid"
-	"github.com/pion/opus"
 )
 
 const (
-	BufferSize        = 1024                  // UDP buffer size
-	JitterBufferSize  = 10                    // Number of packets to buffer
-	PlayoutDelay      = 60 * time.Millisecond // Initial playout delay
-	minCELTConfig     = 16
-	maxOpusFrameSize  = 11520
-	samplesPerChannel = 960 // 20ms at 48kHz
+	BufferSize = 1024 // UDP buffer size
 )
 
 type Client struct {
-	Addr     *net.UDPAddr
-	LastSeen time.Time
+	Addr          *net.UDPAddr
+	LastSeen      time.Time
+	LatencyToVoiceMs int64 // measured RTT to this voice node (from keepalive echo)
 }
 
 type Server struct {
@@ -41,18 +32,9 @@ type Server struct {
 	logger            *slog.Logger
 	running           bool
 	stopChan          chan struct{}
+	stopOnce          sync.Once
 	controlClient     *voiceontrol.VoiceControlClient
 	serverId          string
-
-	// Playback/decoder state
-	playOnce   sync.Once
-	opusDec    opus.Decoder
-	pipeW      *io.PipeWriter
-	playFormat beep.Format
-	playErr    error
-
-	// Optional: gate concurrent writes to the pipe if PlayVoiceData is called from multiple goroutines
-	playMu sync.Mutex
 }
 
 func NewServer(state *state.ServerState, logger *slog.Logger, distributionState *state.DistributionState, settingsState *state.SettingsState) *Server {
@@ -76,9 +58,18 @@ func (v *Server) isDistributedServer() bool {
 func (v *Server) Listen(address string, stopChan chan struct{}) error {
 	if v.isDistributedServer() {
 		// Initialize control client if this is a distributed server
-		v.controlClient = voiceontrol.NewVoiceControlClient(v.serverId, v.logger)
-		// TODO: Make Server domain / IP configurable
-		if err := v.controlClient.ConnectControlServer("localhost"); err != nil {
+		v.distributionState.RLock()
+		isGlobal := v.distributionState.IsGlobal
+		v.distributionState.RUnlock()
+
+		v.controlClient = voiceontrol.NewVoiceControlClient(
+			v.serverId,
+			v.settingsState,
+			v.serverState,
+			isGlobal,
+			v.logger,
+		)
+		if err := v.controlClient.ConnectControlServer(); err != nil {
 			v.logger.Error("Failed to connect to control server", "error", err)
 			return err
 		}
@@ -127,8 +118,20 @@ func (v *Server) Listen(address string, stopChan chan struct{}) error {
 				continue
 			}
 
+			v.serverState.RLock()
+			_, banned := utils.FindByFunc(v.serverState.BannedState.BannedClients, func(bc state.BannedClient) bool {
+				return bc.IPAddress == remoteAddr.IP.String()
+			})
+			v.serverState.RUnlock()
+			if banned {
+				v.logger.Warn("Banned client attempted to connect", "IP", remoteAddr.IP.String())
+				continue
+			}
+
 			// Handle the received packet
-			go v.handlePacket(buffer[:n], remoteAddr)
+			pkt := make([]byte, n)
+			copy(pkt, buffer[:n])
+			go v.handlePacket(pkt, remoteAddr)
 		}
 	}
 }
@@ -164,7 +167,6 @@ func (v *Server) handleHelloPacket(packet *VCSPacket, addr *net.UDPAddr) {
 	v.logger.Info("Received hello packet", "sender_id", packet.SenderID, "addr", addr.String())
 	if !v.serverState.DoesClientExist(packet.SenderID) {
 		v.logger.Warn("Client with hello, that does not exist", "sender_id", packet.SenderID)
-		// Ignore hello from unknown client
 		return
 	}
 
@@ -174,6 +176,11 @@ func (v *Server) handleHelloPacket(packet *VCSPacket, addr *net.UDPAddr) {
 		LastSeen: time.Now(),
 	}
 	v.Unlock()
+
+	if v.controlClient != nil {
+		go v.controlClient.ReportClientConnected(packet.SenderID, addr)
+	}
+
 	ackPacket := NewVCSHelloAckPacket(packet.SenderID)
 	ackData := ackPacket.SerializePacket()
 	_, err := v.conn.WriteToUDP(ackData, addr)
@@ -186,50 +193,98 @@ func (v *Server) handleHelloPacket(packet *VCSPacket, addr *net.UDPAddr) {
 }
 
 func (v *Server) handleKeepalivePacket(packet *VCSPacket, addr *net.UDPAddr) {
-	v.RLock()
+	v.Lock()
 	client, exists := v.clients[packet.SenderID]
-	v.RUnlock()
+	if exists {
+		client.LastSeen = time.Now()
+		// If the client echoed our timestamp, compute the round-trip latency.
+		if ts := ExtractKeepaliveTimestamp(packet.Payload); ts > 0 {
+			rtt := time.Now().UnixMilli() - ts
+			if rtt > 0 {
+				client.LatencyToVoiceMs = rtt
+			}
+		}
+	}
+	v.Unlock()
 	if !exists {
 		v.logger.Warn("Received keepalive from unknown client", "sender_id", packet.SenderID)
 		return
 	}
-	v.Lock()
-	client.LastSeen = time.Now()
-	v.Unlock()
 	v.logger.Debug("Updated last seen for client", "sender_id", packet.SenderID, "addr", addr.String())
-	ackPacket := NewVCSKeepalivePacket(packet.SenderID)
+
+	if v.conn == nil {
+		v.logger.Warn("No UDP connection available to send keepalive acknowledgment")
+		return
+	}
+
+	// Send ACK with embedded timestamp so the client can echo it back next cycle.
+	ackPacket := NewVCSKeepaliveAckPacket(packet.SenderID)
 	ackData := ackPacket.SerializePacket()
 	_, err := v.conn.WriteToUDP(ackData, addr)
 	if err != nil {
 		v.logger.Error("Failed to send keepalive acknowledgment",
 			"to", addr.String(),
 			"error", err)
-		return
 	}
 }
 
 func (v *Server) handleVoicePacket(packet *VCSPacket) {
-	v.RLock()
+	if v.settingsState.IsFrequencyTest(packet.FrequencyAsFloat32()) {
+		v.handleTestFrequencyPacket(packet)
+		return
+	}
+
+	v.Lock()
 	client, exists := v.clients[packet.SenderID]
-	v.RUnlock()
+	if exists {
+		client.LastSeen = time.Now()
+	}
+	v.Unlock()
 	if !exists {
 		v.logger.Warn("Received voice packet from unknown client", "sender_id", packet.SenderID)
 		return
 	}
 
-	// Update last seen time
-	v.Lock()
-	client.LastSeen = time.Now()
-	v.Unlock()
+	if v.serverState.IsClientMuted(packet.SenderID) {
+		v.logger.Debug("Dropping voice packet from muted client", "sender_id", packet.SenderID)
+		return
+	}
 
-	// Broadcast the voice data to other clients
-	v.broadcastVoice(packet, packet.SenderID)
+	if len(packet.Payload) > 5 {
+		v.broadcastVoice(packet, packet.SenderID)
+	}
 
-	// Optionally, you can log the received voice packet
 	v.logger.Debug("Received voice packet",
 		"sender_id", packet.SenderID,
 		"frequency", packet.FrequencyAsFloat32(),
 		"size", len(packet.Payload))
+}
+
+// handleTestFrequencyPacket echoes the received packet back to the sender so the client hears it.
+func (v *Server) handleTestFrequencyPacket(packet *VCSPacket) {
+	v.Lock()
+	client, exists := v.clients[packet.SenderID]
+	var addr *net.UDPAddr
+	if exists && client != nil {
+		client.LastSeen = time.Now()
+		addr = client.Addr
+	}
+	v.Unlock()
+	if !exists || addr == nil {
+		v.logger.Warn("Test frequency from unknown client", "sender_id", packet.SenderID)
+		return
+	}
+
+	if v.conn == nil {
+		v.logger.Warn("No UDP connection available to echo test packet")
+		return
+	}
+	_, err := v.conn.WriteToUDP(packet.SerializePacket(), addr)
+	if err != nil {
+		v.logger.Error("Failed to echo test frequency packet to client", "to", addr.String(), "error", err)
+		return
+	}
+	v.logger.Debug("Echoed test frequency packet to client", "to", addr.String(), "sender_id", packet.SenderID)
 }
 
 func (v *Server) handleGoodbyePacket(packet *VCSPacket) {
@@ -288,7 +343,7 @@ func (v *Server) Stop() error {
 		return nil
 	}
 
-	close(v.stopChan)
+	v.stopOnce.Do(func() { close(v.stopChan) })
 
 	if v.conn != nil {
 		err := v.conn.Close()
@@ -314,18 +369,20 @@ func (v *Server) GetConnectedClients() []uuid.UUID {
 }
 
 func (v *Server) DisconnectClient(clientID uuid.UUID) {
-	v.RLock()
-	if client, exists := v.clients[clientID]; exists {
-		v.RUnlock()
-		v.Lock()
+	v.Lock()
+	client, exists := v.clients[clientID]
+	if exists {
 		delete(v.clients, clientID)
-		v.Unlock()
+	}
+	v.Unlock()
+	if exists {
 		v.logger.Info("Disconnected voice client",
 			"id", clientID,
 			"addr", client.Addr.String())
-		return
+		if v.controlClient != nil {
+			go v.controlClient.ReportClientDisconnected(clientID)
+		}
 	}
-	v.RUnlock()
 }
 
 func (v *Server) isRunning() bool {
@@ -341,18 +398,6 @@ func (v *Server) GetClientCount() int {
 }
 
 func (v *Server) GetListeningClients(packet *VCSPacket, senderId uuid.UUID) []*Client {
-	if v.settingsState.IsFrequencyTest(packet.FrequencyAsFloat32()) {
-		v.serverState.RLock()
-		defer v.serverState.RUnlock()
-		if _, exists := v.clients[packet.SenderID]; exists {
-			// Instead of echoing, play the voice data locally on the server
-			go v.PlayVoiceData(packet.Payload)
-			return []*Client{} // Do not send to any clients
-		}
-		v.logger.Warn("Received test frequency packet from unknown client", "sender_id", packet.SenderID)
-		return []*Client{} // No clients to return if sender is unknown
-	}
-
 	var listeningClients []*Client
 	for _, client := range v.serverState.GetAllClients() {
 		if client.ID == senderId {
@@ -370,173 +415,22 @@ func (v *Server) GetListeningClients(packet *VCSPacket, senderId uuid.UUID) []*C
 	return listeningClients
 }
 
-// Simple, direct PlayVoiceData without dejitter buffer - for clean local test playback
-func (v *Server) PlayVoiceData(payload []byte) {
-	if len(payload) == 0 {
-		return
+func (v *Server) GetClientIPFromId(clientId uuid.UUID) (net.IP, bool) {
+	v.RLock()
+	defer v.RUnlock()
+	if client, exists := v.clients[clientId]; exists {
+		return client.Addr.IP, true
 	}
-	toc := payload[0]
-	config := toc >> 3
-	if config < minCELTConfig {
-		// Not CELT-only (likely SILK/hybrid). Drop to avoid Pion error.
-		v.logger.Warn("Dropping non-CELT Opus packet", "config", config, "len_payload", len(payload))
-		return
-	}
-
-	// Lazy-initialize decoder and speaker once
-	v.playOnce.Do(func() {
-		var err error
-		v.opusDec = opus.NewDecoder() // mono 48kHz
-
-		v.playFormat = beep.Format{
-			SampleRate:  beep.SampleRate(48000),
-			NumChannels: 1,
-			Precision:   2,
-		}
-
-		// Larger buffer for smoother playback
-		err = speaker.Init(v.playFormat.SampleRate, v.playFormat.SampleRate.N(300*time.Millisecond))
-		if err != nil {
-			v.playErr = err
-			v.logger.Error("Failed to init Speaker", "error", err)
-			return
-		}
-
-		pr, pw := io.Pipe()
-		v.pipeW = pw
-
-		stream := &pcmStream{
-			r:   pr,
-			f:   v.playFormat,
-			buf: make([]byte, 8192*v.playFormat.Width()),
-		}
-		speaker.Play(stream)
-	})
-
-	if v.playErr != nil || v.pipeW == nil {
-		v.logger.Error("Audio playback not initialized", "error", v.playErr)
-		return
-	}
-
-	// Decode directly - buffer for up to 60ms stereo @ 48kHz
-	out := make([]byte, maxOpusFrameSize)
-
-	// Serialize opus decoder access and pipe writes; opus.Decoder is not goroutine-safe
-	v.playMu.Lock()
-	// Protect against library panics on corrupt/non-Opus payloads
-	var (
-		bw       opus.Bandwidth
-		isStereo bool
-		err      error
-	)
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				err = fmt.Errorf("opus decode panic: %v", r)
-			}
-		}()
-		bw, isStereo, err = v.opusDec.Decode(payload, out)
-	}()
-	if err != nil {
-		v.playMu.Unlock()
-		v.logger.Error("Failed to decode Opus data", "error", err)
-		return
-	}
-
-	// Get sample rate and assume 20ms frame
-	sr := bw.SampleRate()
-	if sr == 0 {
-		sr = 48000
-	}
-	samplesPerCh := sr / 50 // 20ms
-	if samplesPerCh <= 0 {
-		samplesPerCh = samplesPerChannel
-	}
-
-	// Calculate actual bytes to use
-	channels := 1
-	if isStereo {
-		channels = 2
-	}
-	bytesToUse := samplesPerCh * 2 * channels
-	if bytesToUse > len(out) {
-		bytesToUse = len(out)
-	}
-
-	var pcmData []byte
-	if isStereo {
-		// Downmix to mono
-		pcmData = downmixStereoS16LEToMono(out[:bytesToUse], samplesPerCh)
-	} else {
-		pcmData = out[:bytesToUse]
-	}
-
-	// Write directly to pipe while still holding the lock (serialize with decoder)
-	_, err = v.pipeW.Write(pcmData)
-	v.playMu.Unlock()
-
-	if err != nil {
-		v.logger.Error("Failed to write PCM to speaker pipe", "error", err)
-	}
+	return nil, false
 }
 
-// downmixStereoS16LEToMono averages L/R channels into mono S16LE.
-func downmixStereoS16LEToMono(in []byte, samplesPerCh int) []byte {
-	out := make([]byte, samplesPerCh*2)
-	for i := 0; i < samplesPerCh; i++ {
-		li := 4 * i
-		ri := li + 2
-		l := int16(uint16(in[li]) | uint16(in[li+1])<<8)
-		r := int16(uint16(in[ri]) | uint16(in[ri+1])<<8)
-		m := int16((int32(l) + int32(r)) / 2)
-		oi := 2 * i
-		out[oi] = byte(uint16(m))
-		out[oi+1] = byte(uint16(m) >> 8)
+// GetClientLatencyMap returns a snapshot of measured voice RTT per connected client.
+func (v *Server) GetClientLatencyMap() map[uuid.UUID]int64 {
+	v.RLock()
+	defer v.RUnlock()
+	result := make(map[uuid.UUID]int64, len(v.clients))
+	for id, client := range v.clients {
+		result[id] = client.LatencyToVoiceMs
 	}
-	return out
-}
-
-// pcmStream allows faiface to play raw S16LE PCM directly.
-// This is adapted from the example you pasted.
-type pcmStream struct {
-	r   io.Reader
-	f   beep.Format
-	buf []byte
-	len int
-	pos int
-	err error
-}
-
-func (s *pcmStream) Err() error { return s.err }
-
-func (s *pcmStream) Stream(samples [][2]float64) (n int, ok bool) {
-	width := s.f.Width()
-
-	// If there's not enough data for a full sample, get more
-	if size := s.len - s.pos; size < width {
-		// If there's a partial sample, move it to the beginning of the buffer
-		if size != 0 {
-			copy(s.buf, s.buf[s.pos:s.len])
-		}
-		s.len = size
-		s.pos = 0
-
-		// Refill the buffer
-		nbytes, err := s.r.Read(s.buf[s.len:])
-		if err != nil {
-			if err != io.EOF {
-				s.err = err
-			}
-			return n, false
-		}
-		s.len += nbytes
-	}
-
-	// Decode as many samples as we can
-	for n < len(samples) && s.len-s.pos >= width {
-		samples[n], _ = s.f.DecodeSigned(s.buf[s.pos:])
-		n++
-		s.pos += width
-	}
-	return n, true
+	return result
 }

@@ -98,6 +98,11 @@ You can pass flags to the application by using the `--` separator. The following
 
 * Use a Go Module for the Protobuf files / Generated Go code
   * Use this when the C# Client is finished and the Go Client is ready
+* UI to configure plugins and view their status
+  * Should include a reload button to reload the plugin without restarting the server
+* Observability over all components
+  * Metrics, Tracing, Logging
+  * Especially tracing for user sessions over multiple components
 
 ## Authentication & Plugin architecture
 

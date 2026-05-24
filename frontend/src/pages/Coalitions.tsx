@@ -100,7 +100,7 @@ function CoalitionsPage() {
 
     useEffect(() => {
         Events.On("settings/coalitions/changed", (event: WailsEvent) => {
-            setCoalitions(event.data[0] as Coalition[]);
+            setCoalitions(event.data as Coalition[]);
         });
         if (coalitions.length === 0) {
             fetchCoalitions();

@@ -52,7 +52,7 @@ function FrequencyPage() {
     React.useEffect(() => {
         fetchFrequencies();
         Events.On("settings/changed", (event: WailsEvent) => {
-            const settings = event.data[0] as SettingsState;
+            const settings = event.data as SettingsState;
             if (settings.Frequencies) {
                 setGlobalFrequencies(settings.Frequencies.GlobalFrequencies);
                 setTestFrequencies(settings.Frequencies.TestFrequencies);

@@ -9,14 +9,21 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// keysOnce ensures keys are loaded from disk exactly once per process lifetime.
+// Changing the key file paths in settings requires a server restart to take effect.
+// A future improvement would replace this package-level singleton with a per-instance
+// key cache to allow runtime key rotation without a restart.
 var (
-	privateKey *ecdsa.PrivateKey
-	publicKey  *ecdsa.PublicKey
+	keysOnce   sync.Once
+	cachedPriv *ecdsa.PrivateKey
+	cachedPub  *ecdsa.PublicKey
+	keysErr    error
 )
 
 const (
@@ -27,7 +34,7 @@ const (
 )
 
 var (
-	SrsServiceMinimumRoleMap = map[string]uint8{
+	srsServiceMinimumRoleMap = map[string]uint8{
 		"UpdateClientInfo":   GuestRole,
 		"UpdateRadioInfo":    GuestRole,
 		"SyncClient":         GuestRole,
@@ -43,6 +50,13 @@ var (
 	}
 )
 
+// GetMinimumRoleForMethod returns the minimum required role for the given gRPC
+// method name, and whether the method is in the role map at all.
+func GetMinimumRoleForMethod(methodName string) (uint8, bool) {
+	role, ok := srsServiceMinimumRoleMap[methodName]
+	return role, ok
+}
+
 type TokenClaims struct {
 	ClientGuid string `json:"client_guid"`
 	RoleId     uint8  `json:"role_id"`
@@ -50,14 +64,10 @@ type TokenClaims struct {
 }
 
 func getKeys(privateKeyFile, publicKeyFile string) (*ecdsa.PrivateKey, *ecdsa.PublicKey, error) {
-	if privateKey == nil {
-		var err error
-		privateKey, publicKey, err = generateKey(privateKeyFile, publicKeyFile)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-	return privateKey, publicKey, nil
+	keysOnce.Do(func() {
+		cachedPriv, cachedPub, keysErr = generateKey(privateKeyFile, publicKeyFile)
+	})
+	return cachedPriv, cachedPub, keysErr
 }
 
 func generateKey(privateKeyFile, publicKeyFile string) (*ecdsa.PrivateKey, *ecdsa.PublicKey, error) {
@@ -128,6 +138,9 @@ func encode(privateKey *ecdsa.PrivateKey, publicKey *ecdsa.PublicKey) (string, s
 
 func decode(pemEncoded string, pemEncodedPub string) (*ecdsa.PrivateKey, *ecdsa.PublicKey, error) {
 	block, _ := pem.Decode([]byte(pemEncoded))
+	if block == nil {
+		return nil, nil, fmt.Errorf("failed to decode private key PEM")
+	}
 	x509Encoded := block.Bytes
 	privateKey, err := x509.ParseECPrivateKey(x509Encoded)
 	if err != nil {
@@ -135,6 +148,9 @@ func decode(pemEncoded string, pemEncodedPub string) (*ecdsa.PrivateKey, *ecdsa.
 	}
 
 	blockPub, _ := pem.Decode([]byte(pemEncodedPub))
+	if blockPub == nil {
+		return nil, nil, fmt.Errorf("failed to decode public key PEM")
+	}
 	x509EncodedPub := blockPub.Bytes
 	genericPublicKey, err := x509.ParsePKIXPublicKey(x509EncodedPub)
 	if err != nil {
@@ -184,14 +200,23 @@ func getJWTClaims(tokenString, privateKeyFile, publicKeyFile string) (*TokenClai
 	if err != nil {
 		return nil, err
 	}
-	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
-		tokenClaims := &TokenClaims{
-			ClientGuid: claims["client_guid"].(string),
-			RoleId:     uint8(claims["role_id"].(float64)),
-		}
-		return tokenClaims, nil
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok || !token.Valid {
+		return nil, errors.New("invalid token")
 	}
-	return nil, errors.New("invalid token")
+
+	guidRaw, ok := claims["client_guid"].(string)
+	if !ok || guidRaw == "" {
+		return nil, errors.New("missing or invalid client_guid claim")
+	}
+	roleRaw, ok := claims["role_id"].(float64)
+	if !ok {
+		return nil, errors.New("missing or invalid role_id claim")
+	}
+	return &TokenClaims{
+		ClientGuid: guidRaw,
+		RoleId:     uint8(roleRaw),
+	}, nil
 }
 
 func GetTokenClaims(tokenString string, minRole uint8, privateKeyFile, publicKeyFile string) (*TokenClaims, error) {

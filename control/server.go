@@ -4,6 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/FPGSchiba/vcs-srs-server/events"
 	"github.com/FPGSchiba/vcs-srs-server/srs"
 	"github.com/FPGSchiba/vcs-srs-server/srspb"
@@ -12,16 +18,13 @@ import (
 	"github.com/FPGSchiba/vcs-srs-server/voicecontrolpb"
 	"github.com/FPGSchiba/vcs-srs-server/voiceontrol"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/reflection"
-	"log/slog"
-	"net"
-	"strings"
-	"sync"
-	"time"
+	"google.golang.org/grpc/status"
 )
 
 var (
@@ -35,23 +38,21 @@ const (
 	healthServiceAuth    = "auth"    // service name for Auth Server
 )
 
-const (
-	controlServerListeningIpAddress = "0.0.0.0" // Default address for control server
-)
-
 type Server struct {
-	mu                sync.RWMutex
-	clientGrpcServer  *grpc.Server
-	controlGrpcServer *grpc.Server
-	clientListener    net.Listener
-	controlListener   net.Listener
-	logger            *slog.Logger
-	serverState       *state.ServerState
-	settingsState     *state.SettingsState
-	distributionState *state.DistributionState
-	eventBus          *events.EventBus // Add event bus for handling events
-	isRunning         bool
-	stopOnce          sync.Once // Add this to ensure we only stop once
+	mu                  sync.RWMutex
+	clientGrpcServer    *grpc.Server
+	controlGrpcServer   *grpc.Server
+	clientListener      net.Listener
+	controlListener     net.Listener
+	logger              *slog.Logger
+	serverState         *state.ServerState
+	settingsState       *state.SettingsState
+	distributionState   *state.DistributionState
+	eventBus            *events.EventBus
+	srsServer           *srs.SimpleRadioServer
+	voiceControlServer  *voiceontrol.VoiceControlServer
+	isRunning           bool
+	stopOnce            sync.Once
 }
 
 func NewServer(serverState *state.ServerState, settingsState *state.SettingsState, logger *slog.Logger, distributionState *state.DistributionState, eventBus *events.EventBus) *Server {
@@ -84,7 +85,10 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 	}
 
 	if s.isControlServer() {
-		s.controlListener, err = net.Listen("tcp", fmt.Sprintf("%s:%d", controlServerListeningIpAddress, voiceontrol.DefaultVoiceControlPort))
+		s.settingsState.RLock()
+		voiceControlAddr := fmt.Sprintf("%s:%d", s.settingsState.VoiceControl.ListenHost, s.settingsState.VoiceControl.Port)
+		s.settingsState.RUnlock()
+		s.controlListener, err = net.Listen("tcp", voiceControlAddr)
 		if err != nil {
 			return fmt.Errorf("failed to listen on control server address: %v", err)
 		}
@@ -92,6 +96,7 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 
 	s.clientGrpcServer = grpc.NewServer(
 		grpc.ChainUnaryInterceptor(s.loggingInterceptor, s.authInterceptor),
+		grpc.ChainStreamInterceptor(s.authStreamInterceptor),
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
 			MinTime:             60 * time.Second, // allow pings every 60s
 			PermitWithoutStream: true,
@@ -102,12 +107,14 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 		}),
 	)
 
-	srsServer := srs.NewSimpleRadioServer(s.serverState, s.settingsState, s.logger, s.eventBus)
+	controlServer := voiceontrol.NewVoiceControlServer(s.serverState, s.settingsState, s.eventBus, s.logger)
+	s.voiceControlServer = controlServer
+
+	srsServer := srs.NewSimpleRadioServer(s.serverState, s.settingsState, s.logger, s.eventBus, controlServer)
+	s.srsServer = srsServer
 	authServer := srs.NewAuthServer(s.serverState, s.settingsState, s.logger, s.distributionState, s.eventBus)
 	srspb.RegisterSRSServiceServer(s.clientGrpcServer, srsServer)
 	srspb.RegisterAuthServiceServer(s.clientGrpcServer, authServer)
-
-	controlServer := voiceontrol.NewVoiceControlServer(s.serverState, s.settingsState, s.logger)
 
 	if s.isControlServer() {
 		s.initControlServer(controlServer)
@@ -137,7 +144,12 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 }
 
 func (s *Server) initControlServer(controlServer voicecontrolpb.VoiceControlServiceServer) {
-	cert, _, err := voiceontrol.LoadOrGenerateKeyPair()
+	s.settingsState.RLock()
+	privateKeyFileName := s.settingsState.VoiceControl.PrivateKeyFile
+	certificateFileName := s.settingsState.VoiceControl.CertificateFile
+	serverName := s.settingsState.VoiceControl.ServerName
+	s.settingsState.RUnlock()
+	cert, _, err := voiceontrol.LoadOrGenerateKeyPair(privateKeyFileName, certificateFileName, serverName)
 	if err != nil {
 		s.logger.Error("Failed to load TLS certificate for control server", "error", err)
 		return
@@ -200,7 +212,10 @@ func (s *Server) serveClient(address string) {
 }
 
 func (s *Server) serveControl() {
-	s.logger.Info("Starting Control gRPC server", "address", fmt.Sprintf("%s:%d", controlServerListeningIpAddress, voiceontrol.DefaultVoiceControlPort))
+	s.settingsState.RLock()
+	addr := fmt.Sprintf("%s:%d", s.settingsState.VoiceControl.ListenHost, s.settingsState.VoiceControl.Port)
+	s.settingsState.RUnlock()
+	s.logger.Info("Starting Control gRPC server", "address", addr)
 	if err := s.controlGrpcServer.Serve(s.controlListener); err != nil {
 		if !errors.Is(err, grpc.ErrServerStopped) {
 			s.logger.Error("gRPC server error", "error", err)
@@ -233,6 +248,10 @@ func (s *Server) Stop() error {
 
 		s.logger.Info("Stopping gRPC server")
 
+		if s.srsServer != nil {
+			s.srsServer.Stop()
+		}
+
 		// GracefulStop will automatically close the clientListener
 		if s.clientGrpcServer != nil {
 			s.clientGrpcServer.GracefulStop()
@@ -257,6 +276,18 @@ func (s *Server) IsRunning() bool {
 	return s.isRunning
 }
 
+// GetDistributionStatus returns the current distribution status from the voice control server.
+// Returns a zero-value DistributionView when the control server is not running.
+func (s *Server) GetDistributionStatus() voiceontrol.DistributionView {
+	s.mu.RLock()
+	vcs := s.voiceControlServer
+	s.mu.RUnlock()
+	if vcs == nil {
+		return voiceontrol.DistributionView{}
+	}
+	return vcs.GetDistributionStatus()
+}
+
 // Logging interceptor for debugging
 func (s *Server) loggingInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 	s.logger.Debug("gRPC request", "method", info.FullMethod, "request", req)
@@ -274,32 +305,39 @@ func (s *Server) loggingInterceptor(ctx context.Context, req interface{}, info *
 
 func (s *Server) authInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 	elements := strings.Split(info.FullMethod, "/")
-	fullServiceName := elements[1] // Get the service name from the method path
-	pathName := elements[2]        // Get the method name from the method path
-	serviceName := strings.Split(fullServiceName, ".")[1]
+	if len(elements) < 3 {
+		return nil, status.Errorf(codes.Unauthenticated, "malformed method path: %s", info.FullMethod)
+	}
+	fullServiceName := elements[1]
+	pathName := elements[2]
+
+	parts := strings.Split(fullServiceName, ".")
+	if len(parts) < 2 {
+		return nil, status.Errorf(codes.Unauthenticated, "malformed service name: %s", fullServiceName)
+	}
+	serviceName := parts[len(parts)-1]
 
 	if serviceName == "AuthService" || serviceName == "VoiceControlService" {
-		// Skip authentication for AuthService and VoiceControlService
 		return handler(ctx, req)
-	} else {
-		// For other services, perform authentication
-		s.logger.Debug("Authentication required for service", "service", serviceName, "method", info.FullMethod)
 	}
+
+	s.logger.Debug("Authentication required for service", "service", serviceName, "method", info.FullMethod)
 
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
 		return nil, fmt.Errorf("unauthenticated request to %s: missing metadata", info.FullMethod)
 	}
 
-	tokens := md.Get("authorization") // Check for an "authorization" header
+	tokens := md.Get("authorization")
 	if len(tokens) == 0 {
 		return nil, fmt.Errorf("unauthenticated request to %s: missing authorization token", info.FullMethod)
 	}
-	token := strings.TrimPrefix(tokens[0], "Bearer ") // Remove "Bearer " prefix if present
+	token := strings.TrimPrefix(tokens[0], "Bearer ")
 
-	// Placeholder for authentication logic
+	minRole, _ := utils.GetMinimumRoleForMethod(pathName)
+
 	s.settingsState.RLock()
-	claims, err := utils.GetTokenClaims(token, utils.SrsServiceMinimumRoleMap[pathName], s.settingsState.Security.Token.PrivateKeyFile, s.settingsState.Security.Token.PublicKeyFile)
+	claims, err := utils.GetTokenClaims(token, minRole, s.settingsState.Security.Token.PrivateKeyFile, s.settingsState.Security.Token.PublicKeyFile)
 	s.settingsState.RUnlock()
 	if err != nil {
 		s.logger.Error("Authentication error", "method", info.FullMethod, "error", err)
@@ -310,7 +348,63 @@ func (s *Server) authInterceptor(ctx context.Context, req interface{}, info *grp
 		return nil, fmt.Errorf("unauthenticated request to %s", info.FullMethod)
 	}
 
-	ctx = context.WithValue(ctx, "client_id", claims.ClientGuid)
-
+	ctx = context.WithValue(ctx, utils.ClientIDKey, claims.ClientGuid)
 	return handler(ctx, req)
+}
+
+// wrappedStream overrides the context of a grpc.ServerStream.
+type wrappedStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (w *wrappedStream) Context() context.Context { return w.ctx }
+
+func (s *Server) authStreamInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	elements := strings.Split(info.FullMethod, "/")
+	if len(elements) < 3 {
+		return status.Errorf(codes.Unauthenticated, "malformed method path: %s", info.FullMethod)
+	}
+	fullServiceName := elements[1]
+	pathName := elements[2]
+
+	parts := strings.Split(fullServiceName, ".")
+	if len(parts) < 2 {
+		return status.Errorf(codes.Unauthenticated, "malformed service name: %s", fullServiceName)
+	}
+	serviceName := parts[len(parts)-1]
+
+	if serviceName == "AuthService" || serviceName == "VoiceControlService" {
+		return handler(srv, ss)
+	}
+
+	s.logger.Debug("Authentication required for streaming", "service", serviceName, "method", info.FullMethod)
+
+	md, ok := metadata.FromIncomingContext(ss.Context())
+	if !ok {
+		return status.Errorf(codes.Unauthenticated, "missing metadata for %s", info.FullMethod)
+	}
+
+	tokens := md.Get("authorization")
+	if len(tokens) == 0 {
+		return status.Errorf(codes.Unauthenticated, "missing authorization token for %s", info.FullMethod)
+	}
+	token := strings.TrimPrefix(tokens[0], "Bearer ")
+
+	minRole, _ := utils.GetMinimumRoleForMethod(pathName)
+
+	s.settingsState.RLock()
+	claims, err := utils.GetTokenClaims(token, minRole, s.settingsState.Security.Token.PrivateKeyFile, s.settingsState.Security.Token.PublicKeyFile)
+	s.settingsState.RUnlock()
+	if err != nil {
+		s.logger.Error("Stream authentication error", "method", info.FullMethod, "error", err)
+		return status.Errorf(codes.Unauthenticated, "authentication error for %s: %v", info.FullMethod, err)
+	}
+
+	if claims == nil {
+		return status.Errorf(codes.Unauthenticated, "unauthenticated streaming request to %s", info.FullMethod)
+	}
+
+	ctx := context.WithValue(ss.Context(), utils.ClientIDKey, claims.ClientGuid)
+	return handler(srv, &wrappedStream{ServerStream: ss, ctx: ctx})
 }

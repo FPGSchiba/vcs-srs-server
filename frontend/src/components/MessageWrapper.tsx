@@ -10,7 +10,7 @@ function MessageWrapper() {
 
     useEffect(() => {
         Events.On("notification", (event) => {
-            const notification = event.data[0] as Notification;
+            const notification = event.data as Notification;
             setNotifications((prev) => {
                 if (prev.findIndex((n) => n.notification.id === notification.id) === -1) {
                     return [...prev, {notification, timestamp: new Date()}];

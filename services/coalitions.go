@@ -51,6 +51,7 @@ func (c *CoalitionService) AddCoalition(coalition state.Coalition) {
 		Name: events.CoalitionsChanged,
 		Data: c.App.SettingsState.Coalitions,
 	})
+	c.App.EmitEvent(events.Event{Name: events.CoalitionsChanged, Data: c.App.SettingsState.Snapshot()})
 	c.App.Notify(events.NewNotification("Coalition added", fmt.Sprintf("Coalition %s added", coalition.Name), "info"))
 }
 
@@ -68,6 +69,7 @@ func (c *CoalitionService) RemoveCoalition(coalition state.Coalition) {
 		Name: events.CoalitionsChanged,
 		Data: c.App.SettingsState.Coalitions,
 	})
+	c.App.EmitEvent(events.Event{Name: events.CoalitionsChanged, Data: c.App.SettingsState.Snapshot()})
 	c.App.Notify(events.NewNotification("Coalition removed", fmt.Sprintf("Coalition %s removed", coalition.Name), "info"))
 }
 
@@ -90,5 +92,6 @@ func (c *CoalitionService) UpdateCoalition(coalition state.Coalition) {
 		Name: events.CoalitionsChanged,
 		Data: c.App.SettingsState.Coalitions,
 	})
+	c.App.EmitEvent(events.Event{Name: events.CoalitionsChanged, Data: c.App.SettingsState.Snapshot()})
 	c.App.Notify(events.NewNotification("Coalition updated", fmt.Sprintf("Coalition %s updated", coalition.Name), "info"))
 }

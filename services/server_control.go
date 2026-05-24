@@ -26,7 +26,7 @@ func (c *ControlService) StopServer() {
 }
 
 // GetServerStatus returns the status of the HTTP and Voice servers
-func (c *ControlService) GetServerStatus() *state.AdminState {
+func (c *ControlService) GetServerStatus() state.AdminStateSnapshot {
 	return c.App.GetServerStatus()
 }
 

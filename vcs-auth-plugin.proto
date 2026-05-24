@@ -5,42 +5,137 @@ package vcsauthpb;
 option go_package = "github.com/FPGSchiba/vcs-srs-server/vcsauthpb";
 
 service AuthPluginService {
-  // Configure the plugin with settings
+  // Configure the plugin with global/system-level settings
   rpc Configure(ConfigureRequest) returns (ConfigureResponse);
-  // Vanguard login (Using email and password > Connects to Wix backend)
-  rpc Login(ClientLoginRequest) returns (ServerLoginResponse);
+
+  // Discover which authentication flows this plugin provides
+  rpc GetSupportedFlows(FlowDiscoveryRequest) returns (FlowDiscoveryResponse);
+
+  // Provide flow-specific settings (e.g., OIDC client secrets, API keys)
+  rpc ConfigureFlow(ConfigureFlowRequest) returns (ConfigureFlowResponse);
+
+  // Start a new authentication flow
+  rpc StartAuth(StartAuthRequest) returns (AuthStepResponse);
+
+  // Continue an existing authentication flow
+  rpc ContinueAuth(ContinueAuthRequest) returns (AuthStepResponse);
 }
 
+// ========== Global Plugin Configuration ==========
+
 message ConfigureRequest {
-  string plugin_name = 1; // Name of the plugin
-  map<string, string> settings = 2; // Map of settings for the plugin
+  string plugin_name = 1;
+  map<string, string> global_settings = 2; // System-wide settings (e.g., log level, backend URL)
 }
 
 message ConfigureResponse {
-  bool success = 1; // Indicates if the configuration was successful
-  string message = 2; // Optional message for additional information
-  string version = 3; // Version of the plugin
-}
-
-message ClientLoginRequest {
-  map<string, string> credentials = 1; // Map of credentials
-}
-
-message ServerLoginResponse {
   bool success = 1;
-  oneof login_result {
-    LoginResult result = 2; // Result of the vanguard login
-    string error_message = 3; // Error message if login failed
+  string message = 2;
+  string version = 3;
+}
+
+// ========== Flow Discovery ==========
+
+message FlowDiscoveryRequest {}
+
+message FlowDiscoveryResponse {
+  repeated AuthFlowDefinition flows = 1;
+}
+
+message AuthFlowDefinition {
+  string flow_id = 1;                              // Unique flow identifier (e.g., "oidc_mfa")
+  string description = 2;                          // Human-readable description
+  repeated FlowSettingDef required_settings = 3;   // Settings the server must provide via ConfigureFlow
+  repeated AuthStepDefinition steps = 4;           // Ordered steps in this flow
+}
+
+message FlowSettingDef {
+  string key = 1;                // Setting key (e.g., "client_id", "api_key")
+  string label = 2;              // Display label (e.g., "Password")
+  string description = 3;        // Human-readable description
+  string type = 4;               // Type hint: "string", "secret", "url", "boolean", "number"
+  bool required = 5;             // Whether this setting is mandatory
+  string default_value = 6;      // Optional default value
+}
+
+message AuthStepDefinition {
+  string step_id = 1;                        // Unique ID for this step (e.g., "password_entry")
+  string step_name = 2;                      // Human-readable name (e.g., "Password Login")
+  string step_description = 3;               // Longer description for UI
+  string step_type = 4;                      // Logical type (e.g., "password", "oidc_redirect", "totp")
+  repeated FieldDefinition required_fields = 5; // Structured input field definitions
+  map<string, string> metadata = 6;          // UI hints or extra info (e.g., redirect URL, QR code data)
+}
+
+message FieldDefinition {
+  string key = 1;           // Key to be returned by client in step_data / first_step_input
+  string label = 2;              // Display label (e.g., "Password")
+  string description = 3;        // Optional help text / tooltip
+  string type = 4;               // Data type (e.g., "string", "password", "otp", "boolean")
+  bool required = 5;             // Is this field mandatory?
+  string validation_regex = 6;   // Optional regex to validate field input
+  string default_value = 7;      // Optional default value
+}
+
+// ========== Per-Flow Configuration ==========
+
+message ConfigureFlowRequest {
+  string flow_id = 1;                    // Which flow to configure
+  map<string, string> settings = 2;      // Key-value pairs matching FlowSettingDef
+}
+
+message ConfigureFlowResponse {
+  bool success = 1;
+  string message = 2;                    // Error or confirmation message
+}
+
+// ========== Authentication Flow Execution ==========
+
+message StartAuthRequest {
+  string flow_id = 1;                        // Which flow to start
+  map<string, string> first_step_input = 2;  // User-provided fields for the first step
+}
+
+message ContinueAuthRequest {
+  string session_id = 1;                 // Session ID from previous step
+  map<string, string> step_data = 2;     // User-provided data for current step
+}
+
+message AuthStepResponse {
+  string session_id = 1;                 // Session ID to track flow state
+  AuthStepStatus status = 2;
+
+  oneof step_result {
+    NextStepRequired next_step = 3;      // More steps required
+    LoginResult complete = 4;            // Authentication complete
+    string error_message = 5;            // Authentication failed
   }
 }
 
+enum AuthStepStatus {
+  AUTH_STATUS_UNKNOWN = 0;
+  AUTH_CONTINUE = 1;                     // Client must call ContinueAuth
+  AUTH_COMPLETE = 2;                     // Flow finished successfully
+  AUTH_FAILED = 3;                       // Flow aborted or failed
+}
+
+message NextStepRequired {
+  string step_id = 1;                    // Unique ID of next step
+  string step_name = 2;                  // Human-readable name
+  string step_description = 3;           // Description for UI
+  string step_type = 4;                  // Type of next step
+  repeated FieldDefinition required_fields = 5; // Fields client must provide
+  map<string, string> metadata = 6;      // Step-specific metadata (e.g., OIDC redirect URL, QR code)
+}
+
 message LoginResult {
-  repeated UnitSelection available_units = 1; // List of available unit IDs for the vanguard client
-  repeated uint32 available_roles = 2; // Optional list of roles if the user has permissions to select roles
-  string player_name = 3; // Name of the player after successful login
+  repeated UnitSelection available_units = 1;
+  repeated uint32 available_roles = 2;
+  string player_name = 3;
+  string session_token = 4;              // Session/bearer token for authenticated user
 }
 
 message UnitSelection {
-  string unit_id = 1; // The selected unit ID
-  string unit_name = 2; // The name of the selected unit
+  string unit_id = 1;
+  string unit_name = 2;
 }

@@ -10,7 +10,6 @@ import ClientListPage from "../pages/ClientList";
 import BanManagement from "../pages/BanManagement";
 import FrequencyPage from "../pages/FrequencyPage";
 
-
 function ContentWrapper() {
     const [value, setValue] = React.useState('1');
 
@@ -28,9 +27,10 @@ function ContentWrapper() {
                         <Tab className="nav nav-tab nav-tab-button" label="Clients" value="3" />
                         <Tab className="nav nav-tab nav-tab-button" label="Banned Clients" value="4" />
                         <Tab className="nav nav-tab nav-tab-button" label="Frequencies" value="5" />
+
                     </TabList>
                 </Box>
-                <TabPanel className="nav nav-tab nav-tab-container" value="1" >
+                <TabPanel className="nav nav-tab nav-tab-container" value="1">
                     <SettingsPage />
                 </TabPanel>
                 <TabPanel className="nav nav-tab nav-tab-container" value="2">
@@ -45,6 +45,7 @@ function ContentWrapper() {
                 <TabPanel className="nav nav-tab nav-tab-container" value="5">
                     <FrequencyPage />
                 </TabPanel>
+
             </TabContext>
         </Box>
     );

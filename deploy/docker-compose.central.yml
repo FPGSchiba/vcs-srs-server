@@ -1,0 +1,45 @@
+networks:
+  vcs-net:
+    driver: bridge
+
+services:
+  control:
+    image: ghcr.io/fpgschiba/vcs-srs-server:latest
+    command: ["--mode", "control", "--config", "/config/control.yaml"]
+    restart: unless-stopped
+    ports:
+      - "14446:14446"
+      - "14448:14448"
+    volumes:
+      - ./config:/config:ro
+      - ./certs:/certs:ro
+    networks:
+      - vcs-net
+
+  voice-eu:
+    image: ghcr.io/fpgschiba/vcs-srs-server:latest
+    command: ["--mode", "voice", "--config", "/config/voice-eu.yaml"]
+    restart: unless-stopped
+    ports:
+      - "5002:5002/udp"
+    volumes:
+      - ./config:/config:ro
+      - ./certs:/certs:ro
+    networks:
+      - vcs-net
+    depends_on:
+      - control
+
+  voice-global:
+    image: ghcr.io/fpgschiba/vcs-srs-server:latest
+    command: ["--mode", "voice", "--global", "--config", "/config/voice-global.yaml"]
+    restart: unless-stopped
+    ports:
+      - "5003:5003/udp"
+    volumes:
+      - ./config:/config:ro
+      - ./certs:/certs:ro
+    networks:
+      - vcs-net
+    depends_on:
+      - control

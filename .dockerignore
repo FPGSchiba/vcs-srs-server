@@ -1,0 +1,7 @@
+.git/
+.github/
+.superpowers/
+docs/
+deploy/
+bin/
+*.exe

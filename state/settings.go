@@ -9,6 +9,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const (
+	DefaultHost = "0.0.0.0"
+	DefaultPort = 5002
+
+	DefaultVoiceControlPort = 14448
+	DefaultVoiceControlHost = "0.0.0.0"
+)
+
 // SettingsState holds the current state of the settings
 type SettingsState struct {
 	sync.RWMutex `yaml:"-"`
@@ -18,6 +26,7 @@ type SettingsState struct {
 	General      GeneralSettings      `yaml:"general"`
 	Security     SecuritySettings     `yaml:"security"`
 	VoiceControl VoiceControlSettings `yaml:"voiceControl"`
+	Api          ApiSettings          `yaml:"api"`
 	file         string               `yaml:"-"`
 }
 
@@ -60,10 +69,21 @@ type SecuritySettings struct {
 }
 
 type PluginSettings struct {
-	Name          string            `yaml:"name"`
-	Enabled       bool              `yaml:"enabled"`
-	Address       string            `yaml:"address"`
-	Configuration map[string]string `yaml:"configuration"` // Generic configuration for the plugin
+	Name            string            `yaml:"name"`
+	Enabled         bool              `yaml:"enabled"`
+	Address         string            `yaml:"address"`
+	CertificateFile string            `yaml:"certificateFile"` // path to plugin's TLS cert (PEM); empty = insecure
+	Configurations  FlowConfiguration `yaml:"configurations"`
+}
+
+type FlowConfiguration struct {
+	Flows          []PluginFlowSettings `yaml:"flows"`
+	GlobalSettings *map[string]string   `yaml:"globalSettings"`
+}
+
+type PluginFlowSettings struct {
+	FlowID        string            `yaml:"flowId"`
+	Configuration map[string]string `yaml:"configuration"`
 }
 
 type TokenSettings struct {
@@ -80,6 +100,13 @@ type VoiceControlSettings struct {
 	ListenHost      string `yaml:"listenHost"`
 	CertificateFile string `yaml:"certificateFile"`
 	PrivateKeyFile  string `yaml:"privateKeyFile"`
+	PublicAddr      string `yaml:"publicAddr"` // public UDP host:port of this voice node
+	Region          string `yaml:"region"`     // region hint: "eu", "us", "apac"
+	ServerName      string `yaml:"serverName"` // TLS ServerName used by voice clients and cert SANs
+}
+
+type ApiSettings struct {
+	Key string `yaml:"key"`
 }
 
 func GetSettingsState(file string) (*SettingsState, error) {
@@ -88,23 +115,20 @@ func GetSettingsState(file string) (*SettingsState, error) {
 	if err != nil {
 		// If the file doesn't exist, create a new one with default values
 		if os.IsNotExist(err) {
-			const defaultHost = "0.0.0.0"
-			const defaultPort = 5002
-
 			settings := &SettingsState{
 				file: file,
 				Servers: ServerSettings{
 					HTTP: ServerSetting{
-						Host: defaultHost,
+						Host: DefaultHost,
 						Port: 80,
 					},
 					Voice: ServerSetting{
-						Host: defaultHost,
-						Port: defaultPort,
+						Host: DefaultHost,
+						Port: DefaultPort,
 					},
 					Control: ServerSetting{
-						Host: defaultHost,
-						Port: defaultPort,
+						Host: DefaultHost,
+						Port: DefaultPort,
 					},
 				},
 				Coalitions: make([]Coalition, 0),
@@ -128,11 +152,16 @@ func GetSettingsState(file string) (*SettingsState, error) {
 					},
 				},
 				VoiceControl: VoiceControlSettings{
-					Port:            14448,
-					RemoteHost:      "localhost", // Default remote host is empty
-					ListenHost:      defaultHost,
+					Port:            DefaultVoiceControlPort,
+					RemoteHost:      "localhost",
+					ListenHost:      DefaultVoiceControlHost,
 					CertificateFile: "/path/to/voicecontrol-cert.pem",
 					PrivateKeyFile:  "/path/to/voicecontrol-private-key.pem",
+					PublicAddr:      "",
+					Region:          "",
+				},
+				Api: ApiSettings{
+					Key: "",
 				},
 			}
 			err = settings.Save()
@@ -181,12 +210,12 @@ func (s *SettingsState) GetAllPluginNames() []string {
 	return pluginNames
 }
 
-func (s *SettingsState) GetPluginConfiguration(pluginName string) (map[string]string, bool) {
+func (s *SettingsState) GetPluginConfiguration(pluginName string) (*FlowConfiguration, bool) {
 	s.RLock()
 	defer s.RUnlock()
 	for _, plugin := range s.Security.Plugins {
 		if plugin.Name == pluginName {
-			return plugin.Configuration, true
+			return &plugin.Configurations, true
 		}
 	}
 	return nil, false
@@ -198,6 +227,17 @@ func (s *SettingsState) GetPluginAddress(pluginName string) (string, bool) {
 	for _, plugin := range s.Security.Plugins {
 		if plugin.Name == pluginName {
 			return plugin.Address, true
+		}
+	}
+	return "", false
+}
+
+func (s *SettingsState) GetPluginCertificateFile(pluginName string) (string, bool) {
+	s.RLock()
+	defer s.RUnlock()
+	for _, plugin := range s.Security.Plugins {
+		if plugin.Name == pluginName {
+			return plugin.CertificateFile, true
 		}
 	}
 	return "", false
