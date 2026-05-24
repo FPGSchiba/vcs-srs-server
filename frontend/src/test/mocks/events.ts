@@ -4,10 +4,10 @@ export class Notification {
   message: string
   level: string
 
-  constructor(init: Partial<Omit<Notification, never>> = {}) {
-    this.id = (init as Record<string, string>).id ?? String(Math.random())
-    this.title = (init as Record<string, string>).title ?? ''
-    this.message = (init as Record<string, string>).message ?? ''
-    this.level = (init as Record<string, string>).level ?? 'info'
+  constructor(init: Partial<Notification> = {}) {
+    this.id = init.id ?? String(Math.random())
+    this.title = init.title ?? ''
+    this.message = init.message ?? ''
+    this.level = init.level ?? 'info'
   }
 }

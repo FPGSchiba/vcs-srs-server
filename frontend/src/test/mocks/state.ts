@@ -1,5 +1,3 @@
-import { vi } from 'vitest'
-
 export interface ServiceStatus {
   IsRunning: boolean
   IsNeeded: boolean
@@ -27,9 +25,37 @@ export interface ServerSettings {
   Control: ServerConfig
 }
 
+export interface PluginFlowSettings {
+  FlowID: string
+  Configuration: Record<string, string>
+}
+
+export interface FlowConfiguration {
+  Flows: PluginFlowSettings[]
+  GlobalSettings: Record<string, string> | null
+}
+
+export interface PluginSettings {
+  Name: string
+  Enabled: boolean
+  Address: string
+  CertificateFile: string
+  Configurations: FlowConfiguration
+}
+
+export interface TokenSettings {
+  Expiration: number
+  PrivateKeyFile: string
+  PublicKeyFile: string
+  Issuer: string
+  Subject: string
+}
+
 export interface SecuritySettings {
   EnableGuestAuth: boolean
   EnablePluginAuth: boolean
+  Plugins: PluginSettings[]
+  Token: TokenSettings
 }
 
 export interface VoiceControlSettings {
@@ -54,21 +80,38 @@ export interface FrequencySettingsInterface {
   TestFrequencies: number[]
 }
 
+export interface ApiSettings {
+  Key: string
+}
+
 export interface SettingsState {
   General: GeneralSettings
   Servers: ServerSettings
   Security: SecuritySettings
   VoiceControl: VoiceControlSettings
   Frequencies: FrequencySettingsInterface
+  Coalitions: Coalition[]
+  Api: ApiSettings
 }
 
 export interface ClientState {
   UnitId: string
   Name: string
-  Coalition?: string
+  Coalition: string
+  Role: number
+  LastUpdate: string | null
+}
+
+export interface Radio {
+  ID: number
+  Name: string
+  Frequency: number
+  Enabled: boolean
+  IsIntercom: boolean
 }
 
 export interface RadioState {
+  Radios: Radio[]
   Muted: boolean
 }
 
