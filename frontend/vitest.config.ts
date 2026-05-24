@@ -23,8 +23,10 @@ export default defineConfig({
         replacement: `${path.resolve(__dirname, 'src/test/mocks')}/`,
       },
       {
+        // @wailsio/runtime/types/events is not in the package exports map.
+        // Redirect to the dist JS file so Vite resolves it; vi.mock in setup.ts overrides it for tests.
         find: '@wailsio/runtime/types/events',
-        replacement: path.resolve(__dirname, 'node_modules/@wailsio/runtime/types/events.d.ts'),
+        replacement: path.resolve(__dirname, 'node_modules/@wailsio/runtime/dist/events.js'),
       },
     ],
   },
