@@ -12,7 +12,117 @@ import (
 	"github.com/FPGSchiba/vcs-srs-server/state"
 )
 
-// --- Query resolvers ---
+// UpdateGeneralSettings is the resolver for the updateGeneralSettings field.
+func (r *mutationResolver) UpdateGeneralSettings(ctx context.Context, input generated.GeneralSettingsInput) (*generated.MutationResult, error) {
+	r.App.SaveGeneralSettings(&state.GeneralSettings{MaxRadiosPerUser: input.MaxRadiosPerUser})
+	return ok("General settings updated"), nil
+}
+
+// UpdateSecuritySettings is the resolver for the updateSecuritySettings field.
+func (r *mutationResolver) UpdateSecuritySettings(ctx context.Context, input generated.SecuritySettingsInput) (*generated.MutationResult, error) {
+	r.App.SaveSecuritySettings(input.EnableGuestAuth, input.EnablePluginAuth)
+	return ok("Security settings updated"), nil
+}
+
+// UpdateVoiceControlSettings is the resolver for the updateVoiceControlSettings field.
+func (r *mutationResolver) UpdateVoiceControlSettings(ctx context.Context, input generated.VoiceControlSettingsInput) (*generated.MutationResult, error) {
+	r.App.SaveVoiceControlSettings(state.VoiceControlSettings{
+		Port:            input.Port,
+		RemoteHost:      input.RemoteHost,
+		ListenHost:      input.ListenHost,
+		CertificateFile: input.CertificateFile,
+		PrivateKeyFile:  input.PrivateKeyFile,
+	})
+	return ok("VoiceControl settings updated"), nil
+}
+
+// UpdateFrequencySettings is the resolver for the updateFrequencySettings field.
+func (r *mutationResolver) UpdateFrequencySettings(ctx context.Context, input generated.FrequencySettingsInput) (*generated.MutationResult, error) {
+	testFreqs := make([]float32, len(input.TestFrequencies))
+	for i, f := range input.TestFrequencies {
+		testFreqs[i] = float32(f)
+	}
+	globalFreqs := make([]float32, len(input.GlobalFrequencies))
+	for i, f := range input.GlobalFrequencies {
+		globalFreqs[i] = float32(f)
+	}
+	r.App.SaveFrequencySettings(&state.FrequencySettings{
+		TestFrequencies:   testFreqs,
+		GlobalFrequencies: globalFreqs,
+	})
+	return ok("Frequency settings updated"), nil
+}
+
+// UpdateCoalitions is the resolver for the updateCoalitions field.
+func (r *mutationResolver) UpdateCoalitions(ctx context.Context, coalitions []*generated.CoalitionInput) (*generated.MutationResult, error) {
+	stateCoalitions := make([]state.Coalition, 0, len(coalitions))
+	for _, c := range coalitions {
+		password := ""
+		if c.Password != nil {
+			password = *c.Password
+		}
+		stateCoalitions = append(stateCoalitions, state.Coalition{
+			Name:        c.Name,
+			Color:       c.Color,
+			Description: c.Description,
+			Password:    password,
+		})
+	}
+	r.App.SaveCoalitions(stateCoalitions)
+	return ok("Coalitions updated"), nil
+}
+
+// UpdateServerSettings is the resolver for the updateServerSettings field.
+func (r *mutationResolver) UpdateServerSettings(ctx context.Context, input generated.ServerSettingsInput) (*generated.MutationResult, error) {
+	r.App.SaveServerSettings(&state.ServerSettings{
+		HTTP:    state.ServerSetting{Host: input.HTTP.Host, Port: input.HTTP.Port},
+		Voice:   state.ServerSetting{Host: input.Voice.Host, Port: input.Voice.Port},
+		Control: state.ServerSetting{Host: input.Control.Host, Port: input.Control.Port},
+	})
+	return ok("Server settings updated"), nil
+}
+
+// StartServer is the resolver for the startServer field.
+func (r *mutationResolver) StartServer(ctx context.Context) (*generated.MutationResult, error) {
+	r.App.StartServer()
+	return ok("Server started"), nil
+}
+
+// StopServer is the resolver for the stopServer field.
+func (r *mutationResolver) StopServer(ctx context.Context) (*generated.MutationResult, error) {
+	r.App.StopServer()
+	return ok("Server stopped"), nil
+}
+
+// KickClient is the resolver for the kickClient field.
+func (r *mutationResolver) KickClient(ctx context.Context, clientID string, reason string) (*generated.MutationResult, error) {
+	r.App.KickClient(clientID, reason)
+	return ok("Client kicked"), nil
+}
+
+// BanClient is the resolver for the banClient field.
+func (r *mutationResolver) BanClient(ctx context.Context, clientID string, reason string) (*generated.MutationResult, error) {
+	r.App.BanClient(clientID, reason)
+	return ok("Client banned"), nil
+}
+
+// UnbanClient is the resolver for the unbanClient field.
+func (r *mutationResolver) UnbanClient(ctx context.Context, clientID string) (*generated.MutationResult, error) {
+	r.App.UnbanClient(clientID)
+	return ok("Client unbanned"), nil
+}
+
+// MuteClient is the resolver for the muteClient field.
+func (r *mutationResolver) MuteClient(ctx context.Context, clientID string) (*generated.MutationResult, error) {
+	r.App.MuteClient(clientID)
+	return ok("Client muted"), nil
+}
+
+// UnmuteClient is the resolver for the unmuteClient field.
+func (r *mutationResolver) UnmuteClient(ctx context.Context, clientID string) (*generated.MutationResult, error) {
+	r.App.UnmuteClient(clientID)
+	return ok("Client unmuted"), nil
+}
 
 // SystemInfo resolves Query.systemInfo
 func (r *queryResolver) SystemInfo(ctx context.Context) (*generated.SystemInfo, error) {
@@ -142,118 +252,42 @@ func (r *queryResolver) Settings(ctx context.Context) (*generated.Settings, erro
 	}, nil
 }
 
-// --- Mutation resolvers ---
+// DistributionStatus is the resolver for the distributionStatus field.
+func (r *queryResolver) DistributionStatus(ctx context.Context) (*generated.DistributionStatus, error) {
+	view := r.App.GetDistributionStatus()
 
-// UpdateGeneralSettings is the resolver for the updateGeneralSettings field.
-func (r *mutationResolver) UpdateGeneralSettings(ctx context.Context, input generated.GeneralSettingsInput) (*generated.MutationResult, error) {
-	r.App.SaveGeneralSettings(&state.GeneralSettings{MaxRadiosPerUser: input.MaxRadiosPerUser})
-	return ok("General settings updated"), nil
-}
-
-// UpdateSecuritySettings is the resolver for the updateSecuritySettings field.
-func (r *mutationResolver) UpdateSecuritySettings(ctx context.Context, input generated.SecuritySettingsInput) (*generated.MutationResult, error) {
-	r.App.SaveSecuritySettings(input.EnableGuestAuth, input.EnablePluginAuth)
-	return ok("Security settings updated"), nil
-}
-
-// UpdateVoiceControlSettings is the resolver for the updateVoiceControlSettings field.
-func (r *mutationResolver) UpdateVoiceControlSettings(ctx context.Context, input generated.VoiceControlSettingsInput) (*generated.MutationResult, error) {
-	r.App.SaveVoiceControlSettings(state.VoiceControlSettings{
-		Port:            input.Port,
-		RemoteHost:      input.RemoteHost,
-		ListenHost:      input.ListenHost,
-		CertificateFile: input.CertificateFile,
-		PrivateKeyFile:  input.PrivateKeyFile,
-	})
-	return ok("VoiceControl settings updated"), nil
-}
-
-// UpdateFrequencySettings is the resolver for the updateFrequencySettings field.
-func (r *mutationResolver) UpdateFrequencySettings(ctx context.Context, input generated.FrequencySettingsInput) (*generated.MutationResult, error) {
-	testFreqs := make([]float32, len(input.TestFrequencies))
-	for i, f := range input.TestFrequencies {
-		testFreqs[i] = float32(f)
-	}
-	globalFreqs := make([]float32, len(input.GlobalFrequencies))
-	for i, f := range input.GlobalFrequencies {
-		globalFreqs[i] = float32(f)
-	}
-	r.App.SaveFrequencySettings(&state.FrequencySettings{
-		TestFrequencies:   testFreqs,
-		GlobalFrequencies: globalFreqs,
-	})
-	return ok("Frequency settings updated"), nil
-}
-
-// UpdateCoalitions is the resolver for the updateCoalitions field.
-func (r *mutationResolver) UpdateCoalitions(ctx context.Context, coalitions []*generated.CoalitionInput) (*generated.MutationResult, error) {
-	stateCoalitions := make([]state.Coalition, 0, len(coalitions))
-	for _, c := range coalitions {
-		password := ""
-		if c.Password != nil {
-			password = *c.Password
+	nodes := make([]*generated.VoiceNodeStatus, 0, len(view.Nodes))
+	for _, n := range view.Nodes {
+		heartbeat := ""
+		if !n.LastHeartbeat.IsZero() {
+			heartbeat = n.LastHeartbeat.Format("2006-01-02T15:04:05Z07:00")
 		}
-		stateCoalitions = append(stateCoalitions, state.Coalition{
-			Name:        c.Name,
-			Color:       c.Color,
-			Description: c.Description,
-			Password:    password,
+		nodes = append(nodes, &generated.VoiceNodeStatus{
+			ID:               n.ServerID,
+			Address:          n.Address,
+			IsGlobal:         n.IsGlobal,
+			Region:           n.Region,
+			Coalitions:       n.Coalitions,
+			ConnectedClients: n.ClientCount,
+			LatencyMs:        int(n.LatencyMs),
+			IsHealthy:        n.IsHealthy,
+			LastHeartbeat:    heartbeat,
 		})
 	}
-	r.App.SaveCoalitions(stateCoalitions)
-	return ok("Coalitions updated"), nil
-}
 
-// UpdateServerSettings is the resolver for the updateServerSettings field.
-func (r *mutationResolver) UpdateServerSettings(ctx context.Context, input generated.ServerSettingsInput) (*generated.MutationResult, error) {
-	r.App.SaveServerSettings(&state.ServerSettings{
-		HTTP:    state.ServerSetting{Host: input.HTTP.Host, Port: input.HTTP.Port},
-		Voice:   state.ServerSetting{Host: input.Voice.Host, Port: input.Voice.Port},
-		Control: state.ServerSetting{Host: input.Control.Host, Port: input.Control.Port},
-	})
-	return ok("Server settings updated"), nil
-}
+	assignments := make([]*generated.ClientNodeAssignment, 0, len(view.ClientNodeMap))
+	for clientID, nodeID := range view.ClientNodeMap {
+		assignments = append(assignments, &generated.ClientNodeAssignment{
+			ClientID: clientID.String(),
+			NodeID:   nodeID,
+		})
+	}
 
-// StartServer is the resolver for the startServer field.
-func (r *mutationResolver) StartServer(ctx context.Context) (*generated.MutationResult, error) {
-	r.App.StartServer()
-	return ok("Server started"), nil
-}
-
-// StopServer is the resolver for the stopServer field.
-func (r *mutationResolver) StopServer(ctx context.Context) (*generated.MutationResult, error) {
-	r.App.StopServer()
-	return ok("Server stopped"), nil
-}
-
-// KickClient is the resolver for the kickClient field.
-func (r *mutationResolver) KickClient(ctx context.Context, clientID string, reason string) (*generated.MutationResult, error) {
-	r.App.KickClient(clientID, reason)
-	return ok("Client kicked"), nil
-}
-
-// BanClient is the resolver for the banClient field.
-func (r *mutationResolver) BanClient(ctx context.Context, clientID string, reason string) (*generated.MutationResult, error) {
-	r.App.BanClient(clientID, reason)
-	return ok("Client banned"), nil
-}
-
-// UnbanClient is the resolver for the unbanClient field.
-func (r *mutationResolver) UnbanClient(ctx context.Context, clientID string) (*generated.MutationResult, error) {
-	r.App.UnbanClient(clientID)
-	return ok("Client unbanned"), nil
-}
-
-// MuteClient is the resolver for the muteClient field.
-func (r *mutationResolver) MuteClient(ctx context.Context, clientID string) (*generated.MutationResult, error) {
-	r.App.MuteClient(clientID)
-	return ok("Client muted"), nil
-}
-
-// UnmuteClient is the resolver for the unmuteClient field.
-func (r *mutationResolver) UnmuteClient(ctx context.Context, clientID string) (*generated.MutationResult, error) {
-	r.App.UnmuteClient(clientID)
-	return ok("Client unmuted"), nil
+	return &generated.DistributionStatus{
+		GlobalAddr:        view.GlobalAddr,
+		Nodes:             nodes,
+		ClientAssignments: assignments,
+	}, nil
 }
 
 // Mutation returns generated.MutationResolver implementation.
@@ -265,7 +299,6 @@ func (r *Resolver) Query() generated.QueryResolver { return &queryResolver{r} }
 type mutationResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
 
-// ok returns a successful MutationResult.
 func ok(msg string) *generated.MutationResult {
 	return &generated.MutationResult{Success: true, Message: &msg}
 }

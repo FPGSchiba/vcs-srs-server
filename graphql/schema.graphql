@@ -3,6 +3,7 @@ type Query {
   clients: [Client!]!
   bannedClients: [BannedClient!]!
   settings: Settings!
+  distributionStatus: DistributionStatus!
 }
 
 type Mutation {
@@ -84,6 +85,29 @@ type Coalition { name: String!, color: String!, description: String! }
 type ServerSettings { http: ServerSetting!, voice: ServerSetting!, control: ServerSetting! }
 type ServerSetting { host: String!, port: Int! }
 type MutationResult { success: Boolean!, message: String }
+
+type DistributionStatus {
+  globalAddr: String!
+  nodes: [VoiceNodeStatus!]!
+  clientAssignments: [ClientNodeAssignment!]!
+}
+
+type VoiceNodeStatus {
+  id: ID!
+  address: String!
+  isGlobal: Boolean!
+  region: String!
+  coalitions: [String!]!
+  connectedClients: Int!
+  latencyMs: Int!
+  isHealthy: Boolean!
+  lastHeartbeat: String!
+}
+
+type ClientNodeAssignment {
+  clientId: ID!
+  nodeId: String!
+}
 
 input GeneralSettingsInput { maxRadiosPerUser: Int! }
 input SecuritySettingsInput { enablePluginAuth: Boolean!, enableGuestAuth: Boolean! }

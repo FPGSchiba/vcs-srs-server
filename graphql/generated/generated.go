@@ -51,10 +51,21 @@ type ComplexityRoot struct {
 		UnitID     func(childComplexity int) int
 	}
 
+	ClientNodeAssignment struct {
+		ClientID func(childComplexity int) int
+		NodeID   func(childComplexity int) int
+	}
+
 	Coalition struct {
 		Color       func(childComplexity int) int
 		Description func(childComplexity int) int
 		Name        func(childComplexity int) int
+	}
+
+	DistributionStatus struct {
+		ClientAssignments func(childComplexity int) int
+		GlobalAddr        func(childComplexity int) int
+		Nodes             func(childComplexity int) int
 	}
 
 	FrequencySettings struct {
@@ -94,10 +105,11 @@ type ComplexityRoot struct {
 	}
 
 	Query struct {
-		BannedClients func(childComplexity int) int
-		Clients       func(childComplexity int) int
-		Settings      func(childComplexity int) int
-		SystemInfo    func(childComplexity int) int
+		BannedClients      func(childComplexity int) int
+		Clients            func(childComplexity int) int
+		DistributionStatus func(childComplexity int) int
+		Settings           func(childComplexity int) int
+		SystemInfo         func(childComplexity int) int
 	}
 
 	SecuritySettings struct {
@@ -145,6 +157,18 @@ type ComplexityRoot struct {
 		PrivateKeyFile  func(childComplexity int) int
 		RemoteHost      func(childComplexity int) int
 	}
+
+	VoiceNodeStatus struct {
+		Address          func(childComplexity int) int
+		Coalitions       func(childComplexity int) int
+		ConnectedClients func(childComplexity int) int
+		ID               func(childComplexity int) int
+		IsGlobal         func(childComplexity int) int
+		IsHealthy        func(childComplexity int) int
+		LastHeartbeat    func(childComplexity int) int
+		LatencyMs        func(childComplexity int) int
+		Region           func(childComplexity int) int
+	}
 }
 
 type MutationResolver interface {
@@ -167,6 +191,7 @@ type QueryResolver interface {
 	Clients(ctx context.Context) ([]*Client, error)
 	BannedClients(ctx context.Context) ([]*BannedClient, error)
 	Settings(ctx context.Context) (*Settings, error)
+	DistributionStatus(ctx context.Context) (*DistributionStatus, error)
 }
 
 type executableSchema graphql.ExecutableSchemaState[ResolverRoot, DirectiveRoot, ComplexityRoot]
@@ -251,6 +276,19 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Client.UnitID(childComplexity), true
 
+	case "ClientNodeAssignment.clientId":
+		if e.ComplexityRoot.ClientNodeAssignment.ClientID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClientNodeAssignment.ClientID(childComplexity), true
+	case "ClientNodeAssignment.nodeId":
+		if e.ComplexityRoot.ClientNodeAssignment.NodeID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClientNodeAssignment.NodeID(childComplexity), true
+
 	case "Coalition.color":
 		if e.ComplexityRoot.Coalition.Color == nil {
 			break
@@ -269,6 +307,25 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Coalition.Name(childComplexity), true
+
+	case "DistributionStatus.clientAssignments":
+		if e.ComplexityRoot.DistributionStatus.ClientAssignments == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DistributionStatus.ClientAssignments(childComplexity), true
+	case "DistributionStatus.globalAddr":
+		if e.ComplexityRoot.DistributionStatus.GlobalAddr == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DistributionStatus.GlobalAddr(childComplexity), true
+	case "DistributionStatus.nodes":
+		if e.ComplexityRoot.DistributionStatus.Nodes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DistributionStatus.Nodes(childComplexity), true
 
 	case "FrequencySettings.globalFrequencies":
 		if e.ComplexityRoot.FrequencySettings.GlobalFrequencies == nil {
@@ -468,6 +525,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.Clients(childComplexity), true
+	case "Query.distributionStatus":
+		if e.ComplexityRoot.Query.DistributionStatus == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Query.DistributionStatus(childComplexity), true
 
 	case "Query.settings":
 		if e.ComplexityRoot.Query.Settings == nil {
@@ -639,6 +702,61 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.VoiceControlSettings.RemoteHost(childComplexity), true
 
+	case "VoiceNodeStatus.address":
+		if e.ComplexityRoot.VoiceNodeStatus.Address == nil {
+			break
+		}
+
+		return e.ComplexityRoot.VoiceNodeStatus.Address(childComplexity), true
+	case "VoiceNodeStatus.coalitions":
+		if e.ComplexityRoot.VoiceNodeStatus.Coalitions == nil {
+			break
+		}
+
+		return e.ComplexityRoot.VoiceNodeStatus.Coalitions(childComplexity), true
+	case "VoiceNodeStatus.connectedClients":
+		if e.ComplexityRoot.VoiceNodeStatus.ConnectedClients == nil {
+			break
+		}
+
+		return e.ComplexityRoot.VoiceNodeStatus.ConnectedClients(childComplexity), true
+	case "VoiceNodeStatus.id":
+		if e.ComplexityRoot.VoiceNodeStatus.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.VoiceNodeStatus.ID(childComplexity), true
+	case "VoiceNodeStatus.isGlobal":
+		if e.ComplexityRoot.VoiceNodeStatus.IsGlobal == nil {
+			break
+		}
+
+		return e.ComplexityRoot.VoiceNodeStatus.IsGlobal(childComplexity), true
+	case "VoiceNodeStatus.isHealthy":
+		if e.ComplexityRoot.VoiceNodeStatus.IsHealthy == nil {
+			break
+		}
+
+		return e.ComplexityRoot.VoiceNodeStatus.IsHealthy(childComplexity), true
+	case "VoiceNodeStatus.lastHeartbeat":
+		if e.ComplexityRoot.VoiceNodeStatus.LastHeartbeat == nil {
+			break
+		}
+
+		return e.ComplexityRoot.VoiceNodeStatus.LastHeartbeat(childComplexity), true
+	case "VoiceNodeStatus.latencyMs":
+		if e.ComplexityRoot.VoiceNodeStatus.LatencyMs == nil {
+			break
+		}
+
+		return e.ComplexityRoot.VoiceNodeStatus.LatencyMs(childComplexity), true
+	case "VoiceNodeStatus.region":
+		if e.ComplexityRoot.VoiceNodeStatus.Region == nil {
+			break
+		}
+
+		return e.ComplexityRoot.VoiceNodeStatus.Region(childComplexity), true
+
 	}
 	return 0, false
 }
@@ -734,6 +852,7 @@ var sources = []*ast.Source{
   clients: [Client!]!
   bannedClients: [BannedClient!]!
   settings: Settings!
+  distributionStatus: DistributionStatus!
 }
 
 type Mutation {
@@ -815,6 +934,29 @@ type Coalition { name: String!, color: String!, description: String! }
 type ServerSettings { http: ServerSetting!, voice: ServerSetting!, control: ServerSetting! }
 type ServerSetting { host: String!, port: Int! }
 type MutationResult { success: Boolean!, message: String }
+
+type DistributionStatus {
+  globalAddr: String!
+  nodes: [VoiceNodeStatus!]!
+  clientAssignments: [ClientNodeAssignment!]!
+}
+
+type VoiceNodeStatus {
+  id: ID!
+  address: String!
+  isGlobal: Boolean!
+  region: String!
+  coalitions: [String!]!
+  connectedClients: Int!
+  latencyMs: Int!
+  isHealthy: Boolean!
+  lastHeartbeat: String!
+}
+
+type ClientNodeAssignment {
+  clientId: ID!
+  nodeId: String!
+}
 
 input GeneralSettingsInput { maxRadiosPerUser: Int! }
 input SecuritySettingsInput { enablePluginAuth: Boolean!, enableGuestAuth: Boolean! }
@@ -1357,6 +1499,64 @@ func (ec *executionContext) fieldContext_Client_muted(_ context.Context, field g
 	return fc, nil
 }
 
+func (ec *executionContext) _ClientNodeAssignment_clientId(ctx context.Context, field graphql.CollectedField, obj *ClientNodeAssignment) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ClientNodeAssignment_clientId,
+		func(ctx context.Context) (any, error) {
+			return obj.ClientID, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_ClientNodeAssignment_clientId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClientNodeAssignment",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ClientNodeAssignment_nodeId(ctx context.Context, field graphql.CollectedField, obj *ClientNodeAssignment) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ClientNodeAssignment_nodeId,
+		func(ctx context.Context) (any, error) {
+			return obj.NodeID, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_ClientNodeAssignment_nodeId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClientNodeAssignment",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Coalition_name(ctx context.Context, field graphql.CollectedField, obj *Coalition) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -1439,6 +1639,119 @@ func (ec *executionContext) fieldContext_Coalition_description(_ context.Context
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _DistributionStatus_globalAddr(ctx context.Context, field graphql.CollectedField, obj *DistributionStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_DistributionStatus_globalAddr,
+		func(ctx context.Context) (any, error) {
+			return obj.GlobalAddr, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_DistributionStatus_globalAddr(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "DistributionStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _DistributionStatus_nodes(ctx context.Context, field graphql.CollectedField, obj *DistributionStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_DistributionStatus_nodes,
+		func(ctx context.Context) (any, error) {
+			return obj.Nodes, nil
+		},
+		nil,
+		ec.marshalNVoiceNodeStatus2ᚕᚖgithubᚗcomᚋFPGSchibaᚋvcsᚑsrsᚑserverᚋgraphqlᚋgeneratedᚐVoiceNodeStatusᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_DistributionStatus_nodes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "DistributionStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_VoiceNodeStatus_id(ctx, field)
+			case "address":
+				return ec.fieldContext_VoiceNodeStatus_address(ctx, field)
+			case "isGlobal":
+				return ec.fieldContext_VoiceNodeStatus_isGlobal(ctx, field)
+			case "region":
+				return ec.fieldContext_VoiceNodeStatus_region(ctx, field)
+			case "coalitions":
+				return ec.fieldContext_VoiceNodeStatus_coalitions(ctx, field)
+			case "connectedClients":
+				return ec.fieldContext_VoiceNodeStatus_connectedClients(ctx, field)
+			case "latencyMs":
+				return ec.fieldContext_VoiceNodeStatus_latencyMs(ctx, field)
+			case "isHealthy":
+				return ec.fieldContext_VoiceNodeStatus_isHealthy(ctx, field)
+			case "lastHeartbeat":
+				return ec.fieldContext_VoiceNodeStatus_lastHeartbeat(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type VoiceNodeStatus", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _DistributionStatus_clientAssignments(ctx context.Context, field graphql.CollectedField, obj *DistributionStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_DistributionStatus_clientAssignments,
+		func(ctx context.Context) (any, error) {
+			return obj.ClientAssignments, nil
+		},
+		nil,
+		ec.marshalNClientNodeAssignment2ᚕᚖgithubᚗcomᚋFPGSchibaᚋvcsᚑsrsᚑserverᚋgraphqlᚋgeneratedᚐClientNodeAssignmentᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_DistributionStatus_clientAssignments(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "DistributionStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "clientId":
+				return ec.fieldContext_ClientNodeAssignment_clientId(ctx, field)
+			case "nodeId":
+				return ec.fieldContext_ClientNodeAssignment_nodeId(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type ClientNodeAssignment", field.Name)
 		},
 	}
 	return fc, nil
@@ -2429,6 +2742,43 @@ func (ec *executionContext) fieldContext_Query_settings(_ context.Context, field
 	return fc, nil
 }
 
+func (ec *executionContext) _Query_distributionStatus(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Query_distributionStatus,
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Query().DistributionStatus(ctx)
+		},
+		nil,
+		ec.marshalNDistributionStatus2ᚖgithubᚗcomᚋFPGSchibaᚋvcsᚑsrsᚑserverᚋgraphqlᚋgeneratedᚐDistributionStatus,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Query_distributionStatus(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "globalAddr":
+				return ec.fieldContext_DistributionStatus_globalAddr(ctx, field)
+			case "nodes":
+				return ec.fieldContext_DistributionStatus_nodes(ctx, field)
+			case "clientAssignments":
+				return ec.fieldContext_DistributionStatus_clientAssignments(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type DistributionStatus", field.Name)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Query___type(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -3342,6 +3692,267 @@ func (ec *executionContext) _VoiceControlSettings_privateKeyFile(ctx context.Con
 func (ec *executionContext) fieldContext_VoiceControlSettings_privateKeyFile(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "VoiceControlSettings",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _VoiceNodeStatus_id(ctx context.Context, field graphql.CollectedField, obj *VoiceNodeStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_VoiceNodeStatus_id,
+		func(ctx context.Context) (any, error) {
+			return obj.ID, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_VoiceNodeStatus_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "VoiceNodeStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _VoiceNodeStatus_address(ctx context.Context, field graphql.CollectedField, obj *VoiceNodeStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_VoiceNodeStatus_address,
+		func(ctx context.Context) (any, error) {
+			return obj.Address, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_VoiceNodeStatus_address(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "VoiceNodeStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _VoiceNodeStatus_isGlobal(ctx context.Context, field graphql.CollectedField, obj *VoiceNodeStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_VoiceNodeStatus_isGlobal,
+		func(ctx context.Context) (any, error) {
+			return obj.IsGlobal, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_VoiceNodeStatus_isGlobal(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "VoiceNodeStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _VoiceNodeStatus_region(ctx context.Context, field graphql.CollectedField, obj *VoiceNodeStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_VoiceNodeStatus_region,
+		func(ctx context.Context) (any, error) {
+			return obj.Region, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_VoiceNodeStatus_region(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "VoiceNodeStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _VoiceNodeStatus_coalitions(ctx context.Context, field graphql.CollectedField, obj *VoiceNodeStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_VoiceNodeStatus_coalitions,
+		func(ctx context.Context) (any, error) {
+			return obj.Coalitions, nil
+		},
+		nil,
+		ec.marshalNString2ᚕstringᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_VoiceNodeStatus_coalitions(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "VoiceNodeStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _VoiceNodeStatus_connectedClients(ctx context.Context, field graphql.CollectedField, obj *VoiceNodeStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_VoiceNodeStatus_connectedClients,
+		func(ctx context.Context) (any, error) {
+			return obj.ConnectedClients, nil
+		},
+		nil,
+		ec.marshalNInt2int,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_VoiceNodeStatus_connectedClients(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "VoiceNodeStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _VoiceNodeStatus_latencyMs(ctx context.Context, field graphql.CollectedField, obj *VoiceNodeStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_VoiceNodeStatus_latencyMs,
+		func(ctx context.Context) (any, error) {
+			return obj.LatencyMs, nil
+		},
+		nil,
+		ec.marshalNInt2int,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_VoiceNodeStatus_latencyMs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "VoiceNodeStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _VoiceNodeStatus_isHealthy(ctx context.Context, field graphql.CollectedField, obj *VoiceNodeStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_VoiceNodeStatus_isHealthy,
+		func(ctx context.Context) (any, error) {
+			return obj.IsHealthy, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_VoiceNodeStatus_isHealthy(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "VoiceNodeStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _VoiceNodeStatus_lastHeartbeat(ctx context.Context, field graphql.CollectedField, obj *VoiceNodeStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_VoiceNodeStatus_lastHeartbeat,
+		func(ctx context.Context) (any, error) {
+			return obj.LastHeartbeat, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_VoiceNodeStatus_lastHeartbeat(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "VoiceNodeStatus",
 		Field:      field,
 		IsMethod:   false,
 		IsResolver: false,
@@ -5223,6 +5834,50 @@ func (ec *executionContext) _Client(ctx context.Context, sel ast.SelectionSet, o
 	return out
 }
 
+var clientNodeAssignmentImplementors = []string{"ClientNodeAssignment"}
+
+func (ec *executionContext) _ClientNodeAssignment(ctx context.Context, sel ast.SelectionSet, obj *ClientNodeAssignment) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, clientNodeAssignmentImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ClientNodeAssignment")
+		case "clientId":
+			out.Values[i] = ec._ClientNodeAssignment_clientId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "nodeId":
+			out.Values[i] = ec._ClientNodeAssignment_nodeId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var coalitionImplementors = []string{"Coalition"}
 
 func (ec *executionContext) _Coalition(ctx context.Context, sel ast.SelectionSet, obj *Coalition) graphql.Marshaler {
@@ -5246,6 +5901,55 @@ func (ec *executionContext) _Coalition(ctx context.Context, sel ast.SelectionSet
 			}
 		case "description":
 			out.Values[i] = ec._Coalition_description(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var distributionStatusImplementors = []string{"DistributionStatus"}
+
+func (ec *executionContext) _DistributionStatus(ctx context.Context, sel ast.SelectionSet, obj *DistributionStatus) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, distributionStatusImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("DistributionStatus")
+		case "globalAddr":
+			out.Values[i] = ec._DistributionStatus_globalAddr(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "nodes":
+			out.Values[i] = ec._DistributionStatus_nodes(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "clientAssignments":
+			out.Values[i] = ec._DistributionStatus_clientAssignments(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -5685,6 +6389,28 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "distributionStatus":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_distributionStatus(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "__type":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Query___type(ctx, field)
@@ -6053,6 +6779,85 @@ func (ec *executionContext) _VoiceControlSettings(ctx context.Context, sel ast.S
 			}
 		case "privateKeyFile":
 			out.Values[i] = ec._VoiceControlSettings_privateKeyFile(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var voiceNodeStatusImplementors = []string{"VoiceNodeStatus"}
+
+func (ec *executionContext) _VoiceNodeStatus(ctx context.Context, sel ast.SelectionSet, obj *VoiceNodeStatus) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, voiceNodeStatusImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("VoiceNodeStatus")
+		case "id":
+			out.Values[i] = ec._VoiceNodeStatus_id(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "address":
+			out.Values[i] = ec._VoiceNodeStatus_address(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "isGlobal":
+			out.Values[i] = ec._VoiceNodeStatus_isGlobal(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "region":
+			out.Values[i] = ec._VoiceNodeStatus_region(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "coalitions":
+			out.Values[i] = ec._VoiceNodeStatus_coalitions(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "connectedClients":
+			out.Values[i] = ec._VoiceNodeStatus_connectedClients(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "latencyMs":
+			out.Values[i] = ec._VoiceNodeStatus_latencyMs(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "isHealthy":
+			out.Values[i] = ec._VoiceNodeStatus_isHealthy(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "lastHeartbeat":
+			out.Values[i] = ec._VoiceNodeStatus_lastHeartbeat(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -6482,6 +7287,32 @@ func (ec *executionContext) marshalNClient2ᚖgithubᚗcomᚋFPGSchibaᚋvcsᚑs
 	return ec._Client(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalNClientNodeAssignment2ᚕᚖgithubᚗcomᚋFPGSchibaᚋvcsᚑsrsᚑserverᚋgraphqlᚋgeneratedᚐClientNodeAssignmentᚄ(ctx context.Context, sel ast.SelectionSet, v []*ClientNodeAssignment) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNClientNodeAssignment2ᚖgithubᚗcomᚋFPGSchibaᚋvcsᚑsrsᚑserverᚋgraphqlᚋgeneratedᚐClientNodeAssignment(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNClientNodeAssignment2ᚖgithubᚗcomᚋFPGSchibaᚋvcsᚑsrsᚑserverᚋgraphqlᚋgeneratedᚐClientNodeAssignment(ctx context.Context, sel ast.SelectionSet, v *ClientNodeAssignment) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._ClientNodeAssignment(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalNCoalition2ᚕᚖgithubᚗcomᚋFPGSchibaᚋvcsᚑsrsᚑserverᚋgraphqlᚋgeneratedᚐCoalitionᚄ(ctx context.Context, sel ast.SelectionSet, v []*Coalition) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
@@ -6526,6 +7357,20 @@ func (ec *executionContext) unmarshalNCoalitionInput2ᚕᚖgithubᚗcomᚋFPGSch
 func (ec *executionContext) unmarshalNCoalitionInput2ᚖgithubᚗcomᚋFPGSchibaᚋvcsᚑsrsᚑserverᚋgraphqlᚋgeneratedᚐCoalitionInput(ctx context.Context, v any) (*CoalitionInput, error) {
 	res, err := ec.unmarshalInputCoalitionInput(ctx, v)
 	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNDistributionStatus2githubᚗcomᚋFPGSchibaᚋvcsᚑsrsᚑserverᚋgraphqlᚋgeneratedᚐDistributionStatus(ctx context.Context, sel ast.SelectionSet, v DistributionStatus) graphql.Marshaler {
+	return ec._DistributionStatus(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNDistributionStatus2ᚖgithubᚗcomᚋFPGSchibaᚋvcsᚑsrsᚑserverᚋgraphqlᚋgeneratedᚐDistributionStatus(ctx context.Context, sel ast.SelectionSet, v *DistributionStatus) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._DistributionStatus(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNFloat2float64(ctx context.Context, v any) (float64, error) {
@@ -6761,6 +7606,36 @@ func (ec *executionContext) marshalNString2string(ctx context.Context, sel ast.S
 	return res
 }
 
+func (ec *executionContext) unmarshalNString2ᚕstringᚄ(ctx context.Context, v any) ([]string, error) {
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]string, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNString2string(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) marshalNString2ᚕstringᚄ(ctx context.Context, sel ast.SelectionSet, v []string) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	for i := range v {
+		ret[i] = ec.marshalNString2string(ctx, sel, v[i])
+	}
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
 func (ec *executionContext) marshalNSystemInfo2githubᚗcomᚋFPGSchibaᚋvcsᚑsrsᚑserverᚋgraphqlᚋgeneratedᚐSystemInfo(ctx context.Context, sel ast.SelectionSet, v SystemInfo) graphql.Marshaler {
 	return ec._SystemInfo(ctx, sel, &v)
 }
@@ -6788,6 +7663,32 @@ func (ec *executionContext) marshalNVoiceControlSettings2ᚖgithubᚗcomᚋFPGSc
 func (ec *executionContext) unmarshalNVoiceControlSettingsInput2githubᚗcomᚋFPGSchibaᚋvcsᚑsrsᚑserverᚋgraphqlᚋgeneratedᚐVoiceControlSettingsInput(ctx context.Context, v any) (VoiceControlSettingsInput, error) {
 	res, err := ec.unmarshalInputVoiceControlSettingsInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNVoiceNodeStatus2ᚕᚖgithubᚗcomᚋFPGSchibaᚋvcsᚑsrsᚑserverᚋgraphqlᚋgeneratedᚐVoiceNodeStatusᚄ(ctx context.Context, sel ast.SelectionSet, v []*VoiceNodeStatus) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNVoiceNodeStatus2ᚖgithubᚗcomᚋFPGSchibaᚋvcsᚑsrsᚑserverᚋgraphqlᚋgeneratedᚐVoiceNodeStatus(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNVoiceNodeStatus2ᚖgithubᚗcomᚋFPGSchibaᚋvcsᚑsrsᚑserverᚋgraphqlᚋgeneratedᚐVoiceNodeStatus(ctx context.Context, sel ast.SelectionSet, v *VoiceNodeStatus) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._VoiceNodeStatus(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalN__Directive2githubᚗcomᚋ99designsᚋgqlgenᚋgraphqlᚋintrospectionᚐDirective(ctx context.Context, sel ast.SelectionSet, v introspection.Directive) graphql.Marshaler {

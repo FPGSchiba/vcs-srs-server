@@ -185,10 +185,39 @@ func (v *VoiceControlClient) establishStream() error {
 
 	v.stream = stream
 	go v.receiveMessages()
+	go v.heartbeatLoop()
 
 	v.connectionFailed = false
 	v.logger.Info("Stream established with Control Server")
 	return nil
+}
+
+func (v *VoiceControlClient) heartbeatLoop() {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	var lastRttMs int64
+	for {
+		select {
+		case <-v.stopc:
+			return
+		case <-ticker.C:
+			if v.client == nil {
+				continue
+			}
+			sent := time.Now()
+			_, err := v.client.SendHeartbeat(context.Background(), &pb.HeartbeatRequest{
+				ServerId:  v.serverId,
+				Status:    &pb.ServerStatus{IsHealthy: true},
+				LastRttMs: lastRttMs,
+			})
+			if err != nil {
+				v.logger.Warn("Heartbeat failed", "error", err)
+				continue
+			}
+			lastRttMs = time.Since(sent).Milliseconds()
+			v.logger.Debug("Heartbeat sent", "rttMs", lastRttMs)
+		}
+	}
 }
 
 func (v *VoiceControlClient) receiveMessages() {

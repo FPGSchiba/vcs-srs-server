@@ -8,6 +8,7 @@ import (
 	"github.com/FPGSchiba/vcs-srs-server/events"
 	"github.com/FPGSchiba/vcs-srs-server/state"
 	"github.com/FPGSchiba/vcs-srs-server/voice"
+	"github.com/FPGSchiba/vcs-srs-server/voiceontrol"
 	"github.com/google/uuid"
 )
 
@@ -182,4 +183,12 @@ func (a *VCSApplication) Notify(notification events.Notification) {
 
 func (a *VCSApplication) EmitEvent(event events.Event) {
 	a.eventBus.Publish(event)
+}
+
+// GetDistributionStatus returns the current voice node registry and client assignments.
+func (a *VCSApplication) GetDistributionStatus() voiceontrol.DistributionView {
+	if a.controlServer == nil {
+		return voiceontrol.DistributionView{}
+	}
+	return a.controlServer.GetDistributionStatus()
 }

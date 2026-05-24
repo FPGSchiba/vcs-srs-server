@@ -6,6 +6,7 @@ package graphql
 
 import (
 	"github.com/FPGSchiba/vcs-srs-server/state"
+	"github.com/FPGSchiba/vcs-srs-server/voiceontrol"
 	"github.com/google/uuid"
 )
 
@@ -34,6 +35,8 @@ type AppInterface interface {
 	SaveFrequencySettings(newSettings *state.FrequencySettings)
 	SaveCoalitions(coalitions []state.Coalition)
 	SaveServerSettings(newSettings *state.ServerSettings)
+	// Distribution
+	GetDistributionStatus() voiceontrol.DistributionView
 }
 
 // Resolver is the root resolver. It holds the application.

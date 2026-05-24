@@ -19,6 +19,11 @@ type Client struct {
 	Muted      bool   `json:"muted"`
 }
 
+type ClientNodeAssignment struct {
+	ClientID string `json:"clientId"`
+	NodeID   string `json:"nodeId"`
+}
+
 type Coalition struct {
 	Name        string `json:"name"`
 	Color       string `json:"color"`
@@ -30,6 +35,12 @@ type CoalitionInput struct {
 	Color       string  `json:"color"`
 	Description string  `json:"description"`
 	Password    *string `json:"password,omitempty"`
+}
+
+type DistributionStatus struct {
+	GlobalAddr        string                  `json:"globalAddr"`
+	Nodes             []*VoiceNodeStatus      `json:"nodes"`
+	ClientAssignments []*ClientNodeAssignment `json:"clientAssignments"`
 }
 
 type FrequencySettings struct {
@@ -135,4 +146,16 @@ type VoiceControlSettingsInput struct {
 	ListenHost      string `json:"listenHost"`
 	CertificateFile string `json:"certificateFile"`
 	PrivateKeyFile  string `json:"privateKeyFile"`
+}
+
+type VoiceNodeStatus struct {
+	ID               string   `json:"id"`
+	Address          string   `json:"address"`
+	IsGlobal         bool     `json:"isGlobal"`
+	Region           string   `json:"region"`
+	Coalitions       []string `json:"coalitions"`
+	ConnectedClients int      `json:"connectedClients"`
+	LatencyMs        int      `json:"latencyMs"`
+	IsHealthy        bool     `json:"isHealthy"`
+	LastHeartbeat    string   `json:"lastHeartbeat"`
 }

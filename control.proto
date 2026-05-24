@@ -89,6 +89,7 @@ message HeartbeatRequest {
   string server_id = 1;
   ServerStatus status = 2;
   repeated ClientInfo connected_clients = 3;
+  int64 last_rtt_ms = 4; // measured RTT from the previous heartbeat cycle
 }
 
 message HeartbeatResponse {

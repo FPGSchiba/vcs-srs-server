@@ -39,19 +39,20 @@ const (
 )
 
 type Server struct {
-	mu                sync.RWMutex
-	clientGrpcServer  *grpc.Server
-	controlGrpcServer *grpc.Server
-	clientListener    net.Listener
-	controlListener   net.Listener
-	logger            *slog.Logger
-	serverState       *state.ServerState
-	settingsState     *state.SettingsState
-	distributionState *state.DistributionState
-	eventBus          *events.EventBus // Add event bus for handling events
-	srsServer         *srs.SimpleRadioServer
-	isRunning         bool
-	stopOnce          sync.Once // Add this to ensure we only stop once
+	mu                  sync.RWMutex
+	clientGrpcServer    *grpc.Server
+	controlGrpcServer   *grpc.Server
+	clientListener      net.Listener
+	controlListener     net.Listener
+	logger              *slog.Logger
+	serverState         *state.ServerState
+	settingsState       *state.SettingsState
+	distributionState   *state.DistributionState
+	eventBus            *events.EventBus
+	srsServer           *srs.SimpleRadioServer
+	voiceControlServer  *voiceontrol.VoiceControlServer
+	isRunning           bool
+	stopOnce            sync.Once
 }
 
 func NewServer(serverState *state.ServerState, settingsState *state.SettingsState, logger *slog.Logger, distributionState *state.DistributionState, eventBus *events.EventBus) *Server {
@@ -107,6 +108,7 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 	)
 
 	controlServer := voiceontrol.NewVoiceControlServer(s.serverState, s.settingsState, s.eventBus, s.logger)
+	s.voiceControlServer = controlServer
 
 	srsServer := srs.NewSimpleRadioServer(s.serverState, s.settingsState, s.logger, s.eventBus, controlServer)
 	s.srsServer = srsServer
@@ -272,6 +274,18 @@ func (s *Server) IsRunning() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.isRunning
+}
+
+// GetDistributionStatus returns the current distribution status from the voice control server.
+// Returns a zero-value DistributionView when the control server is not running.
+func (s *Server) GetDistributionStatus() voiceontrol.DistributionView {
+	s.mu.RLock()
+	vcs := s.voiceControlServer
+	s.mu.RUnlock()
+	if vcs == nil {
+		return voiceontrol.DistributionView{}
+	}
+	return vcs.GetDistributionStatus()
 }
 
 // Logging interceptor for debugging

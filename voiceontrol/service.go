@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/FPGSchiba/vcs-srs-server/events"
 	"github.com/FPGSchiba/vcs-srs-server/state"
@@ -15,13 +16,36 @@ import (
 )
 
 type registeredNode struct {
-	serverID   string
-	address    string // public "host:port" for UDP
-	isGlobal   bool
-	region     string
-	coalitions []string
-	stream     pb.VoiceControlService_EstablishStreamServer
-	sendMu     sync.Mutex
+	serverID      string
+	address       string // public "host:port" for UDP
+	isGlobal      bool
+	region        string
+	coalitions    []string
+	stream        pb.VoiceControlService_EstablishStreamServer
+	sendMu        sync.Mutex
+	latencyMs     int64
+	isHealthy     bool
+	lastHeartbeat time.Time
+}
+
+// NodeSnapshot is a point-in-time view of a registered voice node.
+type NodeSnapshot struct {
+	ServerID      string
+	Address       string
+	IsGlobal      bool
+	Region        string
+	Coalitions    []string
+	ClientCount   int
+	LatencyMs     int64
+	IsHealthy     bool
+	LastHeartbeat time.Time
+}
+
+// DistributionView is returned by GetDistributionStatus.
+type DistributionView struct {
+	Nodes         []NodeSnapshot
+	GlobalAddr    string
+	ClientNodeMap map[uuid.UUID]string // clientID → nodeServerID
 }
 
 type pendingMove struct {
@@ -80,6 +104,55 @@ func (s *VoiceControlServer) GetVoiceAddressForCoalition(coalition string) (coal
 	}
 	globalAddr = s.globalNodeAddr
 	return
+}
+
+func (s *VoiceControlServer) SendHeartbeat(ctx context.Context, req *pb.HeartbeatRequest) (*pb.HeartbeatResponse, error) {
+	s.mu.Lock()
+	node, exists := s.nodes[req.ServerId]
+	if exists {
+		node.latencyMs = req.LastRttMs
+		node.lastHeartbeat = time.Now()
+		node.isHealthy = req.Status != nil && req.Status.IsHealthy
+	}
+	s.mu.Unlock()
+	return &pb.HeartbeatResponse{Acknowledged: true}, nil
+}
+
+// GetDistributionStatus returns a snapshot of all registered voice nodes and client assignments.
+func (s *VoiceControlServer) GetDistributionStatus() DistributionView {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	clientCounts := make(map[string]int)
+	for _, nodeID := range s.clientNodes {
+		clientCounts[nodeID]++
+	}
+
+	snapshots := make([]NodeSnapshot, 0, len(s.nodes))
+	for _, node := range s.nodes {
+		snapshots = append(snapshots, NodeSnapshot{
+			ServerID:      node.serverID,
+			Address:       node.address,
+			IsGlobal:      node.isGlobal,
+			Region:        node.region,
+			Coalitions:    append([]string(nil), node.coalitions...),
+			ClientCount:   clientCounts[node.serverID],
+			LatencyMs:     node.latencyMs,
+			IsHealthy:     node.isHealthy,
+			LastHeartbeat: node.lastHeartbeat,
+		})
+	}
+
+	clientNodeMap := make(map[uuid.UUID]string, len(s.clientNodes))
+	for k, v := range s.clientNodes {
+		clientNodeMap[k] = v
+	}
+
+	return DistributionView{
+		Nodes:         snapshots,
+		GlobalAddr:    s.globalNodeAddr,
+		ClientNodeMap: clientNodeMap,
+	}
 }
 
 func (s *VoiceControlServer) RegisterVoiceServer(ctx context.Context, req *pb.RegisterVoiceServerRequest) (*pb.RegisterVoiceServerResponse, error) {

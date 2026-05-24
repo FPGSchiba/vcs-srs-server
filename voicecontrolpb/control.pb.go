@@ -887,6 +887,7 @@ type HeartbeatRequest struct {
 	ServerId         string                 `protobuf:"bytes,1,opt,name=server_id,json=serverId,proto3" json:"server_id,omitempty"`
 	Status           *ServerStatus          `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
 	ConnectedClients []*ClientInfo          `protobuf:"bytes,3,rep,name=connected_clients,json=connectedClients,proto3" json:"connected_clients,omitempty"`
+	LastRttMs        int64                  `protobuf:"varint,4,opt,name=last_rtt_ms,json=lastRttMs,proto3" json:"last_rtt_ms,omitempty"` // measured RTT from the previous heartbeat cycle
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -940,6 +941,13 @@ func (x *HeartbeatRequest) GetConnectedClients() []*ClientInfo {
 		return x.ConnectedClients
 	}
 	return nil
+}
+
+func (x *HeartbeatRequest) GetLastRttMs() int64 {
+	if x != nil {
+		return x.LastRttMs
+	}
+	return 0
 }
 
 type HeartbeatResponse struct {
@@ -2607,11 +2615,12 @@ const file_control_proto_rawDesc = "" +
 	"\x13assigned_coalitions\x18\x04 \x03(\tR\x12assignedCoalitions\x120\n" +
 	"\x14global_voice_address\x18\x05 \x01(\tR\x12globalVoiceAddress\".\n" +
 	"\x12ServerCapabilities\x12\x18\n" +
-	"\aversion\x18\x01 \x01(\tR\aversion\"\xae\x01\n" +
+	"\aversion\x18\x01 \x01(\tR\aversion\"\xce\x01\n" +
 	"\x10HeartbeatRequest\x12\x1b\n" +
 	"\tserver_id\x18\x01 \x01(\tR\bserverId\x124\n" +
 	"\x06status\x18\x02 \x01(\v2\x1c.voicecontrolpb.ServerStatusR\x06status\x12G\n" +
-	"\x11connected_clients\x18\x03 \x03(\v2\x1a.voicecontrolpb.ClientInfoR\x10connectedClients\"s\n" +
+	"\x11connected_clients\x18\x03 \x03(\v2\x1a.voicecontrolpb.ClientInfoR\x10connectedClients\x12\x1e\n" +
+	"\vlast_rtt_ms\x18\x04 \x01(\x03R\tlastRttMs\"s\n" +
 	"\x11HeartbeatResponse\x12\"\n" +
 	"\facknowledged\x18\x01 \x01(\bR\facknowledged\x12:\n" +
 	"\bcommands\x18\x02 \x03(\v2\x1e.voicecontrolpb.ControlCommandR\bcommands\"\x80\x02\n" +
