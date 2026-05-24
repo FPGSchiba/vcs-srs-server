@@ -22,6 +22,10 @@ export default defineConfig({
         find: /^.*\/bindings\/github\.com\/FPGSchiba\/vcs-srs-server\//,
         replacement: `${path.resolve(__dirname, 'src/test/mocks')}/`,
       },
+      {
+        find: '@wailsio/runtime/types/events',
+        replacement: path.resolve(__dirname, 'node_modules/@wailsio/runtime/types/events.d.ts'),
+      },
     ],
   },
 })
