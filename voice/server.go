@@ -17,8 +17,9 @@ const (
 )
 
 type Client struct {
-	Addr     *net.UDPAddr
-	LastSeen time.Time
+	Addr          *net.UDPAddr
+	LastSeen      time.Time
+	LatencyToVoiceMs int64 // measured RTT to this voice node (from keepalive echo)
 }
 
 type Server struct {
@@ -196,6 +197,13 @@ func (v *Server) handleKeepalivePacket(packet *VCSPacket, addr *net.UDPAddr) {
 	client, exists := v.clients[packet.SenderID]
 	if exists {
 		client.LastSeen = time.Now()
+		// If the client echoed our timestamp, compute the round-trip latency.
+		if ts := ExtractKeepaliveTimestamp(packet.Payload); ts > 0 {
+			rtt := time.Now().UnixMilli() - ts
+			if rtt > 0 {
+				client.LatencyToVoiceMs = rtt
+			}
+		}
 	}
 	v.Unlock()
 	if !exists {
@@ -209,7 +217,8 @@ func (v *Server) handleKeepalivePacket(packet *VCSPacket, addr *net.UDPAddr) {
 		return
 	}
 
-	ackPacket := NewVCSKeepalivePacket(packet.SenderID)
+	// Send ACK with embedded timestamp so the client can echo it back next cycle.
+	ackPacket := NewVCSKeepaliveAckPacket(packet.SenderID)
 	ackData := ackPacket.SerializePacket()
 	_, err := v.conn.WriteToUDP(ackData, addr)
 	if err != nil {
@@ -413,4 +422,15 @@ func (v *Server) GetClientIPFromId(clientId uuid.UUID) (net.IP, bool) {
 		return client.Addr.IP, true
 	}
 	return nil, false
+}
+
+// GetClientLatencyMap returns a snapshot of measured voice RTT per connected client.
+func (v *Server) GetClientLatencyMap() map[uuid.UUID]int64 {
+	v.RLock()
+	defer v.RUnlock()
+	result := make(map[uuid.UUID]int64, len(v.clients))
+	for id, client := range v.clients {
+		result[id] = client.LatencyToVoiceMs
+	}
+	return result
 }

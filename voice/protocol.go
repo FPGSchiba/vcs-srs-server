@@ -1,8 +1,10 @@
 package voice
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -86,15 +88,39 @@ func NewVCSVoicePacket(clientId uuid.UUID, sequence uint32, frequency uint32, pa
 
 func NewVCSKeepalivePacket(clientId uuid.UUID) *VCSPacket {
 	return &VCSPacket{
-		Magic:     [3]byte{'V', 'C', 'S'},
-		Version:   currentVersion,
-		Type:      PacketTypeKeepalive,
-		Flags:     0,               // No flags set
-		Sequence:  0,               // No sequence number needed
-		Frequency: 0,               // Default frequency
-		SenderID:  clientId,        // Use provided session ID
-		Payload:   make([]byte, 0), // Empty payload
+		Magic:    [3]byte{'V', 'C', 'S'},
+		Version:  currentVersion,
+		Type:     PacketTypeKeepalive,
+		Flags:    0,
+		Sequence: 0,
+		SenderID: clientId,
+		Payload:  make([]byte, 0),
 	}
+}
+
+// NewVCSKeepaliveAckPacket creates a keepalive ACK with an 8-byte Unix-ms timestamp
+// embedded in the payload so the client can echo it back for RTT measurement.
+func NewVCSKeepaliveAckPacket(clientId uuid.UUID) *VCSPacket {
+	payload := make([]byte, 8)
+	binary.BigEndian.PutUint64(payload, uint64(time.Now().UnixMilli()))
+	return &VCSPacket{
+		Magic:    [3]byte{'V', 'C', 'S'},
+		Version:  currentVersion,
+		Type:     PacketTypeKeepalive,
+		Flags:    0,
+		Sequence: 0,
+		SenderID: clientId,
+		Payload:  payload,
+	}
+}
+
+// ExtractKeepaliveTimestamp reads the echoed server timestamp from a keepalive
+// payload (8 bytes, big-endian Unix ms). Returns 0 if the payload is too short.
+func ExtractKeepaliveTimestamp(payload []byte) int64 {
+	if len(payload) < 8 {
+		return 0
+	}
+	return int64(binary.BigEndian.Uint64(payload[:8]))
 }
 
 // IsPTTActive returns true if the PTT flag is set

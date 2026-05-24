@@ -42,13 +42,15 @@ type ComplexityRoot struct {
 	}
 
 	Client struct {
-		Coalition  func(childComplexity int) int
-		ID         func(childComplexity int) int
-		LastUpdate func(childComplexity int) int
-		Muted      func(childComplexity int) int
-		Name       func(childComplexity int) int
-		RoleID     func(childComplexity int) int
-		UnitID     func(childComplexity int) int
+		Coalition          func(childComplexity int) int
+		ID                 func(childComplexity int) int
+		LastUpdate         func(childComplexity int) int
+		LatencyToControlMs func(childComplexity int) int
+		LatencyToVoiceMs   func(childComplexity int) int
+		Muted              func(childComplexity int) int
+		Name               func(childComplexity int) int
+		RoleID             func(childComplexity int) int
+		UnitID             func(childComplexity int) int
 	}
 
 	ClientNodeAssignment struct {
@@ -144,10 +146,11 @@ type ComplexityRoot struct {
 	}
 
 	SystemInfo struct {
-		ControlStatus func(childComplexity int) int
-		HTTPStatus    func(childComplexity int) int
-		Version       func(childComplexity int) int
-		VoiceStatus   func(childComplexity int) int
+		ControlStatus    func(childComplexity int) int
+		DistributionMode func(childComplexity int) int
+		HTTPStatus       func(childComplexity int) int
+		Version          func(childComplexity int) int
+		VoiceStatus      func(childComplexity int) int
 	}
 
 	VoiceControlSettings struct {
@@ -251,6 +254,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Client.LastUpdate(childComplexity), true
+	case "Client.latencyToControlMs":
+		if e.ComplexityRoot.Client.LatencyToControlMs == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Client.LatencyToControlMs(childComplexity), true
+	case "Client.latencyToVoiceMs":
+		if e.ComplexityRoot.Client.LatencyToVoiceMs == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Client.LatencyToVoiceMs(childComplexity), true
 	case "Client.muted":
 		if e.ComplexityRoot.Client.Muted == nil {
 			break
@@ -652,6 +667,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.SystemInfo.ControlStatus(childComplexity), true
+	case "SystemInfo.distributionMode":
+		if e.ComplexityRoot.SystemInfo.DistributionMode == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SystemInfo.DistributionMode(childComplexity), true
 	case "SystemInfo.httpStatus":
 		if e.ComplexityRoot.SystemInfo.HTTPStatus == nil {
 			break
@@ -874,8 +895,15 @@ type Mutation {
   unmuteClient(clientId: ID!): MutationResult!
 }
 
+enum DistributionMode {
+  STANDALONE
+  CONTROL
+  VOICE
+}
+
 type SystemInfo {
   version: String!
+  distributionMode: DistributionMode!
   httpStatus: ServiceStatus!
   voiceStatus: ServiceStatus!
   controlStatus: ServiceStatus!
@@ -894,6 +922,8 @@ type Client {
   roleId: Int!
   lastUpdate: String!
   muted: Boolean!
+  latencyToControlMs: Int!
+  latencyToVoiceMs: Int!
 }
 
 type BannedClient {
@@ -1494,6 +1524,64 @@ func (ec *executionContext) fieldContext_Client_muted(_ context.Context, field g
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Client_latencyToControlMs(ctx context.Context, field graphql.CollectedField, obj *Client) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Client_latencyToControlMs,
+		func(ctx context.Context) (any, error) {
+			return obj.LatencyToControlMs, nil
+		},
+		nil,
+		ec.marshalNInt2int,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Client_latencyToControlMs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Client",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Client_latencyToVoiceMs(ctx context.Context, field graphql.CollectedField, obj *Client) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Client_latencyToVoiceMs,
+		func(ctx context.Context) (any, error) {
+			return obj.LatencyToVoiceMs, nil
+		},
+		nil,
+		ec.marshalNInt2int,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Client_latencyToVoiceMs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Client",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
 		},
 	}
 	return fc, nil
@@ -2602,6 +2690,8 @@ func (ec *executionContext) fieldContext_Query_systemInfo(_ context.Context, fie
 			switch field.Name {
 			case "version":
 				return ec.fieldContext_SystemInfo_version(ctx, field)
+			case "distributionMode":
+				return ec.fieldContext_SystemInfo_distributionMode(ctx, field)
 			case "httpStatus":
 				return ec.fieldContext_SystemInfo_httpStatus(ctx, field)
 			case "voiceStatus":
@@ -2653,6 +2743,10 @@ func (ec *executionContext) fieldContext_Query_clients(_ context.Context, field 
 				return ec.fieldContext_Client_lastUpdate(ctx, field)
 			case "muted":
 				return ec.fieldContext_Client_muted(ctx, field)
+			case "latencyToControlMs":
+				return ec.fieldContext_Client_latencyToControlMs(ctx, field)
+			case "latencyToVoiceMs":
+				return ec.fieldContext_Client_latencyToVoiceMs(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Client", field.Name)
 		},
@@ -3447,6 +3541,35 @@ func (ec *executionContext) fieldContext_SystemInfo_version(_ context.Context, f
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SystemInfo_distributionMode(ctx context.Context, field graphql.CollectedField, obj *SystemInfo) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_SystemInfo_distributionMode,
+		func(ctx context.Context) (any, error) {
+			return obj.DistributionMode, nil
+		},
+		nil,
+		ec.marshalNDistributionMode2githubᚗcomᚋFPGSchibaᚋvcsᚑsrsᚑserverᚋgraphqlᚋgeneratedᚐDistributionMode,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_SystemInfo_distributionMode(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SystemInfo",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type DistributionMode does not have child fields")
 		},
 	}
 	return fc, nil
@@ -5811,6 +5934,16 @@ func (ec *executionContext) _Client(ctx context.Context, sel ast.SelectionSet, o
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "latencyToControlMs":
+			out.Values[i] = ec._Client_latencyToControlMs(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "latencyToVoiceMs":
+			out.Values[i] = ec._Client_latencyToVoiceMs(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -6708,6 +6841,11 @@ func (ec *executionContext) _SystemInfo(ctx context.Context, sel ast.SelectionSe
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "distributionMode":
+			out.Values[i] = ec._SystemInfo_distributionMode(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "httpStatus":
 			out.Values[i] = ec._SystemInfo_httpStatus(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -7357,6 +7495,16 @@ func (ec *executionContext) unmarshalNCoalitionInput2ᚕᚖgithubᚗcomᚋFPGSch
 func (ec *executionContext) unmarshalNCoalitionInput2ᚖgithubᚗcomᚋFPGSchibaᚋvcsᚑsrsᚑserverᚋgraphqlᚋgeneratedᚐCoalitionInput(ctx context.Context, v any) (*CoalitionInput, error) {
 	res, err := ec.unmarshalInputCoalitionInput(ctx, v)
 	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalNDistributionMode2githubᚗcomᚋFPGSchibaᚋvcsᚑsrsᚑserverᚋgraphqlᚋgeneratedᚐDistributionMode(ctx context.Context, v any) (DistributionMode, error) {
+	var res DistributionMode
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNDistributionMode2githubᚗcomᚋFPGSchibaᚋvcsᚑsrsᚑserverᚋgraphqlᚋgeneratedᚐDistributionMode(ctx context.Context, sel ast.SelectionSet, v DistributionMode) graphql.Marshaler {
+	return v
 }
 
 func (ec *executionContext) marshalNDistributionStatus2githubᚗcomᚋFPGSchibaᚋvcsᚑsrsᚑserverᚋgraphqlᚋgeneratedᚐDistributionStatus(ctx context.Context, sel ast.SelectionSet, v DistributionStatus) graphql.Marshaler {

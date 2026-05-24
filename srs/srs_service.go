@@ -157,6 +157,18 @@ func (s *SimpleRadioServer) GetServerSettings(_ context.Context, _ *pb.Empty) (*
 	return s.buildServerSettings(), nil
 }
 
+func (s *SimpleRadioServer) Ping(ctx context.Context, req *pb.PingRequest) (*pb.PingResponse, error) {
+	clientID, err := clientIDFromContext(ctx)
+	if err == nil {
+		s.serverState.Lock()
+		if client, exists := s.serverState.Clients[clientID]; exists {
+			client.LatencyToControlMs = req.LastRttMs
+		}
+		s.serverState.Unlock()
+	}
+	return &pb.PingResponse{ServerTimeMs: time.Now().UnixMilli()}, nil
+}
+
 func (s *SimpleRadioServer) Disconnect(ctx context.Context, _ *pb.Empty) (*pb.ServerResponse, error) {
 	clientID, err := clientIDFromContext(ctx)
 	if err != nil {

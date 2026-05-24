@@ -42,6 +42,9 @@ service SRSService {
   // Server settings request
   rpc GetServerSettings(Empty) returns (ServerSettings);
 
+  // Latency probe — client calls periodically and reports its measured RTT
+  rpc Ping(PingRequest) returns (PingResponse);
+
   // Server-to-client updates stream
   rpc SubscribeToUpdates(Empty) returns (stream ServerUpdate);
 }
@@ -372,4 +375,13 @@ message ServerSyncResult {
 message ServerResponse {
   bool success = 1;
   string error_message = 2;
+}
+
+// Latency probe
+message PingRequest {
+  int64 last_rtt_ms = 1; // RTT measured by the client on the previous Ping cycle
+}
+
+message PingResponse {
+  int64 server_time_ms = 1; // server Unix timestamp in ms at time of processing
 }

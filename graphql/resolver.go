@@ -37,6 +37,8 @@ type AppInterface interface {
 	SaveServerSettings(newSettings *state.ServerSettings)
 	// Distribution
 	GetDistributionStatus() voiceontrol.DistributionView
+	GetDistributionMode() string
+	GetClientVoiceLatencyMap() map[uuid.UUID]int64
 }
 
 // Resolver is the root resolver. It holds the application.

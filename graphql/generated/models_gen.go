@@ -2,6 +2,13 @@
 
 package generated
 
+import (
+	"bytes"
+	"fmt"
+	"io"
+	"strconv"
+)
+
 type BannedClient struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
@@ -10,13 +17,15 @@ type BannedClient struct {
 }
 
 type Client struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	Coalition  string `json:"coalition"`
-	UnitID     string `json:"unitId"`
-	RoleID     int    `json:"roleId"`
-	LastUpdate string `json:"lastUpdate"`
-	Muted      bool   `json:"muted"`
+	ID                 string `json:"id"`
+	Name               string `json:"name"`
+	Coalition          string `json:"coalition"`
+	UnitID             string `json:"unitId"`
+	RoleID             int    `json:"roleId"`
+	LastUpdate         string `json:"lastUpdate"`
+	Muted              bool   `json:"muted"`
+	LatencyToControlMs int    `json:"latencyToControlMs"`
+	LatencyToVoiceMs   int    `json:"latencyToVoiceMs"`
 }
 
 type ClientNodeAssignment struct {
@@ -126,10 +135,11 @@ type Settings struct {
 }
 
 type SystemInfo struct {
-	Version       string         `json:"version"`
-	HTTPStatus    *ServiceStatus `json:"httpStatus"`
-	VoiceStatus   *ServiceStatus `json:"voiceStatus"`
-	ControlStatus *ServiceStatus `json:"controlStatus"`
+	Version          string           `json:"version"`
+	DistributionMode DistributionMode `json:"distributionMode"`
+	HTTPStatus       *ServiceStatus   `json:"httpStatus"`
+	VoiceStatus      *ServiceStatus   `json:"voiceStatus"`
+	ControlStatus    *ServiceStatus   `json:"controlStatus"`
 }
 
 type VoiceControlSettings struct {
@@ -158,4 +168,61 @@ type VoiceNodeStatus struct {
 	LatencyMs        int      `json:"latencyMs"`
 	IsHealthy        bool     `json:"isHealthy"`
 	LastHeartbeat    string   `json:"lastHeartbeat"`
+}
+
+type DistributionMode string
+
+const (
+	DistributionModeStandalone DistributionMode = "STANDALONE"
+	DistributionModeControl    DistributionMode = "CONTROL"
+	DistributionModeVoice      DistributionMode = "VOICE"
+)
+
+var AllDistributionMode = []DistributionMode{
+	DistributionModeStandalone,
+	DistributionModeControl,
+	DistributionModeVoice,
+}
+
+func (e DistributionMode) IsValid() bool {
+	switch e {
+	case DistributionModeStandalone, DistributionModeControl, DistributionModeVoice:
+		return true
+	}
+	return false
+}
+
+func (e DistributionMode) String() string {
+	return string(e)
+}
+
+func (e *DistributionMode) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = DistributionMode(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid DistributionMode", str)
+	}
+	return nil
+}
+
+func (e DistributionMode) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *DistributionMode) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e DistributionMode) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
 }

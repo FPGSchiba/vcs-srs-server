@@ -192,3 +192,27 @@ func (a *VCSApplication) GetDistributionStatus() voiceontrol.DistributionView {
 	}
 	return a.controlServer.GetDistributionStatus()
 }
+
+// GetDistributionMode returns the current distribution mode as a string for GraphQL.
+func (a *VCSApplication) GetDistributionMode() string {
+	a.DistributionState.RLock()
+	mode := a.DistributionState.DistributionMode
+	a.DistributionState.RUnlock()
+	switch mode {
+	case state.DistributionModeControl:
+		return "CONTROL"
+	case state.DistributionModeVoice:
+		return "VOICE"
+	default:
+		return "STANDALONE"
+	}
+}
+
+// GetClientVoiceLatencyMap returns a map of clientID → measured UDP RTT to the local voice server.
+// In distributed voice-only deployments the voice server is not in this process, so this returns nil.
+func (a *VCSApplication) GetClientVoiceLatencyMap() map[uuid.UUID]int64 {
+	if a.voiceServer == nil {
+		return nil
+	}
+	return a.voiceServer.GetClientLatencyMap()
+}

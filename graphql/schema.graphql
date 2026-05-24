@@ -25,8 +25,15 @@ type Mutation {
   unmuteClient(clientId: ID!): MutationResult!
 }
 
+enum DistributionMode {
+  STANDALONE
+  CONTROL
+  VOICE
+}
+
 type SystemInfo {
   version: String!
+  distributionMode: DistributionMode!
   httpStatus: ServiceStatus!
   voiceStatus: ServiceStatus!
   controlStatus: ServiceStatus!
@@ -45,6 +52,8 @@ type Client {
   roleId: Int!
   lastUpdate: String!
   muted: Boolean!
+  latencyToControlMs: Int!
+  latencyToVoiceMs: Int!
 }
 
 type BannedClient {

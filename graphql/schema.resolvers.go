@@ -127,8 +127,17 @@ func (r *mutationResolver) UnmuteClient(ctx context.Context, clientID string) (*
 // SystemInfo resolves Query.systemInfo
 func (r *queryResolver) SystemInfo(ctx context.Context) (*generated.SystemInfo, error) {
 	status := r.App.GetServerStatus()
+	modeStr := r.App.GetDistributionMode()
+	mode := generated.DistributionModeStandalone
+	switch modeStr {
+	case "CONTROL":
+		mode = generated.DistributionModeControl
+	case "VOICE":
+		mode = generated.DistributionModeVoice
+	}
 	return &generated.SystemInfo{
-		Version: r.App.GetServerVersion(),
+		Version:          r.App.GetServerVersion(),
+		DistributionMode: mode,
 		HTTPStatus: &generated.ServiceStatus{
 			IsRunning: status.HTTPStatus.IsRunning,
 			Error:     status.HTTPStatus.Error,
@@ -148,6 +157,7 @@ func (r *queryResolver) SystemInfo(ctx context.Context) (*generated.SystemInfo, 
 func (r *queryResolver) Clients(ctx context.Context) ([]*generated.Client, error) {
 	clients := r.App.GetClientMap()
 	radios := r.App.GetRadioClientMap()
+	voiceLatency := r.App.GetClientVoiceLatencyMap()
 
 	result := make([]*generated.Client, 0, len(clients))
 	for id, c := range clients {
@@ -155,14 +165,20 @@ func (r *queryResolver) Clients(ctx context.Context) ([]*generated.Client, error
 		if radio, ok := radios[id]; ok {
 			muted = radio.Muted
 		}
+		voiceMs := 0
+		if voiceLatency != nil {
+			voiceMs = int(voiceLatency[id])
+		}
 		result = append(result, &generated.Client{
-			ID:         id.String(),
-			Name:       c.Name,
-			Coalition:  c.Coalition,
-			UnitID:     c.UnitId,
-			RoleID:     int(c.Role),
-			LastUpdate: c.LastUpdate.Format("2006-01-02T15:04:05Z07:00"),
-			Muted:      muted,
+			ID:                 id.String(),
+			Name:               c.Name,
+			Coalition:          c.Coalition,
+			UnitID:             c.UnitId,
+			RoleID:             int(c.Role),
+			LastUpdate:         c.LastUpdate.Format("2006-01-02T15:04:05Z07:00"),
+			Muted:              muted,
+			LatencyToControlMs: int(c.LatencyToControlMs),
+			LatencyToVoiceMs:   voiceMs,
 		})
 	}
 	return result, nil

@@ -18,11 +18,12 @@ type ServerState struct {
 }
 
 type ClientState struct {
-	Name       string
-	UnitId     string
-	Coalition  string
-	Role       uint8
-	LastUpdate time.Time
+	Name               string
+	UnitId             string
+	Coalition          string
+	Role               uint8
+	LastUpdate         time.Time
+	LatencyToControlMs int64 // measured RTT to the SRS/control gRPC node
 }
 
 type RadioState struct {

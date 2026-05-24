@@ -3014,6 +3014,95 @@ func (x *ServerResponse) GetErrorMessage() string {
 	return ""
 }
 
+// Latency probe
+type PingRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	LastRttMs     int64                  `protobuf:"varint,1,opt,name=last_rtt_ms,json=lastRttMs,proto3" json:"last_rtt_ms,omitempty"` // RTT measured by the client on the previous Ping cycle
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PingRequest) Reset() {
+	*x = PingRequest{}
+	mi := &file_srs_proto_msgTypes[41]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PingRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PingRequest) ProtoMessage() {}
+
+func (x *PingRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_srs_proto_msgTypes[41]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PingRequest.ProtoReflect.Descriptor instead.
+func (*PingRequest) Descriptor() ([]byte, []int) {
+	return file_srs_proto_rawDescGZIP(), []int{41}
+}
+
+func (x *PingRequest) GetLastRttMs() int64 {
+	if x != nil {
+		return x.LastRttMs
+	}
+	return 0
+}
+
+type PingResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ServerTimeMs  int64                  `protobuf:"varint,1,opt,name=server_time_ms,json=serverTimeMs,proto3" json:"server_time_ms,omitempty"` // server Unix timestamp in ms at time of processing
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PingResponse) Reset() {
+	*x = PingResponse{}
+	mi := &file_srs_proto_msgTypes[42]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PingResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PingResponse) ProtoMessage() {}
+
+func (x *PingResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_srs_proto_msgTypes[42]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PingResponse.ProtoReflect.Descriptor instead.
+func (*PingResponse) Descriptor() ([]byte, []int) {
+	return file_srs_proto_rawDescGZIP(), []int{42}
+}
+
+func (x *PingResponse) GetServerTimeMs() int64 {
+	if x != nil {
+		return x.ServerTimeMs
+	}
+	return 0
+}
+
 var File_srs_proto protoreflect.FileDescriptor
 
 const file_srs_proto_rawDesc = "" +
@@ -3269,7 +3358,11 @@ const file_srs_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\v2\x10.srspb.RadioInfoR\x05value:\x028\x01\"O\n" +
 	"\x0eServerResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
-	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage*3\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\"-\n" +
+	"\vPingRequest\x12\x1e\n" +
+	"\vlast_rtt_ms\x18\x01 \x01(\x03R\tlastRttMs\"4\n" +
+	"\fPingResponse\x12$\n" +
+	"\x0eserver_time_ms\x18\x01 \x01(\x03R\fserverTimeMs*3\n" +
 	"\x10DistributionMode\x12\x0e\n" +
 	"\n" +
 	"STANDALONE\x10\x00\x12\x0f\n" +
@@ -3282,7 +3375,7 @@ const file_srs_proto_rawDesc = "" +
 	"\tStartAuth\x12\x17.srspb.StartAuthRequest\x1a\x17.srspb.AuthStepResponse\x12C\n" +
 	"\fContinueAuth\x12\x1a.srspb.ContinueAuthRequest\x1a\x17.srspb.AuthStepResponse\x12A\n" +
 	"\n" +
-	"UnitSelect\x12\x18.srspb.UnitSelectRequest\x1a\x19.srspb.UnitSelectResponse2\xdf\x02\n" +
+	"UnitSelect\x12\x18.srspb.UnitSelectRequest\x1a\x19.srspb.UnitSelectResponse2\x90\x03\n" +
 	"\n" +
 	"SRSService\x12/\n" +
 	"\n" +
@@ -3291,7 +3384,8 @@ const file_srs_proto_rawDesc = "" +
 	"\x0fUpdateRadioInfo\x12\x10.srspb.RadioInfo\x1a\x15.srspb.ServerResponse\x121\n" +
 	"\n" +
 	"Disconnect\x12\f.srspb.Empty\x1a\x15.srspb.ServerResponse\x128\n" +
-	"\x11GetServerSettings\x12\f.srspb.Empty\x1a\x15.srspb.ServerSettings\x129\n" +
+	"\x11GetServerSettings\x12\f.srspb.Empty\x1a\x15.srspb.ServerSettings\x12/\n" +
+	"\x04Ping\x12\x12.srspb.PingRequest\x1a\x13.srspb.PingResponse\x129\n" +
 	"\x12SubscribeToUpdates\x12\f.srspb.Empty\x1a\x13.srspb.ServerUpdate0\x01BIZ)github.com/FPGSchiba/vcs-srs-server/srspb\xaa\x02\x1bVanguard.VCS.Client.Networkb\x06proto3"
 
 var (
@@ -3307,7 +3401,7 @@ func file_srs_proto_rawDescGZIP() []byte {
 }
 
 var file_srs_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_srs_proto_msgTypes = make([]protoimpl.MessageInfo, 47)
+var file_srs_proto_msgTypes = make([]protoimpl.MessageInfo, 49)
 var file_srs_proto_goTypes = []any{
 	(DistributionMode)(0),                // 0: srspb.DistributionMode
 	(ServerUpdate_UpdateType)(0),         // 1: srspb.ServerUpdate.UpdateType
@@ -3353,12 +3447,14 @@ var file_srs_proto_goTypes = []any{
 	(*SyncResponse)(nil),                 // 41: srspb.SyncResponse
 	(*ServerSyncResult)(nil),             // 42: srspb.ServerSyncResult
 	(*ServerResponse)(nil),               // 43: srspb.ServerResponse
-	nil,                                  // 44: srspb.AuthStepDefinition.MetadataEntry
-	nil,                                  // 45: srspb.StartAuthRequest.FirstStepInputEntry
-	nil,                                  // 46: srspb.ContinueAuthRequest.StepDataEntry
-	nil,                                  // 47: srspb.NextStepRequired.MetadataEntry
-	nil,                                  // 48: srspb.ServerSyncResult.ClientsEntry
-	nil,                                  // 49: srspb.ServerSyncResult.RadiosEntry
+	(*PingRequest)(nil),                  // 44: srspb.PingRequest
+	(*PingResponse)(nil),                 // 45: srspb.PingResponse
+	nil,                                  // 46: srspb.AuthStepDefinition.MetadataEntry
+	nil,                                  // 47: srspb.StartAuthRequest.FirstStepInputEntry
+	nil,                                  // 48: srspb.ContinueAuthRequest.StepDataEntry
+	nil,                                  // 49: srspb.NextStepRequired.MetadataEntry
+	nil,                                  // 50: srspb.ServerSyncResult.ClientsEntry
+	nil,                                  // 51: srspb.ServerSyncResult.RadiosEntry
 }
 var file_srs_proto_depIdxs = []int32{
 	26, // 0: srspb.AuthInitRequest.capabilities:type_name -> srspb.ClientCapabilities
@@ -3368,14 +3464,14 @@ var file_srs_proto_depIdxs = []int32{
 	10, // 4: srspb.FlowDiscoveryResult.flows:type_name -> srspb.AuthFlowDefinition
 	11, // 5: srspb.AuthFlowDefinition.steps:type_name -> srspb.AuthStepDefinition
 	19, // 6: srspb.AuthStepDefinition.required_fields:type_name -> srspb.FieldDefinition
-	44, // 7: srspb.AuthStepDefinition.metadata:type_name -> srspb.AuthStepDefinition.MetadataEntry
+	46, // 7: srspb.AuthStepDefinition.metadata:type_name -> srspb.AuthStepDefinition.MetadataEntry
 	14, // 8: srspb.GuestLoginResponse.result:type_name -> srspb.GuestLoginResult
-	45, // 9: srspb.StartAuthRequest.first_step_input:type_name -> srspb.StartAuthRequest.FirstStepInputEntry
-	46, // 10: srspb.ContinueAuthRequest.step_data:type_name -> srspb.ContinueAuthRequest.StepDataEntry
+	47, // 9: srspb.StartAuthRequest.first_step_input:type_name -> srspb.StartAuthRequest.FirstStepInputEntry
+	48, // 10: srspb.ContinueAuthRequest.step_data:type_name -> srspb.ContinueAuthRequest.StepDataEntry
 	18, // 11: srspb.AuthStepResponse.next_step:type_name -> srspb.NextStepRequired
 	20, // 12: srspb.AuthStepResponse.complete:type_name -> srspb.LoginResult
 	19, // 13: srspb.NextStepRequired.required_fields:type_name -> srspb.FieldDefinition
-	47, // 14: srspb.NextStepRequired.metadata:type_name -> srspb.NextStepRequired.MetadataEntry
+	49, // 14: srspb.NextStepRequired.metadata:type_name -> srspb.NextStepRequired.MetadataEntry
 	25, // 15: srspb.LoginResult.available_coalitions:type_name -> srspb.CoalitionSelection
 	23, // 16: srspb.LoginResult.available_units:type_name -> srspb.UnitSelection
 	24, // 17: srspb.LoginResult.available_roles:type_name -> srspb.RoleSelection
@@ -3397,8 +3493,8 @@ var file_srs_proto_depIdxs = []int32{
 	40, // 33: srspb.ServerSettings.coalitions:type_name -> srspb.Coalition
 	39, // 34: srspb.ServerSettings.general_settings:type_name -> srspb.GeneralServerSettings
 	42, // 35: srspb.SyncResponse.data:type_name -> srspb.ServerSyncResult
-	48, // 36: srspb.ServerSyncResult.clients:type_name -> srspb.ServerSyncResult.ClientsEntry
-	49, // 37: srspb.ServerSyncResult.radios:type_name -> srspb.ServerSyncResult.RadiosEntry
+	50, // 36: srspb.ServerSyncResult.clients:type_name -> srspb.ServerSyncResult.ClientsEntry
+	51, // 37: srspb.ServerSyncResult.radios:type_name -> srspb.ServerSyncResult.RadiosEntry
 	38, // 38: srspb.ServerSyncResult.settings:type_name -> srspb.ServerSettings
 	35, // 39: srspb.ServerSyncResult.ClientsEntry.value:type_name -> srspb.ClientInfo
 	36, // 40: srspb.ServerSyncResult.RadiosEntry.value:type_name -> srspb.RadioInfo
@@ -3413,21 +3509,23 @@ var file_srs_proto_depIdxs = []int32{
 	36, // 49: srspb.SRSService.UpdateRadioInfo:input_type -> srspb.RadioInfo
 	3,  // 50: srspb.SRSService.Disconnect:input_type -> srspb.Empty
 	3,  // 51: srspb.SRSService.GetServerSettings:input_type -> srspb.Empty
-	3,  // 52: srspb.SRSService.SubscribeToUpdates:input_type -> srspb.Empty
-	5,  // 53: srspb.AuthService.InitAuth:output_type -> srspb.AuthInitResponse
-	8,  // 54: srspb.AuthService.DiscoverAuthenticationFlows:output_type -> srspb.FlowDiscoveryResponse
-	13, // 55: srspb.AuthService.GuestLogin:output_type -> srspb.GuestLoginResponse
-	17, // 56: srspb.AuthService.StartAuth:output_type -> srspb.AuthStepResponse
-	17, // 57: srspb.AuthService.ContinueAuth:output_type -> srspb.AuthStepResponse
-	22, // 58: srspb.AuthService.UnitSelect:output_type -> srspb.UnitSelectResponse
-	41, // 59: srspb.SRSService.SyncClient:output_type -> srspb.SyncResponse
-	43, // 60: srspb.SRSService.UpdateClientInfo:output_type -> srspb.ServerResponse
-	43, // 61: srspb.SRSService.UpdateRadioInfo:output_type -> srspb.ServerResponse
-	43, // 62: srspb.SRSService.Disconnect:output_type -> srspb.ServerResponse
-	38, // 63: srspb.SRSService.GetServerSettings:output_type -> srspb.ServerSettings
-	30, // 64: srspb.SRSService.SubscribeToUpdates:output_type -> srspb.ServerUpdate
-	53, // [53:65] is the sub-list for method output_type
-	41, // [41:53] is the sub-list for method input_type
+	44, // 52: srspb.SRSService.Ping:input_type -> srspb.PingRequest
+	3,  // 53: srspb.SRSService.SubscribeToUpdates:input_type -> srspb.Empty
+	5,  // 54: srspb.AuthService.InitAuth:output_type -> srspb.AuthInitResponse
+	8,  // 55: srspb.AuthService.DiscoverAuthenticationFlows:output_type -> srspb.FlowDiscoveryResponse
+	13, // 56: srspb.AuthService.GuestLogin:output_type -> srspb.GuestLoginResponse
+	17, // 57: srspb.AuthService.StartAuth:output_type -> srspb.AuthStepResponse
+	17, // 58: srspb.AuthService.ContinueAuth:output_type -> srspb.AuthStepResponse
+	22, // 59: srspb.AuthService.UnitSelect:output_type -> srspb.UnitSelectResponse
+	41, // 60: srspb.SRSService.SyncClient:output_type -> srspb.SyncResponse
+	43, // 61: srspb.SRSService.UpdateClientInfo:output_type -> srspb.ServerResponse
+	43, // 62: srspb.SRSService.UpdateRadioInfo:output_type -> srspb.ServerResponse
+	43, // 63: srspb.SRSService.Disconnect:output_type -> srspb.ServerResponse
+	38, // 64: srspb.SRSService.GetServerSettings:output_type -> srspb.ServerSettings
+	45, // 65: srspb.SRSService.Ping:output_type -> srspb.PingResponse
+	30, // 66: srspb.SRSService.SubscribeToUpdates:output_type -> srspb.ServerUpdate
+	54, // [54:67] is the sub-list for method output_type
+	41, // [41:54] is the sub-list for method input_type
 	41, // [41:41] is the sub-list for extension type_name
 	41, // [41:41] is the sub-list for extension extendee
 	0,  // [0:41] is the sub-list for field type_name
@@ -3482,7 +3580,7 @@ func file_srs_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_srs_proto_rawDesc), len(file_srs_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   47,
+			NumMessages:   49,
 			NumExtensions: 0,
 			NumServices:   2,
 		},
