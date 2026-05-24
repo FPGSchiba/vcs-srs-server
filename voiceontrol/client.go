@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"sync"
 	"time"
 
@@ -53,6 +54,7 @@ func (v *VoiceControlClient) ConnectControlServer() error {
 	v.settingsState.RLock()
 	address := fmt.Sprintf("%s:%d", v.settingsState.VoiceControl.RemoteHost, v.settingsState.VoiceControl.Port)
 	certFileName := v.settingsState.VoiceControl.CertificateFile
+	serverName := v.settingsState.VoiceControl.ServerName
 	v.settingsState.RUnlock()
 
 	v.logger.Info("Connecting to Control node", "address", address)
@@ -61,7 +63,7 @@ func (v *VoiceControlClient) ConnectControlServer() error {
 	if err != nil {
 		return err
 	}
-	clientTLSConfig, err := CreateClientTLSConfig(cert)
+	clientTLSConfig, err := CreateClientTLSConfig(cert, serverName)
 	if err != nil {
 		return err
 	}
@@ -214,6 +216,12 @@ func (v *VoiceControlClient) applyControlMessage(msg *pb.ControlMessage) {
 		v.applySnapshot(cmd.StateSnapshot)
 	case *pb.ControlMessage_ClientDelta:
 		v.applyDelta(cmd.ClientDelta)
+	case *pb.ControlMessage_AssignCoalitions:
+		v.assignedCoalitions = cmd.AssignCoalitions.Coalitions
+		v.logger.Info("Coalition assignment updated", "coalitions", v.assignedCoalitions)
+	case *pb.ControlMessage_AssignFrequencies:
+		ranges := cmd.AssignFrequencies.FrequencyRanges
+		v.logger.Info("Frequency band assignment received", "ranges", len(ranges))
 	}
 }
 
@@ -333,6 +341,37 @@ func (v *VoiceControlClient) handleReconnection() {
 			}
 			reconnectionAttempts++
 		}
+	}
+}
+
+func (v *VoiceControlClient) ReportClientConnected(clientID uuid.UUID, addr *net.UDPAddr) {
+	if v.client == nil {
+		return
+	}
+	_, err := v.client.ReportClientConnected(context.Background(), &pb.ClientConnectedRequest{
+		ServerId:      v.serverId,
+		ClientId:      clientID.String(),
+		ClientAddress: addr.IP.String(),
+		ClientPort:    int32(addr.Port),
+		ConnectedAt:   time.Now().Unix(),
+	})
+	if err != nil {
+		v.logger.Warn("ReportClientConnected failed", "client", clientID, "error", err)
+	}
+}
+
+func (v *VoiceControlClient) ReportClientDisconnected(clientID uuid.UUID) {
+	if v.client == nil {
+		return
+	}
+	_, err := v.client.ReportClientDisconnected(context.Background(), &pb.ClientDisconnectedRequest{
+		ServerId:        v.serverId,
+		ClientId:        clientID.String(),
+		Reason:          pb.DisconnectReason_CLIENT_DISCONNECT,
+		DisconnectedAt:  time.Now().Unix(),
+	})
+	if err != nil {
+		v.logger.Warn("ReportClientDisconnected failed", "client", clientID, "error", err)
 	}
 }
 

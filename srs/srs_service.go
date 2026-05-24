@@ -102,16 +102,20 @@ func (s *SimpleRadioServer) SyncClient(ctx context.Context, _ *pb.Empty) (*pb.Sy
 		if radio.State == nil {
 			continue
 		}
+		s.serverState.RLock()
+		clientEntry, clientExists := s.serverState.Clients[radio.ID]
+		s.serverState.RUnlock()
+		if !clientExists || clientEntry == nil {
+			continue
+		}
 		if srsRadios == nil {
 			srsRadios = make(map[string]*pb.RadioInfo)
 		}
-		s.serverState.RLock()
 		srsRadios[radio.ID.String()] = &pb.RadioInfo{
 			Radios:     convertRadios(radio.State.Radios),
 			Muted:      radio.State.Muted,
-			LastUpdate: ptrInt64(s.serverState.Clients[radio.ID].LastUpdate.Unix()),
+			LastUpdate: ptrInt64(clientEntry.LastUpdate.Unix()),
 		}
-		s.serverState.RUnlock()
 	}
 
 	s.serverState.RLock()
@@ -369,6 +373,36 @@ func (s *SimpleRadioServer) SubscribeToUpdates(_ *pb.Empty, stream grpc.ServerSt
 			if !ok {
 				return nil
 			}
+
+			// Per-client voice address redirect after coalition rebalancing.
+			if event.Name == events.CoalitionReassigned {
+				if ce, ok2 := event.Data.(events.CoalitionReassignedEvent); ok2 {
+					s.serverState.RLock()
+					client, exists := s.serverState.Clients[clientID]
+					coalition := ""
+					if exists {
+						coalition = client.Coalition
+					}
+					s.serverState.RUnlock()
+					if exists && coalition == ce.Coalition {
+						addr := &pb.ServerUpdate{
+							Type: pb.ServerUpdate_VOICE_ADDRESS_UPDATE,
+							Update: &pb.ServerUpdate_VoiceAddressUpdate{
+								VoiceAddressUpdate: &pb.VoiceAddressUpdate{
+									CoalitionVoiceAddr: ce.NewAddr,
+									GlobalVoiceAddr:    ce.GlobalAddr,
+								},
+							},
+						}
+						if err := stream.Send(addr); err != nil {
+							s.logger.Error("Failed to send voice address update", "client_id", clientID, "error", err)
+							return err
+						}
+					}
+				}
+				continue
+			}
+
 			update := s.buildServerUpdate(event)
 			if update == nil {
 				continue

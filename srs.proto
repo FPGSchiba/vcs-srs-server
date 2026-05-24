@@ -255,10 +255,11 @@ message FrequencyRange {
 message ServerUpdate {
   UpdateType type = 1;
   oneof update {
-    ClientUpdate client_update = 2;
-    ServerAction server_action = 3;
-    ServerSettings settings_update = 4;
-    DistributionUpdate voice_hosts = 5; // For distribution updates
+    ClientUpdate      client_update        = 2;
+    ServerAction      server_action        = 3;
+    ServerSettings    settings_update      = 4;
+    DistributionUpdate voice_hosts         = 5; // For distribution updates
+    VoiceAddressUpdate voice_address_update = 6; // Per-client voice-server redirect after rebalance
   }
 
   enum UpdateType {
@@ -269,8 +270,14 @@ message ServerUpdate {
     CLIENT_INFO_UPDATE = 4;
     SERVER_SETTINGS_CHANGED = 5;
     SERVER_ACTION = 6;
-    DISTRIBUTION_UPDATE = 7; // For distribution updates
+    DISTRIBUTION_UPDATE = 7;
+    VOICE_ADDRESS_UPDATE = 8; // Tells the client to reconnect to a different voice UDP endpoint
   }
+}
+
+message VoiceAddressUpdate {
+  string coalition_voice_addr = 1; // new UDP host:port for the client's coalition
+  string global_voice_addr    = 2; // current global voice node address
 }
 
 message DistributionUpdate {

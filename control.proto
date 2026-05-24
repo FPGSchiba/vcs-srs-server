@@ -22,13 +22,14 @@ message ControlMessage {
   string server_id = 1;
   string event_id = 2; // Unique ID for this event
   oneof command {
-    AssignFrequenciesRequest assign_frequencies = 3;
-    KickClientRequest        kick_client        = 4;
-    ShutdownRequest          shutdown           = 5;
-    RebalanceRequest         rebalance          = 6;
-    UpdateConfigRequest      update_config      = 7;
-    ClientStateSnapshot      state_snapshot     = 8;
-    ClientDelta              client_delta       = 9;
+    AssignFrequenciesRequest assign_frequencies  = 3;
+    KickClientRequest        kick_client         = 4;
+    ShutdownRequest          shutdown            = 5;
+    RebalanceRequest         rebalance           = 6;
+    UpdateConfigRequest      update_config       = 7;
+    ClientStateSnapshot      state_snapshot      = 8;
+    ClientDelta              client_delta        = 9;
+    AssignCoalitionsRequest  assign_coalitions   = 10;
   }
 }
 
@@ -163,6 +164,10 @@ message AssignFrequenciesResponse {
   bool success = 1;
   string message = 2;
   repeated FrequencyRange accepted_ranges = 3;
+}
+
+message AssignCoalitionsRequest {
+  repeated string coalitions = 1; // full replacement; empty means node becomes idle
 }
 
 // TODO: Make this better with coalitions as well

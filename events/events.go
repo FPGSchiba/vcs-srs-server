@@ -30,6 +30,11 @@ const (
 	ServerAction = "admin/server-action"
 )
 
+const (
+	VoiceNodeRegistered = "voice/node/registered"
+	CoalitionReassigned = "voice/coalition/reassigned"
+)
+
 type ClientChangeType int
 
 const (
@@ -81,6 +86,14 @@ type ServerActionEvent struct {
 	ActionType     ActionType
 	TargetClientID uuid.UUID
 	Reason         string
+}
+
+type CoalitionReassignedEvent struct {
+	Coalition  string
+	OldNodeID  string
+	NewNodeID  string
+	NewAddr    string // UDP host:port of the new voice node
+	GlobalAddr string // current global voice node address
 }
 
 func NewNotification(title, message, level string) Notification {

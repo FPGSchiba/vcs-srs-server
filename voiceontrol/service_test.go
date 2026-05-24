@@ -50,15 +50,30 @@ func TestRegisterVoiceServer_SingleNode_GetsAllCoalitions(t *testing.T) {
 func TestRegisterVoiceServer_TwoNodes_DifferentCoalitions(t *testing.T) {
 	s := newTestVoiceControlServer([]string{"Blue", "Red"})
 
-	resp1, _ := s.RegisterVoiceServer(context.Background(), &pb.RegisterVoiceServerRequest{
+	s.RegisterVoiceServer(context.Background(), &pb.RegisterVoiceServerRequest{
 		ServerId: "node-1", ServerAddress: "10.0.0.1", UdpPort: 5002,
 	})
-	resp2, _ := s.RegisterVoiceServer(context.Background(), &pb.RegisterVoiceServerRequest{
+	s.RegisterVoiceServer(context.Background(), &pb.RegisterVoiceServerRequest{
 		ServerId: "node-2", ServerAddress: "10.0.0.2", UdpPort: 5002,
 	})
 
-	if resp1.AssignedCoalitions[0] == resp2.AssignedCoalitions[0] {
-		t.Fatal("two nodes should not receive the same coalition")
+	// After rebalancing each coalition must be owned by exactly one node.
+	s.mu.RLock()
+	ownership := map[string]int{}
+	for _, n := range s.nodes {
+		for _, c := range n.coalitions {
+			ownership[c]++
+		}
+	}
+	s.mu.RUnlock()
+
+	for coalition, count := range ownership {
+		if count != 1 {
+			t.Fatalf("coalition %q owned by %d nodes, want exactly 1", coalition, count)
+		}
+	}
+	if len(ownership) != 2 {
+		t.Fatalf("expected 2 coalitions assigned, got %d: %v", len(ownership), ownership)
 	}
 }
 

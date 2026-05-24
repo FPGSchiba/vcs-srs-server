@@ -77,7 +77,8 @@ const (
 	ServerUpdate_CLIENT_INFO_UPDATE      ServerUpdate_UpdateType = 4
 	ServerUpdate_SERVER_SETTINGS_CHANGED ServerUpdate_UpdateType = 5
 	ServerUpdate_SERVER_ACTION           ServerUpdate_UpdateType = 6
-	ServerUpdate_DISTRIBUTION_UPDATE     ServerUpdate_UpdateType = 7 // For distribution updates
+	ServerUpdate_DISTRIBUTION_UPDATE     ServerUpdate_UpdateType = 7
+	ServerUpdate_VOICE_ADDRESS_UPDATE    ServerUpdate_UpdateType = 8 // Tells the client to reconnect to a different voice UDP endpoint
 )
 
 // Enum value maps for ServerUpdate_UpdateType.
@@ -91,6 +92,7 @@ var (
 		5: "SERVER_SETTINGS_CHANGED",
 		6: "SERVER_ACTION",
 		7: "DISTRIBUTION_UPDATE",
+		8: "VOICE_ADDRESS_UPDATE",
 	}
 	ServerUpdate_UpdateType_value = map[string]int32{
 		"UNKNOWN":                 0,
@@ -101,6 +103,7 @@ var (
 		"SERVER_SETTINGS_CHANGED": 5,
 		"SERVER_ACTION":           6,
 		"DISTRIBUTION_UPDATE":     7,
+		"VOICE_ADDRESS_UPDATE":    8,
 	}
 )
 
@@ -183,7 +186,7 @@ func (x ServerAction_ActionType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ServerAction_ActionType.Descriptor instead.
 func (ServerAction_ActionType) EnumDescriptor() ([]byte, []int) {
-	return file_srs_proto_rawDescGZIP(), []int{30, 0}
+	return file_srs_proto_rawDescGZIP(), []int{31, 0}
 }
 
 // Empty message for requests without parameters
@@ -2033,6 +2036,7 @@ type ServerUpdate struct {
 	//	*ServerUpdate_ServerAction
 	//	*ServerUpdate_SettingsUpdate
 	//	*ServerUpdate_VoiceHosts
+	//	*ServerUpdate_VoiceAddressUpdate
 	Update        isServerUpdate_Update `protobuf_oneof:"update"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2118,6 +2122,15 @@ func (x *ServerUpdate) GetVoiceHosts() *DistributionUpdate {
 	return nil
 }
 
+func (x *ServerUpdate) GetVoiceAddressUpdate() *VoiceAddressUpdate {
+	if x != nil {
+		if x, ok := x.Update.(*ServerUpdate_VoiceAddressUpdate); ok {
+			return x.VoiceAddressUpdate
+		}
+	}
+	return nil
+}
+
 type isServerUpdate_Update interface {
 	isServerUpdate_Update()
 }
@@ -2138,6 +2151,10 @@ type ServerUpdate_VoiceHosts struct {
 	VoiceHosts *DistributionUpdate `protobuf:"bytes,5,opt,name=voice_hosts,json=voiceHosts,proto3,oneof"` // For distribution updates
 }
 
+type ServerUpdate_VoiceAddressUpdate struct {
+	VoiceAddressUpdate *VoiceAddressUpdate `protobuf:"bytes,6,opt,name=voice_address_update,json=voiceAddressUpdate,proto3,oneof"` // Per-client voice-server redirect after rebalance
+}
+
 func (*ServerUpdate_ClientUpdate) isServerUpdate_Update() {}
 
 func (*ServerUpdate_ServerAction) isServerUpdate_Update() {}
@@ -2145,6 +2162,60 @@ func (*ServerUpdate_ServerAction) isServerUpdate_Update() {}
 func (*ServerUpdate_SettingsUpdate) isServerUpdate_Update() {}
 
 func (*ServerUpdate_VoiceHosts) isServerUpdate_Update() {}
+
+func (*ServerUpdate_VoiceAddressUpdate) isServerUpdate_Update() {}
+
+type VoiceAddressUpdate struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	CoalitionVoiceAddr string                 `protobuf:"bytes,1,opt,name=coalition_voice_addr,json=coalitionVoiceAddr,proto3" json:"coalition_voice_addr,omitempty"` // new UDP host:port for the client's coalition
+	GlobalVoiceAddr    string                 `protobuf:"bytes,2,opt,name=global_voice_addr,json=globalVoiceAddr,proto3" json:"global_voice_addr,omitempty"`          // current global voice node address
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *VoiceAddressUpdate) Reset() {
+	*x = VoiceAddressUpdate{}
+	mi := &file_srs_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VoiceAddressUpdate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VoiceAddressUpdate) ProtoMessage() {}
+
+func (x *VoiceAddressUpdate) ProtoReflect() protoreflect.Message {
+	mi := &file_srs_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VoiceAddressUpdate.ProtoReflect.Descriptor instead.
+func (*VoiceAddressUpdate) Descriptor() ([]byte, []int) {
+	return file_srs_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *VoiceAddressUpdate) GetCoalitionVoiceAddr() string {
+	if x != nil {
+		return x.CoalitionVoiceAddr
+	}
+	return ""
+}
+
+func (x *VoiceAddressUpdate) GetGlobalVoiceAddr() string {
+	if x != nil {
+		return x.GlobalVoiceAddr
+	}
+	return ""
+}
 
 type DistributionUpdate struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -2156,7 +2227,7 @@ type DistributionUpdate struct {
 
 func (x *DistributionUpdate) Reset() {
 	*x = DistributionUpdate{}
-	mi := &file_srs_proto_msgTypes[28]
+	mi := &file_srs_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2168,7 +2239,7 @@ func (x *DistributionUpdate) String() string {
 func (*DistributionUpdate) ProtoMessage() {}
 
 func (x *DistributionUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_srs_proto_msgTypes[28]
+	mi := &file_srs_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2181,7 +2252,7 @@ func (x *DistributionUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DistributionUpdate.ProtoReflect.Descriptor instead.
 func (*DistributionUpdate) Descriptor() ([]byte, []int) {
-	return file_srs_proto_rawDescGZIP(), []int{28}
+	return file_srs_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *DistributionUpdate) GetVoiceHosts() []*VoiceHostDetails {
@@ -2210,7 +2281,7 @@ type ClientUpdate struct {
 
 func (x *ClientUpdate) Reset() {
 	*x = ClientUpdate{}
-	mi := &file_srs_proto_msgTypes[29]
+	mi := &file_srs_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2222,7 +2293,7 @@ func (x *ClientUpdate) String() string {
 func (*ClientUpdate) ProtoMessage() {}
 
 func (x *ClientUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_srs_proto_msgTypes[29]
+	mi := &file_srs_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2235,7 +2306,7 @@ func (x *ClientUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClientUpdate.ProtoReflect.Descriptor instead.
 func (*ClientUpdate) Descriptor() ([]byte, []int) {
-	return file_srs_proto_rawDescGZIP(), []int{29}
+	return file_srs_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *ClientUpdate) GetClientGuid() string {
@@ -2272,7 +2343,7 @@ type ServerAction struct {
 
 func (x *ServerAction) Reset() {
 	*x = ServerAction{}
-	mi := &file_srs_proto_msgTypes[30]
+	mi := &file_srs_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2284,7 +2355,7 @@ func (x *ServerAction) String() string {
 func (*ServerAction) ProtoMessage() {}
 
 func (x *ServerAction) ProtoReflect() protoreflect.Message {
-	mi := &file_srs_proto_msgTypes[30]
+	mi := &file_srs_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2297,7 +2368,7 @@ func (x *ServerAction) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServerAction.ProtoReflect.Descriptor instead.
 func (*ServerAction) Descriptor() ([]byte, []int) {
-	return file_srs_proto_rawDescGZIP(), []int{30}
+	return file_srs_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *ServerAction) GetType() ServerAction_ActionType {
@@ -2342,7 +2413,7 @@ type ClientInfo struct {
 
 func (x *ClientInfo) Reset() {
 	*x = ClientInfo{}
-	mi := &file_srs_proto_msgTypes[31]
+	mi := &file_srs_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2354,7 +2425,7 @@ func (x *ClientInfo) String() string {
 func (*ClientInfo) ProtoMessage() {}
 
 func (x *ClientInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_srs_proto_msgTypes[31]
+	mi := &file_srs_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2367,7 +2438,7 @@ func (x *ClientInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClientInfo.ProtoReflect.Descriptor instead.
 func (*ClientInfo) Descriptor() ([]byte, []int) {
-	return file_srs_proto_rawDescGZIP(), []int{31}
+	return file_srs_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *ClientInfo) GetName() string {
@@ -2417,7 +2488,7 @@ type RadioInfo struct {
 
 func (x *RadioInfo) Reset() {
 	*x = RadioInfo{}
-	mi := &file_srs_proto_msgTypes[32]
+	mi := &file_srs_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2429,7 +2500,7 @@ func (x *RadioInfo) String() string {
 func (*RadioInfo) ProtoMessage() {}
 
 func (x *RadioInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_srs_proto_msgTypes[32]
+	mi := &file_srs_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2442,7 +2513,7 @@ func (x *RadioInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RadioInfo.ProtoReflect.Descriptor instead.
 func (*RadioInfo) Descriptor() ([]byte, []int) {
-	return file_srs_proto_rawDescGZIP(), []int{32}
+	return file_srs_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *RadioInfo) GetLastUpdate() int64 {
@@ -2479,7 +2550,7 @@ type Radio struct {
 
 func (x *Radio) Reset() {
 	*x = Radio{}
-	mi := &file_srs_proto_msgTypes[33]
+	mi := &file_srs_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2491,7 +2562,7 @@ func (x *Radio) String() string {
 func (*Radio) ProtoMessage() {}
 
 func (x *Radio) ProtoReflect() protoreflect.Message {
-	mi := &file_srs_proto_msgTypes[33]
+	mi := &file_srs_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2504,7 +2575,7 @@ func (x *Radio) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Radio.ProtoReflect.Descriptor instead.
 func (*Radio) Descriptor() ([]byte, []int) {
-	return file_srs_proto_rawDescGZIP(), []int{33}
+	return file_srs_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *Radio) GetId() uint32 {
@@ -2555,7 +2626,7 @@ type ServerSettings struct {
 
 func (x *ServerSettings) Reset() {
 	*x = ServerSettings{}
-	mi := &file_srs_proto_msgTypes[34]
+	mi := &file_srs_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2567,7 +2638,7 @@ func (x *ServerSettings) String() string {
 func (*ServerSettings) ProtoMessage() {}
 
 func (x *ServerSettings) ProtoReflect() protoreflect.Message {
-	mi := &file_srs_proto_msgTypes[34]
+	mi := &file_srs_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2580,7 +2651,7 @@ func (x *ServerSettings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServerSettings.ProtoReflect.Descriptor instead.
 func (*ServerSettings) Descriptor() ([]byte, []int) {
-	return file_srs_proto_rawDescGZIP(), []int{34}
+	return file_srs_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *ServerSettings) GetCoalitions() []*Coalition {
@@ -2620,7 +2691,7 @@ type GeneralServerSettings struct {
 
 func (x *GeneralServerSettings) Reset() {
 	*x = GeneralServerSettings{}
-	mi := &file_srs_proto_msgTypes[35]
+	mi := &file_srs_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2632,7 +2703,7 @@ func (x *GeneralServerSettings) String() string {
 func (*GeneralServerSettings) ProtoMessage() {}
 
 func (x *GeneralServerSettings) ProtoReflect() protoreflect.Message {
-	mi := &file_srs_proto_msgTypes[35]
+	mi := &file_srs_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2645,7 +2716,7 @@ func (x *GeneralServerSettings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GeneralServerSettings.ProtoReflect.Descriptor instead.
 func (*GeneralServerSettings) Descriptor() ([]byte, []int) {
-	return file_srs_proto_rawDescGZIP(), []int{35}
+	return file_srs_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *GeneralServerSettings) GetMaxRadiosPerClient() int32 {
@@ -2666,7 +2737,7 @@ type Coalition struct {
 
 func (x *Coalition) Reset() {
 	*x = Coalition{}
-	mi := &file_srs_proto_msgTypes[36]
+	mi := &file_srs_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2678,7 +2749,7 @@ func (x *Coalition) String() string {
 func (*Coalition) ProtoMessage() {}
 
 func (x *Coalition) ProtoReflect() protoreflect.Message {
-	mi := &file_srs_proto_msgTypes[36]
+	mi := &file_srs_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2691,7 +2762,7 @@ func (x *Coalition) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Coalition.ProtoReflect.Descriptor instead.
 func (*Coalition) Descriptor() ([]byte, []int) {
-	return file_srs_proto_rawDescGZIP(), []int{36}
+	return file_srs_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *Coalition) GetName() string {
@@ -2731,7 +2802,7 @@ type SyncResponse struct {
 
 func (x *SyncResponse) Reset() {
 	*x = SyncResponse{}
-	mi := &file_srs_proto_msgTypes[37]
+	mi := &file_srs_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2743,7 +2814,7 @@ func (x *SyncResponse) String() string {
 func (*SyncResponse) ProtoMessage() {}
 
 func (x *SyncResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_srs_proto_msgTypes[37]
+	mi := &file_srs_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2756,7 +2827,7 @@ func (x *SyncResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncResponse.ProtoReflect.Descriptor instead.
 func (*SyncResponse) Descriptor() ([]byte, []int) {
-	return file_srs_proto_rawDescGZIP(), []int{37}
+	return file_srs_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *SyncResponse) GetSuccess() bool {
@@ -2827,7 +2898,7 @@ type ServerSyncResult struct {
 
 func (x *ServerSyncResult) Reset() {
 	*x = ServerSyncResult{}
-	mi := &file_srs_proto_msgTypes[38]
+	mi := &file_srs_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2839,7 +2910,7 @@ func (x *ServerSyncResult) String() string {
 func (*ServerSyncResult) ProtoMessage() {}
 
 func (x *ServerSyncResult) ProtoReflect() protoreflect.Message {
-	mi := &file_srs_proto_msgTypes[38]
+	mi := &file_srs_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2852,7 +2923,7 @@ func (x *ServerSyncResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServerSyncResult.ProtoReflect.Descriptor instead.
 func (*ServerSyncResult) Descriptor() ([]byte, []int) {
-	return file_srs_proto_rawDescGZIP(), []int{38}
+	return file_srs_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *ServerSyncResult) GetClients() map[string]*ClientInfo {
@@ -2901,7 +2972,7 @@ type ServerResponse struct {
 
 func (x *ServerResponse) Reset() {
 	*x = ServerResponse{}
-	mi := &file_srs_proto_msgTypes[39]
+	mi := &file_srs_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2913,7 +2984,7 @@ func (x *ServerResponse) String() string {
 func (*ServerResponse) ProtoMessage() {}
 
 func (x *ServerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_srs_proto_msgTypes[39]
+	mi := &file_srs_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2926,7 +2997,7 @@ func (x *ServerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServerResponse.ProtoReflect.Descriptor instead.
 func (*ServerResponse) Descriptor() ([]byte, []int) {
-	return file_srs_proto_rawDescGZIP(), []int{39}
+	return file_srs_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *ServerResponse) GetSuccess() bool {
@@ -3090,14 +3161,15 @@ const file_srs_proto_rawDesc = "" +
 	"\x0eFrequencyRange\x12\x1c\n" +
 	"\tcoalition\x18\x01 \x01(\tR\tcoalition\x12'\n" +
 	"\x0fstart_frequency\x18\x02 \x01(\x01R\x0estartFrequency\x12#\n" +
-	"\rend_frequency\x18\x03 \x01(\x01R\fendFrequency\"\xfe\x03\n" +
+	"\rend_frequency\x18\x03 \x01(\x01R\fendFrequency\"\xe7\x04\n" +
 	"\fServerUpdate\x122\n" +
 	"\x04type\x18\x01 \x01(\x0e2\x1e.srspb.ServerUpdate.UpdateTypeR\x04type\x12:\n" +
 	"\rclient_update\x18\x02 \x01(\v2\x13.srspb.ClientUpdateH\x00R\fclientUpdate\x12:\n" +
 	"\rserver_action\x18\x03 \x01(\v2\x13.srspb.ServerActionH\x00R\fserverAction\x12@\n" +
 	"\x0fsettings_update\x18\x04 \x01(\v2\x15.srspb.ServerSettingsH\x00R\x0esettingsUpdate\x12<\n" +
 	"\vvoice_hosts\x18\x05 \x01(\v2\x19.srspb.DistributionUpdateH\x00R\n" +
-	"voiceHosts\"\xb7\x01\n" +
+	"voiceHosts\x12M\n" +
+	"\x14voice_address_update\x18\x06 \x01(\v2\x19.srspb.VoiceAddressUpdateH\x00R\x12voiceAddressUpdate\"\xd1\x01\n" +
 	"\n" +
 	"UpdateType\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\x11\n" +
@@ -3107,8 +3179,12 @@ const file_srs_proto_rawDesc = "" +
 	"\x12CLIENT_INFO_UPDATE\x10\x04\x12\x1b\n" +
 	"\x17SERVER_SETTINGS_CHANGED\x10\x05\x12\x11\n" +
 	"\rSERVER_ACTION\x10\x06\x12\x17\n" +
-	"\x13DISTRIBUTION_UPDATE\x10\aB\b\n" +
-	"\x06update\"v\n" +
+	"\x13DISTRIBUTION_UPDATE\x10\a\x12\x18\n" +
+	"\x14VOICE_ADDRESS_UPDATE\x10\bB\b\n" +
+	"\x06update\"r\n" +
+	"\x12VoiceAddressUpdate\x120\n" +
+	"\x14coalition_voice_addr\x18\x01 \x01(\tR\x12coalitionVoiceAddr\x12*\n" +
+	"\x11global_voice_addr\x18\x02 \x01(\tR\x0fglobalVoiceAddr\"v\n" +
 	"\x12DistributionUpdate\x128\n" +
 	"\vvoice_hosts\x18\x02 \x03(\v2\x17.srspb.VoiceHostDetailsR\n" +
 	"voiceHosts\x12\x1b\n" +
@@ -3231,7 +3307,7 @@ func file_srs_proto_rawDescGZIP() []byte {
 }
 
 var file_srs_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_srs_proto_msgTypes = make([]protoimpl.MessageInfo, 46)
+var file_srs_proto_msgTypes = make([]protoimpl.MessageInfo, 47)
 var file_srs_proto_goTypes = []any{
 	(DistributionMode)(0),                // 0: srspb.DistributionMode
 	(ServerUpdate_UpdateType)(0),         // 1: srspb.ServerUpdate.UpdateType
@@ -3264,24 +3340,25 @@ var file_srs_proto_goTypes = []any{
 	(*VoiceHostDetails)(nil),             // 28: srspb.VoiceHostDetails
 	(*FrequencyRange)(nil),               // 29: srspb.FrequencyRange
 	(*ServerUpdate)(nil),                 // 30: srspb.ServerUpdate
-	(*DistributionUpdate)(nil),           // 31: srspb.DistributionUpdate
-	(*ClientUpdate)(nil),                 // 32: srspb.ClientUpdate
-	(*ServerAction)(nil),                 // 33: srspb.ServerAction
-	(*ClientInfo)(nil),                   // 34: srspb.ClientInfo
-	(*RadioInfo)(nil),                    // 35: srspb.RadioInfo
-	(*Radio)(nil),                        // 36: srspb.Radio
-	(*ServerSettings)(nil),               // 37: srspb.ServerSettings
-	(*GeneralServerSettings)(nil),        // 38: srspb.GeneralServerSettings
-	(*Coalition)(nil),                    // 39: srspb.Coalition
-	(*SyncResponse)(nil),                 // 40: srspb.SyncResponse
-	(*ServerSyncResult)(nil),             // 41: srspb.ServerSyncResult
-	(*ServerResponse)(nil),               // 42: srspb.ServerResponse
-	nil,                                  // 43: srspb.AuthStepDefinition.MetadataEntry
-	nil,                                  // 44: srspb.StartAuthRequest.FirstStepInputEntry
-	nil,                                  // 45: srspb.ContinueAuthRequest.StepDataEntry
-	nil,                                  // 46: srspb.NextStepRequired.MetadataEntry
-	nil,                                  // 47: srspb.ServerSyncResult.ClientsEntry
-	nil,                                  // 48: srspb.ServerSyncResult.RadiosEntry
+	(*VoiceAddressUpdate)(nil),           // 31: srspb.VoiceAddressUpdate
+	(*DistributionUpdate)(nil),           // 32: srspb.DistributionUpdate
+	(*ClientUpdate)(nil),                 // 33: srspb.ClientUpdate
+	(*ServerAction)(nil),                 // 34: srspb.ServerAction
+	(*ClientInfo)(nil),                   // 35: srspb.ClientInfo
+	(*RadioInfo)(nil),                    // 36: srspb.RadioInfo
+	(*Radio)(nil),                        // 37: srspb.Radio
+	(*ServerSettings)(nil),               // 38: srspb.ServerSettings
+	(*GeneralServerSettings)(nil),        // 39: srspb.GeneralServerSettings
+	(*Coalition)(nil),                    // 40: srspb.Coalition
+	(*SyncResponse)(nil),                 // 41: srspb.SyncResponse
+	(*ServerSyncResult)(nil),             // 42: srspb.ServerSyncResult
+	(*ServerResponse)(nil),               // 43: srspb.ServerResponse
+	nil,                                  // 44: srspb.AuthStepDefinition.MetadataEntry
+	nil,                                  // 45: srspb.StartAuthRequest.FirstStepInputEntry
+	nil,                                  // 46: srspb.ContinueAuthRequest.StepDataEntry
+	nil,                                  // 47: srspb.NextStepRequired.MetadataEntry
+	nil,                                  // 48: srspb.ServerSyncResult.ClientsEntry
+	nil,                                  // 49: srspb.ServerSyncResult.RadiosEntry
 }
 var file_srs_proto_depIdxs = []int32{
 	26, // 0: srspb.AuthInitRequest.capabilities:type_name -> srspb.ClientCapabilities
@@ -3291,14 +3368,14 @@ var file_srs_proto_depIdxs = []int32{
 	10, // 4: srspb.FlowDiscoveryResult.flows:type_name -> srspb.AuthFlowDefinition
 	11, // 5: srspb.AuthFlowDefinition.steps:type_name -> srspb.AuthStepDefinition
 	19, // 6: srspb.AuthStepDefinition.required_fields:type_name -> srspb.FieldDefinition
-	43, // 7: srspb.AuthStepDefinition.metadata:type_name -> srspb.AuthStepDefinition.MetadataEntry
+	44, // 7: srspb.AuthStepDefinition.metadata:type_name -> srspb.AuthStepDefinition.MetadataEntry
 	14, // 8: srspb.GuestLoginResponse.result:type_name -> srspb.GuestLoginResult
-	44, // 9: srspb.StartAuthRequest.first_step_input:type_name -> srspb.StartAuthRequest.FirstStepInputEntry
-	45, // 10: srspb.ContinueAuthRequest.step_data:type_name -> srspb.ContinueAuthRequest.StepDataEntry
+	45, // 9: srspb.StartAuthRequest.first_step_input:type_name -> srspb.StartAuthRequest.FirstStepInputEntry
+	46, // 10: srspb.ContinueAuthRequest.step_data:type_name -> srspb.ContinueAuthRequest.StepDataEntry
 	18, // 11: srspb.AuthStepResponse.next_step:type_name -> srspb.NextStepRequired
 	20, // 12: srspb.AuthStepResponse.complete:type_name -> srspb.LoginResult
 	19, // 13: srspb.NextStepRequired.required_fields:type_name -> srspb.FieldDefinition
-	46, // 14: srspb.NextStepRequired.metadata:type_name -> srspb.NextStepRequired.MetadataEntry
+	47, // 14: srspb.NextStepRequired.metadata:type_name -> srspb.NextStepRequired.MetadataEntry
 	25, // 15: srspb.LoginResult.available_coalitions:type_name -> srspb.CoalitionSelection
 	23, // 16: srspb.LoginResult.available_units:type_name -> srspb.UnitSelection
 	24, // 17: srspb.LoginResult.available_roles:type_name -> srspb.RoleSelection
@@ -3307,52 +3384,53 @@ var file_srs_proto_depIdxs = []int32{
 	26, // 20: srspb.ServerInitializationResponse.capabilities:type_name -> srspb.ClientCapabilities
 	29, // 21: srspb.VoiceHostDetails.frequencies:type_name -> srspb.FrequencyRange
 	1,  // 22: srspb.ServerUpdate.type:type_name -> srspb.ServerUpdate.UpdateType
-	32, // 23: srspb.ServerUpdate.client_update:type_name -> srspb.ClientUpdate
-	33, // 24: srspb.ServerUpdate.server_action:type_name -> srspb.ServerAction
-	37, // 25: srspb.ServerUpdate.settings_update:type_name -> srspb.ServerSettings
-	31, // 26: srspb.ServerUpdate.voice_hosts:type_name -> srspb.DistributionUpdate
-	28, // 27: srspb.DistributionUpdate.voice_hosts:type_name -> srspb.VoiceHostDetails
-	34, // 28: srspb.ClientUpdate.client_info:type_name -> srspb.ClientInfo
-	35, // 29: srspb.ClientUpdate.radio_info:type_name -> srspb.RadioInfo
-	2,  // 30: srspb.ServerAction.type:type_name -> srspb.ServerAction.ActionType
-	36, // 31: srspb.RadioInfo.radios:type_name -> srspb.Radio
-	39, // 32: srspb.ServerSettings.coalitions:type_name -> srspb.Coalition
-	38, // 33: srspb.ServerSettings.general_settings:type_name -> srspb.GeneralServerSettings
-	41, // 34: srspb.SyncResponse.data:type_name -> srspb.ServerSyncResult
-	47, // 35: srspb.ServerSyncResult.clients:type_name -> srspb.ServerSyncResult.ClientsEntry
-	48, // 36: srspb.ServerSyncResult.radios:type_name -> srspb.ServerSyncResult.RadiosEntry
-	37, // 37: srspb.ServerSyncResult.settings:type_name -> srspb.ServerSettings
-	34, // 38: srspb.ServerSyncResult.ClientsEntry.value:type_name -> srspb.ClientInfo
-	35, // 39: srspb.ServerSyncResult.RadiosEntry.value:type_name -> srspb.RadioInfo
-	4,  // 40: srspb.AuthService.InitAuth:input_type -> srspb.AuthInitRequest
-	7,  // 41: srspb.AuthService.DiscoverAuthenticationFlows:input_type -> srspb.FlowDiscoveryRequest
-	12, // 42: srspb.AuthService.GuestLogin:input_type -> srspb.GuestLoginRequest
-	15, // 43: srspb.AuthService.StartAuth:input_type -> srspb.StartAuthRequest
-	16, // 44: srspb.AuthService.ContinueAuth:input_type -> srspb.ContinueAuthRequest
-	21, // 45: srspb.AuthService.UnitSelect:input_type -> srspb.UnitSelectRequest
-	3,  // 46: srspb.SRSService.SyncClient:input_type -> srspb.Empty
-	34, // 47: srspb.SRSService.UpdateClientInfo:input_type -> srspb.ClientInfo
-	35, // 48: srspb.SRSService.UpdateRadioInfo:input_type -> srspb.RadioInfo
-	3,  // 49: srspb.SRSService.Disconnect:input_type -> srspb.Empty
-	3,  // 50: srspb.SRSService.GetServerSettings:input_type -> srspb.Empty
-	3,  // 51: srspb.SRSService.SubscribeToUpdates:input_type -> srspb.Empty
-	5,  // 52: srspb.AuthService.InitAuth:output_type -> srspb.AuthInitResponse
-	8,  // 53: srspb.AuthService.DiscoverAuthenticationFlows:output_type -> srspb.FlowDiscoveryResponse
-	13, // 54: srspb.AuthService.GuestLogin:output_type -> srspb.GuestLoginResponse
-	17, // 55: srspb.AuthService.StartAuth:output_type -> srspb.AuthStepResponse
-	17, // 56: srspb.AuthService.ContinueAuth:output_type -> srspb.AuthStepResponse
-	22, // 57: srspb.AuthService.UnitSelect:output_type -> srspb.UnitSelectResponse
-	40, // 58: srspb.SRSService.SyncClient:output_type -> srspb.SyncResponse
-	42, // 59: srspb.SRSService.UpdateClientInfo:output_type -> srspb.ServerResponse
-	42, // 60: srspb.SRSService.UpdateRadioInfo:output_type -> srspb.ServerResponse
-	42, // 61: srspb.SRSService.Disconnect:output_type -> srspb.ServerResponse
-	37, // 62: srspb.SRSService.GetServerSettings:output_type -> srspb.ServerSettings
-	30, // 63: srspb.SRSService.SubscribeToUpdates:output_type -> srspb.ServerUpdate
-	52, // [52:64] is the sub-list for method output_type
-	40, // [40:52] is the sub-list for method input_type
-	40, // [40:40] is the sub-list for extension type_name
-	40, // [40:40] is the sub-list for extension extendee
-	0,  // [0:40] is the sub-list for field type_name
+	33, // 23: srspb.ServerUpdate.client_update:type_name -> srspb.ClientUpdate
+	34, // 24: srspb.ServerUpdate.server_action:type_name -> srspb.ServerAction
+	38, // 25: srspb.ServerUpdate.settings_update:type_name -> srspb.ServerSettings
+	32, // 26: srspb.ServerUpdate.voice_hosts:type_name -> srspb.DistributionUpdate
+	31, // 27: srspb.ServerUpdate.voice_address_update:type_name -> srspb.VoiceAddressUpdate
+	28, // 28: srspb.DistributionUpdate.voice_hosts:type_name -> srspb.VoiceHostDetails
+	35, // 29: srspb.ClientUpdate.client_info:type_name -> srspb.ClientInfo
+	36, // 30: srspb.ClientUpdate.radio_info:type_name -> srspb.RadioInfo
+	2,  // 31: srspb.ServerAction.type:type_name -> srspb.ServerAction.ActionType
+	37, // 32: srspb.RadioInfo.radios:type_name -> srspb.Radio
+	40, // 33: srspb.ServerSettings.coalitions:type_name -> srspb.Coalition
+	39, // 34: srspb.ServerSettings.general_settings:type_name -> srspb.GeneralServerSettings
+	42, // 35: srspb.SyncResponse.data:type_name -> srspb.ServerSyncResult
+	48, // 36: srspb.ServerSyncResult.clients:type_name -> srspb.ServerSyncResult.ClientsEntry
+	49, // 37: srspb.ServerSyncResult.radios:type_name -> srspb.ServerSyncResult.RadiosEntry
+	38, // 38: srspb.ServerSyncResult.settings:type_name -> srspb.ServerSettings
+	35, // 39: srspb.ServerSyncResult.ClientsEntry.value:type_name -> srspb.ClientInfo
+	36, // 40: srspb.ServerSyncResult.RadiosEntry.value:type_name -> srspb.RadioInfo
+	4,  // 41: srspb.AuthService.InitAuth:input_type -> srspb.AuthInitRequest
+	7,  // 42: srspb.AuthService.DiscoverAuthenticationFlows:input_type -> srspb.FlowDiscoveryRequest
+	12, // 43: srspb.AuthService.GuestLogin:input_type -> srspb.GuestLoginRequest
+	15, // 44: srspb.AuthService.StartAuth:input_type -> srspb.StartAuthRequest
+	16, // 45: srspb.AuthService.ContinueAuth:input_type -> srspb.ContinueAuthRequest
+	21, // 46: srspb.AuthService.UnitSelect:input_type -> srspb.UnitSelectRequest
+	3,  // 47: srspb.SRSService.SyncClient:input_type -> srspb.Empty
+	35, // 48: srspb.SRSService.UpdateClientInfo:input_type -> srspb.ClientInfo
+	36, // 49: srspb.SRSService.UpdateRadioInfo:input_type -> srspb.RadioInfo
+	3,  // 50: srspb.SRSService.Disconnect:input_type -> srspb.Empty
+	3,  // 51: srspb.SRSService.GetServerSettings:input_type -> srspb.Empty
+	3,  // 52: srspb.SRSService.SubscribeToUpdates:input_type -> srspb.Empty
+	5,  // 53: srspb.AuthService.InitAuth:output_type -> srspb.AuthInitResponse
+	8,  // 54: srspb.AuthService.DiscoverAuthenticationFlows:output_type -> srspb.FlowDiscoveryResponse
+	13, // 55: srspb.AuthService.GuestLogin:output_type -> srspb.GuestLoginResponse
+	17, // 56: srspb.AuthService.StartAuth:output_type -> srspb.AuthStepResponse
+	17, // 57: srspb.AuthService.ContinueAuth:output_type -> srspb.AuthStepResponse
+	22, // 58: srspb.AuthService.UnitSelect:output_type -> srspb.UnitSelectResponse
+	41, // 59: srspb.SRSService.SyncClient:output_type -> srspb.SyncResponse
+	43, // 60: srspb.SRSService.UpdateClientInfo:output_type -> srspb.ServerResponse
+	43, // 61: srspb.SRSService.UpdateRadioInfo:output_type -> srspb.ServerResponse
+	43, // 62: srspb.SRSService.Disconnect:output_type -> srspb.ServerResponse
+	38, // 63: srspb.SRSService.GetServerSettings:output_type -> srspb.ServerSettings
+	30, // 64: srspb.SRSService.SubscribeToUpdates:output_type -> srspb.ServerUpdate
+	53, // [53:65] is the sub-list for method output_type
+	41, // [41:53] is the sub-list for method input_type
+	41, // [41:41] is the sub-list for extension type_name
+	41, // [41:41] is the sub-list for extension extendee
+	0,  // [0:41] is the sub-list for field type_name
 }
 
 func init() { file_srs_proto_init() }
@@ -3387,13 +3465,14 @@ func file_srs_proto_init() {
 		(*ServerUpdate_ServerAction)(nil),
 		(*ServerUpdate_SettingsUpdate)(nil),
 		(*ServerUpdate_VoiceHosts)(nil),
+		(*ServerUpdate_VoiceAddressUpdate)(nil),
 	}
-	file_srs_proto_msgTypes[28].OneofWrappers = []any{}
 	file_srs_proto_msgTypes[29].OneofWrappers = []any{}
 	file_srs_proto_msgTypes[30].OneofWrappers = []any{}
 	file_srs_proto_msgTypes[31].OneofWrappers = []any{}
 	file_srs_proto_msgTypes[32].OneofWrappers = []any{}
-	file_srs_proto_msgTypes[37].OneofWrappers = []any{
+	file_srs_proto_msgTypes[33].OneofWrappers = []any{}
+	file_srs_proto_msgTypes[38].OneofWrappers = []any{
 		(*SyncResponse_ErrorMessage)(nil),
 		(*SyncResponse_Data)(nil),
 	}
@@ -3403,7 +3482,7 @@ func file_srs_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_srs_proto_rawDesc), len(file_srs_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   46,
+			NumMessages:   47,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

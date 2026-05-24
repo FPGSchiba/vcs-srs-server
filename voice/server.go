@@ -166,7 +166,6 @@ func (v *Server) handleHelloPacket(packet *VCSPacket, addr *net.UDPAddr) {
 	v.logger.Info("Received hello packet", "sender_id", packet.SenderID, "addr", addr.String())
 	if !v.serverState.DoesClientExist(packet.SenderID) {
 		v.logger.Warn("Client with hello, that does not exist", "sender_id", packet.SenderID)
-		// Ignore hello from unknown client
 		return
 	}
 
@@ -176,6 +175,11 @@ func (v *Server) handleHelloPacket(packet *VCSPacket, addr *net.UDPAddr) {
 		LastSeen: time.Now(),
 	}
 	v.Unlock()
+
+	if v.controlClient != nil {
+		go v.controlClient.ReportClientConnected(packet.SenderID, addr)
+	}
+
 	ackPacket := NewVCSHelloAckPacket(packet.SenderID)
 	ackData := ackPacket.SerializePacket()
 	_, err := v.conn.WriteToUDP(ackData, addr)
@@ -366,6 +370,9 @@ func (v *Server) DisconnectClient(clientID uuid.UUID) {
 		v.logger.Info("Disconnected voice client",
 			"id", clientID,
 			"addr", client.Addr.String())
+		if v.controlClient != nil {
+			go v.controlClient.ReportClientDisconnected(clientID)
+		}
 	}
 }
 

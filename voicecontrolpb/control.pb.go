@@ -186,7 +186,7 @@ func (x ClientDelta_Type) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ClientDelta_Type.Descriptor instead.
 func (ClientDelta_Type) EnumDescriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{32, 0}
+	return file_control_proto_rawDescGZIP(), []int{33, 0}
 }
 
 // Messages from Control Server to Voice Server
@@ -203,6 +203,7 @@ type ControlMessage struct {
 	//	*ControlMessage_UpdateConfig
 	//	*ControlMessage_StateSnapshot
 	//	*ControlMessage_ClientDelta
+	//	*ControlMessage_AssignCoalitions
 	Command       isControlMessage_Command `protobuf_oneof:"command"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -322,6 +323,15 @@ func (x *ControlMessage) GetClientDelta() *ClientDelta {
 	return nil
 }
 
+func (x *ControlMessage) GetAssignCoalitions() *AssignCoalitionsRequest {
+	if x != nil {
+		if x, ok := x.Command.(*ControlMessage_AssignCoalitions); ok {
+			return x.AssignCoalitions
+		}
+	}
+	return nil
+}
+
 type isControlMessage_Command interface {
 	isControlMessage_Command()
 }
@@ -354,6 +364,10 @@ type ControlMessage_ClientDelta struct {
 	ClientDelta *ClientDelta `protobuf:"bytes,9,opt,name=client_delta,json=clientDelta,proto3,oneof"`
 }
 
+type ControlMessage_AssignCoalitions struct {
+	AssignCoalitions *AssignCoalitionsRequest `protobuf:"bytes,10,opt,name=assign_coalitions,json=assignCoalitions,proto3,oneof"`
+}
+
 func (*ControlMessage_AssignFrequencies) isControlMessage_Command() {}
 
 func (*ControlMessage_KickClient) isControlMessage_Command() {}
@@ -367,6 +381,8 @@ func (*ControlMessage_UpdateConfig) isControlMessage_Command() {}
 func (*ControlMessage_StateSnapshot) isControlMessage_Command() {}
 
 func (*ControlMessage_ClientDelta) isControlMessage_Command() {}
+
+func (*ControlMessage_AssignCoalitions) isControlMessage_Command() {}
 
 // Response for Control Messages
 type ControlResponse struct {
@@ -1568,6 +1584,50 @@ func (x *AssignFrequenciesResponse) GetAcceptedRanges() []*FrequencyRange {
 	return nil
 }
 
+type AssignCoalitionsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Coalitions    []string               `protobuf:"bytes,1,rep,name=coalitions,proto3" json:"coalitions,omitempty"` // full replacement; empty means node becomes idle
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AssignCoalitionsRequest) Reset() {
+	*x = AssignCoalitionsRequest{}
+	mi := &file_control_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AssignCoalitionsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AssignCoalitionsRequest) ProtoMessage() {}
+
+func (x *AssignCoalitionsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AssignCoalitionsRequest.ProtoReflect.Descriptor instead.
+func (*AssignCoalitionsRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *AssignCoalitionsRequest) GetCoalitions() []string {
+	if x != nil {
+		return x.Coalitions
+	}
+	return nil
+}
+
 // TODO: Make this better with coalitions as well
 type FrequencyRange struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
@@ -1579,7 +1639,7 @@ type FrequencyRange struct {
 
 func (x *FrequencyRange) Reset() {
 	*x = FrequencyRange{}
-	mi := &file_control_proto_msgTypes[18]
+	mi := &file_control_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1591,7 +1651,7 @@ func (x *FrequencyRange) String() string {
 func (*FrequencyRange) ProtoMessage() {}
 
 func (x *FrequencyRange) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[18]
+	mi := &file_control_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1604,7 +1664,7 @@ func (x *FrequencyRange) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FrequencyRange.ProtoReflect.Descriptor instead.
 func (*FrequencyRange) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{18}
+	return file_control_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *FrequencyRange) GetStartFrequency() float64 {
@@ -1634,7 +1694,7 @@ type KickClientRequest struct {
 
 func (x *KickClientRequest) Reset() {
 	*x = KickClientRequest{}
-	mi := &file_control_proto_msgTypes[19]
+	mi := &file_control_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1646,7 +1706,7 @@ func (x *KickClientRequest) String() string {
 func (*KickClientRequest) ProtoMessage() {}
 
 func (x *KickClientRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[19]
+	mi := &file_control_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1659,7 +1719,7 @@ func (x *KickClientRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KickClientRequest.ProtoReflect.Descriptor instead.
 func (*KickClientRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{19}
+	return file_control_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *KickClientRequest) GetServerId() string {
@@ -1700,7 +1760,7 @@ type KickClientResponse struct {
 
 func (x *KickClientResponse) Reset() {
 	*x = KickClientResponse{}
-	mi := &file_control_proto_msgTypes[20]
+	mi := &file_control_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1712,7 +1772,7 @@ func (x *KickClientResponse) String() string {
 func (*KickClientResponse) ProtoMessage() {}
 
 func (x *KickClientResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[20]
+	mi := &file_control_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1725,7 +1785,7 @@ func (x *KickClientResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KickClientResponse.ProtoReflect.Descriptor instead.
 func (*KickClientResponse) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{20}
+	return file_control_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *KickClientResponse) GetSuccess() bool {
@@ -1754,7 +1814,7 @@ type ShutdownRequest struct {
 
 func (x *ShutdownRequest) Reset() {
 	*x = ShutdownRequest{}
-	mi := &file_control_proto_msgTypes[21]
+	mi := &file_control_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1766,7 +1826,7 @@ func (x *ShutdownRequest) String() string {
 func (*ShutdownRequest) ProtoMessage() {}
 
 func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[21]
+	mi := &file_control_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1779,7 +1839,7 @@ func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShutdownRequest.ProtoReflect.Descriptor instead.
 func (*ShutdownRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{21}
+	return file_control_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ShutdownRequest) GetServerId() string {
@@ -1813,7 +1873,7 @@ type ShutdownResponse struct {
 
 func (x *ShutdownResponse) Reset() {
 	*x = ShutdownResponse{}
-	mi := &file_control_proto_msgTypes[22]
+	mi := &file_control_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1825,7 +1885,7 @@ func (x *ShutdownResponse) String() string {
 func (*ShutdownResponse) ProtoMessage() {}
 
 func (x *ShutdownResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[22]
+	mi := &file_control_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1838,7 +1898,7 @@ func (x *ShutdownResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShutdownResponse.ProtoReflect.Descriptor instead.
 func (*ShutdownResponse) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{22}
+	return file_control_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ShutdownResponse) GetAcknowledged() bool {
@@ -1865,7 +1925,7 @@ type RebalanceRequest struct {
 
 func (x *RebalanceRequest) Reset() {
 	*x = RebalanceRequest{}
-	mi := &file_control_proto_msgTypes[23]
+	mi := &file_control_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1877,7 +1937,7 @@ func (x *RebalanceRequest) String() string {
 func (*RebalanceRequest) ProtoMessage() {}
 
 func (x *RebalanceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[23]
+	mi := &file_control_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1890,7 +1950,7 @@ func (x *RebalanceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RebalanceRequest.ProtoReflect.Descriptor instead.
 func (*RebalanceRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{23}
+	return file_control_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *RebalanceRequest) GetServerId() string {
@@ -1918,7 +1978,7 @@ type RebalanceResponse struct {
 
 func (x *RebalanceResponse) Reset() {
 	*x = RebalanceResponse{}
-	mi := &file_control_proto_msgTypes[24]
+	mi := &file_control_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1930,7 +1990,7 @@ func (x *RebalanceResponse) String() string {
 func (*RebalanceResponse) ProtoMessage() {}
 
 func (x *RebalanceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[24]
+	mi := &file_control_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1943,7 +2003,7 @@ func (x *RebalanceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RebalanceResponse.ProtoReflect.Descriptor instead.
 func (*RebalanceResponse) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{24}
+	return file_control_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *RebalanceResponse) GetSuccess() bool {
@@ -1979,7 +2039,7 @@ type FrequencyReassignment struct {
 
 func (x *FrequencyReassignment) Reset() {
 	*x = FrequencyReassignment{}
-	mi := &file_control_proto_msgTypes[25]
+	mi := &file_control_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1991,7 +2051,7 @@ func (x *FrequencyReassignment) String() string {
 func (*FrequencyReassignment) ProtoMessage() {}
 
 func (x *FrequencyReassignment) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[25]
+	mi := &file_control_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2004,7 +2064,7 @@ func (x *FrequencyReassignment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FrequencyReassignment.ProtoReflect.Descriptor instead.
 func (*FrequencyReassignment) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{25}
+	return file_control_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *FrequencyReassignment) GetFrequency() float64 {
@@ -2050,7 +2110,7 @@ type ClientInfo struct {
 
 func (x *ClientInfo) Reset() {
 	*x = ClientInfo{}
-	mi := &file_control_proto_msgTypes[26]
+	mi := &file_control_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2062,7 +2122,7 @@ func (x *ClientInfo) String() string {
 func (*ClientInfo) ProtoMessage() {}
 
 func (x *ClientInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[26]
+	mi := &file_control_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2075,7 +2135,7 @@ func (x *ClientInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClientInfo.ProtoReflect.Descriptor instead.
 func (*ClientInfo) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{26}
+	return file_control_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *ClientInfo) GetClientId() string {
@@ -2131,7 +2191,7 @@ type ControlCommand struct {
 
 func (x *ControlCommand) Reset() {
 	*x = ControlCommand{}
-	mi := &file_control_proto_msgTypes[27]
+	mi := &file_control_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2143,7 +2203,7 @@ func (x *ControlCommand) String() string {
 func (*ControlCommand) ProtoMessage() {}
 
 func (x *ControlCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[27]
+	mi := &file_control_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2156,7 +2216,7 @@ func (x *ControlCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ControlCommand.ProtoReflect.Descriptor instead.
 func (*ControlCommand) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{27}
+	return file_control_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ControlCommand) GetType() CommandType {
@@ -2190,7 +2250,7 @@ type ClientStateSnapshot struct {
 
 func (x *ClientStateSnapshot) Reset() {
 	*x = ClientStateSnapshot{}
-	mi := &file_control_proto_msgTypes[28]
+	mi := &file_control_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2202,7 +2262,7 @@ func (x *ClientStateSnapshot) String() string {
 func (*ClientStateSnapshot) ProtoMessage() {}
 
 func (x *ClientStateSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[28]
+	mi := &file_control_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2215,7 +2275,7 @@ func (x *ClientStateSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClientStateSnapshot.ProtoReflect.Descriptor instead.
 func (*ClientStateSnapshot) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{28}
+	return file_control_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *ClientStateSnapshot) GetClients() map[string]*VoiceClientInfo {
@@ -2244,7 +2304,7 @@ type VoiceClientInfo struct {
 
 func (x *VoiceClientInfo) Reset() {
 	*x = VoiceClientInfo{}
-	mi := &file_control_proto_msgTypes[29]
+	mi := &file_control_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2256,7 +2316,7 @@ func (x *VoiceClientInfo) String() string {
 func (*VoiceClientInfo) ProtoMessage() {}
 
 func (x *VoiceClientInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[29]
+	mi := &file_control_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2269,7 +2329,7 @@ func (x *VoiceClientInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VoiceClientInfo.ProtoReflect.Descriptor instead.
 func (*VoiceClientInfo) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{29}
+	return file_control_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *VoiceClientInfo) GetName() string {
@@ -2310,7 +2370,7 @@ type VoiceRadioInfo struct {
 
 func (x *VoiceRadioInfo) Reset() {
 	*x = VoiceRadioInfo{}
-	mi := &file_control_proto_msgTypes[30]
+	mi := &file_control_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2322,7 +2382,7 @@ func (x *VoiceRadioInfo) String() string {
 func (*VoiceRadioInfo) ProtoMessage() {}
 
 func (x *VoiceRadioInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[30]
+	mi := &file_control_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2335,7 +2395,7 @@ func (x *VoiceRadioInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VoiceRadioInfo.ProtoReflect.Descriptor instead.
 func (*VoiceRadioInfo) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{30}
+	return file_control_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *VoiceRadioInfo) GetRadios() []*VoiceRadio {
@@ -2364,7 +2424,7 @@ type VoiceRadio struct {
 
 func (x *VoiceRadio) Reset() {
 	*x = VoiceRadio{}
-	mi := &file_control_proto_msgTypes[31]
+	mi := &file_control_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2376,7 +2436,7 @@ func (x *VoiceRadio) String() string {
 func (*VoiceRadio) ProtoMessage() {}
 
 func (x *VoiceRadio) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[31]
+	mi := &file_control_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2389,7 +2449,7 @@ func (x *VoiceRadio) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VoiceRadio.ProtoReflect.Descriptor instead.
 func (*VoiceRadio) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{31}
+	return file_control_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *VoiceRadio) GetId() uint32 {
@@ -2432,7 +2492,7 @@ type ClientDelta struct {
 
 func (x *ClientDelta) Reset() {
 	*x = ClientDelta{}
-	mi := &file_control_proto_msgTypes[32]
+	mi := &file_control_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2444,7 +2504,7 @@ func (x *ClientDelta) String() string {
 func (*ClientDelta) ProtoMessage() {}
 
 func (x *ClientDelta) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[32]
+	mi := &file_control_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2457,7 +2517,7 @@ func (x *ClientDelta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClientDelta.ProtoReflect.Descriptor instead.
 func (*ClientDelta) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{32}
+	return file_control_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *ClientDelta) GetType() ClientDelta_Type {
@@ -2492,7 +2552,7 @@ var File_control_proto protoreflect.FileDescriptor
 
 const file_control_proto_rawDesc = "" +
 	"\n" +
-	"\rcontrol.proto\x12\x0evoicecontrolpb\"\xd1\x04\n" +
+	"\rcontrol.proto\x12\x0evoicecontrolpb\"\xa9\x05\n" +
 	"\x0eControlMessage\x12\x1b\n" +
 	"\tserver_id\x18\x01 \x01(\tR\bserverId\x12\x19\n" +
 	"\bevent_id\x18\x02 \x01(\tR\aeventId\x12Y\n" +
@@ -2503,7 +2563,9 @@ const file_control_proto_rawDesc = "" +
 	"\trebalance\x18\x06 \x01(\v2 .voicecontrolpb.RebalanceRequestH\x00R\trebalance\x12J\n" +
 	"\rupdate_config\x18\a \x01(\v2#.voicecontrolpb.UpdateConfigRequestH\x00R\fupdateConfig\x12L\n" +
 	"\x0estate_snapshot\x18\b \x01(\v2#.voicecontrolpb.ClientStateSnapshotH\x00R\rstateSnapshot\x12@\n" +
-	"\fclient_delta\x18\t \x01(\v2\x1b.voicecontrolpb.ClientDeltaH\x00R\vclientDeltaB\t\n" +
+	"\fclient_delta\x18\t \x01(\v2\x1b.voicecontrolpb.ClientDeltaH\x00R\vclientDelta\x12V\n" +
+	"\x11assign_coalitions\x18\n" +
+	" \x01(\v2'.voicecontrolpb.AssignCoalitionsRequestH\x00R\x10assignCoalitionsB\t\n" +
 	"\acommand\"\xcf\x04\n" +
 	"\x0fControlResponse\x12\x1b\n" +
 	"\tserver_id\x18\x01 \x01(\tR\bserverId\x12\x19\n" +
@@ -2598,7 +2660,11 @@ const file_control_proto_rawDesc = "" +
 	"\x19AssignFrequenciesResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12G\n" +
-	"\x0faccepted_ranges\x18\x03 \x03(\v2\x1e.voicecontrolpb.FrequencyRangeR\x0eacceptedRanges\"^\n" +
+	"\x0faccepted_ranges\x18\x03 \x03(\v2\x1e.voicecontrolpb.FrequencyRangeR\x0eacceptedRanges\"9\n" +
+	"\x17AssignCoalitionsRequest\x12\x1e\n" +
+	"\n" +
+	"coalitions\x18\x01 \x03(\tR\n" +
+	"coalitions\"^\n" +
 	"\x0eFrequencyRange\x12'\n" +
 	"\x0fstart_frequency\x18\x01 \x01(\x01R\x0estartFrequency\x12#\n" +
 	"\rend_frequency\x18\x02 \x01(\x01R\fendFrequency\"\x80\x01\n" +
@@ -2722,7 +2788,7 @@ func file_control_proto_rawDescGZIP() []byte {
 }
 
 var file_control_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 38)
+var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 39)
 var file_control_proto_goTypes = []any{
 	(DisconnectReason)(0),               // 0: voicecontrolpb.DisconnectReason
 	(CommandType)(0),                    // 1: voicecontrolpb.CommandType
@@ -2745,78 +2811,80 @@ var file_control_proto_goTypes = []any{
 	(*FrequencyChangeResponse)(nil),     // 18: voicecontrolpb.FrequencyChangeResponse
 	(*AssignFrequenciesRequest)(nil),    // 19: voicecontrolpb.AssignFrequenciesRequest
 	(*AssignFrequenciesResponse)(nil),   // 20: voicecontrolpb.AssignFrequenciesResponse
-	(*FrequencyRange)(nil),              // 21: voicecontrolpb.FrequencyRange
-	(*KickClientRequest)(nil),           // 22: voicecontrolpb.KickClientRequest
-	(*KickClientResponse)(nil),          // 23: voicecontrolpb.KickClientResponse
-	(*ShutdownRequest)(nil),             // 24: voicecontrolpb.ShutdownRequest
-	(*ShutdownResponse)(nil),            // 25: voicecontrolpb.ShutdownResponse
-	(*RebalanceRequest)(nil),            // 26: voicecontrolpb.RebalanceRequest
-	(*RebalanceResponse)(nil),           // 27: voicecontrolpb.RebalanceResponse
-	(*FrequencyReassignment)(nil),       // 28: voicecontrolpb.FrequencyReassignment
-	(*ClientInfo)(nil),                  // 29: voicecontrolpb.ClientInfo
-	(*ControlCommand)(nil),              // 30: voicecontrolpb.ControlCommand
-	(*ClientStateSnapshot)(nil),         // 31: voicecontrolpb.ClientStateSnapshot
-	(*VoiceClientInfo)(nil),             // 32: voicecontrolpb.VoiceClientInfo
-	(*VoiceRadioInfo)(nil),              // 33: voicecontrolpb.VoiceRadioInfo
-	(*VoiceRadio)(nil),                  // 34: voicecontrolpb.VoiceRadio
-	(*ClientDelta)(nil),                 // 35: voicecontrolpb.ClientDelta
-	nil,                                 // 36: voicecontrolpb.UpdateConfigRequest.ConfigParametersEntry
-	nil,                                 // 37: voicecontrolpb.UpdateConfigResponse.AppliedParametersEntry
-	nil,                                 // 38: voicecontrolpb.ControlCommand.ParametersEntry
-	nil,                                 // 39: voicecontrolpb.ClientStateSnapshot.ClientsEntry
-	nil,                                 // 40: voicecontrolpb.ClientStateSnapshot.RadiosEntry
+	(*AssignCoalitionsRequest)(nil),     // 21: voicecontrolpb.AssignCoalitionsRequest
+	(*FrequencyRange)(nil),              // 22: voicecontrolpb.FrequencyRange
+	(*KickClientRequest)(nil),           // 23: voicecontrolpb.KickClientRequest
+	(*KickClientResponse)(nil),          // 24: voicecontrolpb.KickClientResponse
+	(*ShutdownRequest)(nil),             // 25: voicecontrolpb.ShutdownRequest
+	(*ShutdownResponse)(nil),            // 26: voicecontrolpb.ShutdownResponse
+	(*RebalanceRequest)(nil),            // 27: voicecontrolpb.RebalanceRequest
+	(*RebalanceResponse)(nil),           // 28: voicecontrolpb.RebalanceResponse
+	(*FrequencyReassignment)(nil),       // 29: voicecontrolpb.FrequencyReassignment
+	(*ClientInfo)(nil),                  // 30: voicecontrolpb.ClientInfo
+	(*ControlCommand)(nil),              // 31: voicecontrolpb.ControlCommand
+	(*ClientStateSnapshot)(nil),         // 32: voicecontrolpb.ClientStateSnapshot
+	(*VoiceClientInfo)(nil),             // 33: voicecontrolpb.VoiceClientInfo
+	(*VoiceRadioInfo)(nil),              // 34: voicecontrolpb.VoiceRadioInfo
+	(*VoiceRadio)(nil),                  // 35: voicecontrolpb.VoiceRadio
+	(*ClientDelta)(nil),                 // 36: voicecontrolpb.ClientDelta
+	nil,                                 // 37: voicecontrolpb.UpdateConfigRequest.ConfigParametersEntry
+	nil,                                 // 38: voicecontrolpb.UpdateConfigResponse.AppliedParametersEntry
+	nil,                                 // 39: voicecontrolpb.ControlCommand.ParametersEntry
+	nil,                                 // 40: voicecontrolpb.ClientStateSnapshot.ClientsEntry
+	nil,                                 // 41: voicecontrolpb.ClientStateSnapshot.RadiosEntry
 }
 var file_control_proto_depIdxs = []int32{
 	19, // 0: voicecontrolpb.ControlMessage.assign_frequencies:type_name -> voicecontrolpb.AssignFrequenciesRequest
-	22, // 1: voicecontrolpb.ControlMessage.kick_client:type_name -> voicecontrolpb.KickClientRequest
-	24, // 2: voicecontrolpb.ControlMessage.shutdown:type_name -> voicecontrolpb.ShutdownRequest
-	26, // 3: voicecontrolpb.ControlMessage.rebalance:type_name -> voicecontrolpb.RebalanceRequest
+	23, // 1: voicecontrolpb.ControlMessage.kick_client:type_name -> voicecontrolpb.KickClientRequest
+	25, // 2: voicecontrolpb.ControlMessage.shutdown:type_name -> voicecontrolpb.ShutdownRequest
+	27, // 3: voicecontrolpb.ControlMessage.rebalance:type_name -> voicecontrolpb.RebalanceRequest
 	5,  // 4: voicecontrolpb.ControlMessage.update_config:type_name -> voicecontrolpb.UpdateConfigRequest
-	31, // 5: voicecontrolpb.ControlMessage.state_snapshot:type_name -> voicecontrolpb.ClientStateSnapshot
-	35, // 6: voicecontrolpb.ControlMessage.client_delta:type_name -> voicecontrolpb.ClientDelta
-	20, // 7: voicecontrolpb.ControlResponse.assign_frequencies_response:type_name -> voicecontrolpb.AssignFrequenciesResponse
-	23, // 8: voicecontrolpb.ControlResponse.kick_client_response:type_name -> voicecontrolpb.KickClientResponse
-	25, // 9: voicecontrolpb.ControlResponse.shutdown_response:type_name -> voicecontrolpb.ShutdownResponse
-	27, // 10: voicecontrolpb.ControlResponse.rebalance_response:type_name -> voicecontrolpb.RebalanceResponse
-	6,  // 11: voicecontrolpb.ControlResponse.update_config_response:type_name -> voicecontrolpb.UpdateConfigResponse
-	36, // 12: voicecontrolpb.UpdateConfigRequest.config_parameters:type_name -> voicecontrolpb.UpdateConfigRequest.ConfigParametersEntry
-	37, // 13: voicecontrolpb.UpdateConfigResponse.applied_parameters:type_name -> voicecontrolpb.UpdateConfigResponse.AppliedParametersEntry
-	9,  // 14: voicecontrolpb.RegisterVoiceServerRequest.capabilities:type_name -> voicecontrolpb.ServerCapabilities
-	21, // 15: voicecontrolpb.RegisterVoiceServerResponse.assigned_frequencies:type_name -> voicecontrolpb.FrequencyRange
-	12, // 16: voicecontrolpb.HeartbeatRequest.status:type_name -> voicecontrolpb.ServerStatus
-	29, // 17: voicecontrolpb.HeartbeatRequest.connected_clients:type_name -> voicecontrolpb.ClientInfo
-	30, // 18: voicecontrolpb.HeartbeatResponse.commands:type_name -> voicecontrolpb.ControlCommand
-	0,  // 19: voicecontrolpb.ClientDisconnectedRequest.reason:type_name -> voicecontrolpb.DisconnectReason
-	21, // 20: voicecontrolpb.AssignFrequenciesRequest.frequency_ranges:type_name -> voicecontrolpb.FrequencyRange
-	21, // 21: voicecontrolpb.AssignFrequenciesResponse.accepted_ranges:type_name -> voicecontrolpb.FrequencyRange
-	28, // 22: voicecontrolpb.RebalanceRequest.reassignments:type_name -> voicecontrolpb.FrequencyReassignment
-	1,  // 23: voicecontrolpb.ControlCommand.type:type_name -> voicecontrolpb.CommandType
-	38, // 24: voicecontrolpb.ControlCommand.parameters:type_name -> voicecontrolpb.ControlCommand.ParametersEntry
-	39, // 25: voicecontrolpb.ClientStateSnapshot.clients:type_name -> voicecontrolpb.ClientStateSnapshot.ClientsEntry
-	40, // 26: voicecontrolpb.ClientStateSnapshot.radios:type_name -> voicecontrolpb.ClientStateSnapshot.RadiosEntry
-	34, // 27: voicecontrolpb.VoiceRadioInfo.radios:type_name -> voicecontrolpb.VoiceRadio
-	2,  // 28: voicecontrolpb.ClientDelta.type:type_name -> voicecontrolpb.ClientDelta.Type
-	32, // 29: voicecontrolpb.ClientDelta.client_info:type_name -> voicecontrolpb.VoiceClientInfo
-	33, // 30: voicecontrolpb.ClientDelta.radio_info:type_name -> voicecontrolpb.VoiceRadioInfo
-	32, // 31: voicecontrolpb.ClientStateSnapshot.ClientsEntry.value:type_name -> voicecontrolpb.VoiceClientInfo
-	33, // 32: voicecontrolpb.ClientStateSnapshot.RadiosEntry.value:type_name -> voicecontrolpb.VoiceRadioInfo
-	7,  // 33: voicecontrolpb.VoiceControlService.RegisterVoiceServer:input_type -> voicecontrolpb.RegisterVoiceServerRequest
-	10, // 34: voicecontrolpb.VoiceControlService.SendHeartbeat:input_type -> voicecontrolpb.HeartbeatRequest
-	13, // 35: voicecontrolpb.VoiceControlService.ReportClientConnected:input_type -> voicecontrolpb.ClientConnectedRequest
-	15, // 36: voicecontrolpb.VoiceControlService.ReportClientDisconnected:input_type -> voicecontrolpb.ClientDisconnectedRequest
-	17, // 37: voicecontrolpb.VoiceControlService.ReportFrequencyChange:input_type -> voicecontrolpb.FrequencyChangeRequest
-	4,  // 38: voicecontrolpb.VoiceControlService.EstablishStream:input_type -> voicecontrolpb.ControlResponse
-	8,  // 39: voicecontrolpb.VoiceControlService.RegisterVoiceServer:output_type -> voicecontrolpb.RegisterVoiceServerResponse
-	11, // 40: voicecontrolpb.VoiceControlService.SendHeartbeat:output_type -> voicecontrolpb.HeartbeatResponse
-	14, // 41: voicecontrolpb.VoiceControlService.ReportClientConnected:output_type -> voicecontrolpb.ClientConnectedResponse
-	16, // 42: voicecontrolpb.VoiceControlService.ReportClientDisconnected:output_type -> voicecontrolpb.ClientDisconnectedResponse
-	18, // 43: voicecontrolpb.VoiceControlService.ReportFrequencyChange:output_type -> voicecontrolpb.FrequencyChangeResponse
-	3,  // 44: voicecontrolpb.VoiceControlService.EstablishStream:output_type -> voicecontrolpb.ControlMessage
-	39, // [39:45] is the sub-list for method output_type
-	33, // [33:39] is the sub-list for method input_type
-	33, // [33:33] is the sub-list for extension type_name
-	33, // [33:33] is the sub-list for extension extendee
-	0,  // [0:33] is the sub-list for field type_name
+	32, // 5: voicecontrolpb.ControlMessage.state_snapshot:type_name -> voicecontrolpb.ClientStateSnapshot
+	36, // 6: voicecontrolpb.ControlMessage.client_delta:type_name -> voicecontrolpb.ClientDelta
+	21, // 7: voicecontrolpb.ControlMessage.assign_coalitions:type_name -> voicecontrolpb.AssignCoalitionsRequest
+	20, // 8: voicecontrolpb.ControlResponse.assign_frequencies_response:type_name -> voicecontrolpb.AssignFrequenciesResponse
+	24, // 9: voicecontrolpb.ControlResponse.kick_client_response:type_name -> voicecontrolpb.KickClientResponse
+	26, // 10: voicecontrolpb.ControlResponse.shutdown_response:type_name -> voicecontrolpb.ShutdownResponse
+	28, // 11: voicecontrolpb.ControlResponse.rebalance_response:type_name -> voicecontrolpb.RebalanceResponse
+	6,  // 12: voicecontrolpb.ControlResponse.update_config_response:type_name -> voicecontrolpb.UpdateConfigResponse
+	37, // 13: voicecontrolpb.UpdateConfigRequest.config_parameters:type_name -> voicecontrolpb.UpdateConfigRequest.ConfigParametersEntry
+	38, // 14: voicecontrolpb.UpdateConfigResponse.applied_parameters:type_name -> voicecontrolpb.UpdateConfigResponse.AppliedParametersEntry
+	9,  // 15: voicecontrolpb.RegisterVoiceServerRequest.capabilities:type_name -> voicecontrolpb.ServerCapabilities
+	22, // 16: voicecontrolpb.RegisterVoiceServerResponse.assigned_frequencies:type_name -> voicecontrolpb.FrequencyRange
+	12, // 17: voicecontrolpb.HeartbeatRequest.status:type_name -> voicecontrolpb.ServerStatus
+	30, // 18: voicecontrolpb.HeartbeatRequest.connected_clients:type_name -> voicecontrolpb.ClientInfo
+	31, // 19: voicecontrolpb.HeartbeatResponse.commands:type_name -> voicecontrolpb.ControlCommand
+	0,  // 20: voicecontrolpb.ClientDisconnectedRequest.reason:type_name -> voicecontrolpb.DisconnectReason
+	22, // 21: voicecontrolpb.AssignFrequenciesRequest.frequency_ranges:type_name -> voicecontrolpb.FrequencyRange
+	22, // 22: voicecontrolpb.AssignFrequenciesResponse.accepted_ranges:type_name -> voicecontrolpb.FrequencyRange
+	29, // 23: voicecontrolpb.RebalanceRequest.reassignments:type_name -> voicecontrolpb.FrequencyReassignment
+	1,  // 24: voicecontrolpb.ControlCommand.type:type_name -> voicecontrolpb.CommandType
+	39, // 25: voicecontrolpb.ControlCommand.parameters:type_name -> voicecontrolpb.ControlCommand.ParametersEntry
+	40, // 26: voicecontrolpb.ClientStateSnapshot.clients:type_name -> voicecontrolpb.ClientStateSnapshot.ClientsEntry
+	41, // 27: voicecontrolpb.ClientStateSnapshot.radios:type_name -> voicecontrolpb.ClientStateSnapshot.RadiosEntry
+	35, // 28: voicecontrolpb.VoiceRadioInfo.radios:type_name -> voicecontrolpb.VoiceRadio
+	2,  // 29: voicecontrolpb.ClientDelta.type:type_name -> voicecontrolpb.ClientDelta.Type
+	33, // 30: voicecontrolpb.ClientDelta.client_info:type_name -> voicecontrolpb.VoiceClientInfo
+	34, // 31: voicecontrolpb.ClientDelta.radio_info:type_name -> voicecontrolpb.VoiceRadioInfo
+	33, // 32: voicecontrolpb.ClientStateSnapshot.ClientsEntry.value:type_name -> voicecontrolpb.VoiceClientInfo
+	34, // 33: voicecontrolpb.ClientStateSnapshot.RadiosEntry.value:type_name -> voicecontrolpb.VoiceRadioInfo
+	7,  // 34: voicecontrolpb.VoiceControlService.RegisterVoiceServer:input_type -> voicecontrolpb.RegisterVoiceServerRequest
+	10, // 35: voicecontrolpb.VoiceControlService.SendHeartbeat:input_type -> voicecontrolpb.HeartbeatRequest
+	13, // 36: voicecontrolpb.VoiceControlService.ReportClientConnected:input_type -> voicecontrolpb.ClientConnectedRequest
+	15, // 37: voicecontrolpb.VoiceControlService.ReportClientDisconnected:input_type -> voicecontrolpb.ClientDisconnectedRequest
+	17, // 38: voicecontrolpb.VoiceControlService.ReportFrequencyChange:input_type -> voicecontrolpb.FrequencyChangeRequest
+	4,  // 39: voicecontrolpb.VoiceControlService.EstablishStream:input_type -> voicecontrolpb.ControlResponse
+	8,  // 40: voicecontrolpb.VoiceControlService.RegisterVoiceServer:output_type -> voicecontrolpb.RegisterVoiceServerResponse
+	11, // 41: voicecontrolpb.VoiceControlService.SendHeartbeat:output_type -> voicecontrolpb.HeartbeatResponse
+	14, // 42: voicecontrolpb.VoiceControlService.ReportClientConnected:output_type -> voicecontrolpb.ClientConnectedResponse
+	16, // 43: voicecontrolpb.VoiceControlService.ReportClientDisconnected:output_type -> voicecontrolpb.ClientDisconnectedResponse
+	18, // 44: voicecontrolpb.VoiceControlService.ReportFrequencyChange:output_type -> voicecontrolpb.FrequencyChangeResponse
+	3,  // 45: voicecontrolpb.VoiceControlService.EstablishStream:output_type -> voicecontrolpb.ControlMessage
+	40, // [40:46] is the sub-list for method output_type
+	34, // [34:40] is the sub-list for method input_type
+	34, // [34:34] is the sub-list for extension type_name
+	34, // [34:34] is the sub-list for extension extendee
+	0,  // [0:34] is the sub-list for field type_name
 }
 
 func init() { file_control_proto_init() }
@@ -2832,6 +2900,7 @@ func file_control_proto_init() {
 		(*ControlMessage_UpdateConfig)(nil),
 		(*ControlMessage_StateSnapshot)(nil),
 		(*ControlMessage_ClientDelta)(nil),
+		(*ControlMessage_AssignCoalitions)(nil),
 	}
 	file_control_proto_msgTypes[1].OneofWrappers = []any{
 		(*ControlResponse_AssignFrequenciesResponse)(nil),
@@ -2846,7 +2915,7 @@ func file_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_control_proto_rawDesc), len(file_control_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   38,
+			NumMessages:   39,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
