@@ -1,6 +1,8 @@
 package srs
 
 import (
+	"log/slog"
+	"os"
 	"testing"
 
 	"github.com/FPGSchiba/vcs-srs-server/events"
@@ -14,6 +16,7 @@ func newTestServer() *SimpleRadioServer {
 	return &SimpleRadioServer{
 		serverState:   &state.ServerState{},
 		settingsState: &state.SettingsState{},
+		logger:        slog.New(slog.NewTextHandler(os.Stderr, nil)),
 		streams:       make(map[uuid.UUID]grpc.ServerStreamingServer[pb.ServerUpdate]),
 		stopChan:      make(chan struct{}),
 	}

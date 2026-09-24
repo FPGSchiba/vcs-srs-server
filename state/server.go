@@ -26,7 +26,7 @@ type ClientState struct {
 	Role               uint8
 	LastUpdate         time.Time
 	LatencyToControlMs int64  // measured RTT to the SRS/control gRPC node
-	VoiceSecret        string // per-session secret presented in the voice HELLO packet
+	VoiceSecret        string `json:"-"` // per-session secret presented in the voice HELLO packet
 }
 
 type RadioState struct {
@@ -216,16 +216,6 @@ func (s *ServerState) IsListeningOnFrequency(clientGuid, senderId uuid.UUID, fre
 	}
 
 	return false
-}
-
-func (s *ServerState) DoesClientExist(clientGuid uuid.UUID) bool {
-	s.RLock()
-	defer s.RUnlock()
-	_, exists := s.Clients[clientGuid]
-	if !exists {
-		return false
-	}
-	return true
 }
 
 // GetVoiceSecret returns the client's voice secret. ok is false if the client

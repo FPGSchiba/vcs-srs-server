@@ -70,8 +70,17 @@ func (s *SimpleRadioServer) getVoiceAddresses(coalition string) (coalitionAddr, 
 // voiceSecretFor returns the client's voice secret, or "" if the client is
 // unknown. The secret is delivered alongside the voice address so the client
 // has everything it needs to send a HELLO.
+//
+// An empty return should be unreachable in practice -- the auth interceptor
+// guarantees callerID names a valid, already-authenticated client -- but a
+// caller that received "" would silently get an unusable secret with
+// Success: true and nothing logged, so warn here to keep that failure mode
+// diagnosable rather than silent.
 func (s *SimpleRadioServer) voiceSecretFor(clientID uuid.UUID) string {
-	secret, _ := s.serverState.GetVoiceSecret(clientID)
+	secret, ok := s.serverState.GetVoiceSecret(clientID)
+	if secret == "" {
+		s.logger.Warn("voiceSecretFor returned an empty secret", "ClientID", clientID, "known", ok)
+	}
 	return secret
 }
 

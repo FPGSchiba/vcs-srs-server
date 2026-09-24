@@ -333,7 +333,9 @@ func TestHelloShortSecretRejected(t *testing.T) {
 	assertRejectReason(t, h, "missing or short secret")
 }
 
-// The pre-existing DoesClientExist rejection must still hold.
+// An unknown client (no ClientState in serverState.Clients) must still be
+// rejected -- the check now lives in GetVoiceSecret's ok return, not a
+// separate DoesClientExist call.
 func TestHelloUnknownClientRejected(t *testing.T) {
 	ss := &state.ServerState{}
 	s, h := newCapturingTestServer(t, ss)
@@ -569,8 +571,21 @@ func TestIsBoundAddrMatchesIPv4MappedIPv6(t *testing.T) {
 func TestIsBoundAddrUnknownClient(t *testing.T) {
 	s := newTestServer()
 	addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5002}
-	if s.isBoundAddr(uuid.New(), addr) {
+	id := uuid.New()
+	if s.isBoundAddr(id, addr) {
 		t.Fatal("an unbound client must not match any address")
+	}
+
+	// A nil address must never match, unknown client or not.
+	if s.isBoundAddr(id, nil) {
+		t.Fatal("a nil address must never match")
+	}
+
+	// A client with no bound address on record must never match, even
+	// against a non-nil address.
+	s.clients[id] = &Client{Addr: nil}
+	if s.isBoundAddr(id, addr) {
+		t.Fatal("a client with no bound address must never match")
 	}
 }
 
@@ -590,6 +605,12 @@ func TestVoiceFromUnboundAddressDropped(t *testing.T) {
 	s.RLock()
 	before := s.clients[id].LastSeen
 	s.RUnlock()
+
+	// Sleep so a refresh would be observably different from `before`, matching
+	// its sibling TestKeepaliveFromUnboundAddressIgnored. Without it the test
+	// relies on two time.Now() calls differing by microseconds, which holds on
+	// Linux/macOS but would go vacuous on a coarse-timer platform.
+	time.Sleep(5 * time.Millisecond)
 
 	voicePkt := NewVCSVoicePacket(id, 1, 243000, make([]byte, 40))
 	s.handleVoicePacket(voicePkt, attacker.LocalAddr().(*net.UDPAddr))
