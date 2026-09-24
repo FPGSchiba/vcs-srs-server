@@ -117,4 +117,4 @@ tasks:
       - sh: which gqlgen
         msg: "Install gqlgen: go install github.com/99designs/gqlgen@latest"
     cmds:
-      - go run github.com/99designs/gqlgen generate
+      - gqlgen generate

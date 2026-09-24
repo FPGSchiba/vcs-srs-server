@@ -314,7 +314,3 @@ func (r *Resolver) Query() generated.QueryResolver { return &queryResolver{r} }
 
 type mutationResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
-
-func ok(msg string) *generated.MutationResult {
-	return &generated.MutationResult{Success: true, Message: &msg}
-}

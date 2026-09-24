@@ -34,6 +34,9 @@ jobs:
           protoc --go_out=./voicecontrolpb --go_opt=paths=source_relative --go-grpc_out=./voicecontrolpb --go-grpc_opt=paths=source_relative control.proto
           protoc --go_out=./vcsauthpb --go_opt=paths=source_relative --go-grpc_out=./vcsauthpb --go-grpc_opt=paths=source_relative vcs-auth-plugin.proto
 
+      - name: Generate GraphQL code
+        run: go run github.com/99designs/gqlgen@$(go list -m -f '{{.Version}}' github.com/99designs/gqlgen) generate
+
       - name: Run tests
         run: go test -tags headless -coverprofile=coverage.out ./...
 
