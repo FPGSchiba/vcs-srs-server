@@ -67,6 +67,14 @@ func (s *SimpleRadioServer) getVoiceAddresses(coalition string) (coalitionAddr, 
 	return "", ""
 }
 
+// voiceSecretFor returns the client's voice secret, or "" if the client is
+// unknown. The secret is delivered alongside the voice address so the client
+// has everything it needs to send a HELLO.
+func (s *SimpleRadioServer) voiceSecretFor(clientID uuid.UUID) string {
+	secret, _ := s.serverState.GetVoiceSecret(clientID)
+	return secret
+}
+
 func (s *SimpleRadioServer) GetServerState() healthpb.HealthCheckResponse_ServingStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -130,7 +138,9 @@ func (s *SimpleRadioServer) SyncClient(ctx context.Context, _ *pb.Empty) (*pb.Sy
 	})
 
 	var coalition string
+	var callerID uuid.UUID
 	if clientID, err := clientIDFromContext(ctx); err == nil {
+		callerID = clientID
 		s.serverState.RLock()
 		if client, exists := s.serverState.Clients[clientID]; exists {
 			coalition = client.Coalition
@@ -148,6 +158,7 @@ func (s *SimpleRadioServer) SyncClient(ctx context.Context, _ *pb.Empty) (*pb.Sy
 				Settings:           s.buildServerSettings(),
 				CoalitionVoiceAddr: coalitionVoiceAddr,
 				GlobalVoiceAddr:    globalVoiceAddr,
+				VoiceSecret:        s.voiceSecretFor(callerID),
 			},
 		},
 	}, nil
@@ -403,6 +414,7 @@ func (s *SimpleRadioServer) SubscribeToUpdates(_ *pb.Empty, stream grpc.ServerSt
 								VoiceAddressUpdate: &pb.VoiceAddressUpdate{
 									CoalitionVoiceAddr: ce.NewAddr,
 									GlobalVoiceAddr:    ce.GlobalAddr,
+									VoiceSecret:        s.voiceSecretFor(clientID),
 								},
 							},
 						}

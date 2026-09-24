@@ -175,3 +175,27 @@ func TestBuildServerUpdate_SettingsChanged(t *testing.T) {
 		t.Fatalf("expected SERVER_SETTINGS_CHANGED, got %v", update)
 	}
 }
+
+func TestVoiceSecretForKnownClient(t *testing.T) {
+	s := newTestServer()
+	id := uuid.New()
+	s.serverState.AddClient(id, &state.ClientState{Name: "Alice", Coalition: "Blue"})
+
+	s.serverState.RLock()
+	want := s.serverState.Clients[id].VoiceSecret
+	s.serverState.RUnlock()
+
+	if want == "" {
+		t.Fatal("AddClient should have generated a secret")
+	}
+	if got := s.voiceSecretFor(id); got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+func TestVoiceSecretForUnknownClientIsEmpty(t *testing.T) {
+	s := newTestServer()
+	if got := s.voiceSecretFor(uuid.New()); got != "" {
+		t.Fatalf("expected an empty secret for an unknown client, got %q", got)
+	}
+}
