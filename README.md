@@ -179,17 +179,17 @@ The protocol is codec-agnostic and supports efficient fan-out to all listeners o
 
 ### Architecture
 
-The communication flow follows a simple pattern: clients first announce their presence and listening frequencies, then exchange voice data in real-time. 
+The communication flow follows a simple pattern: clients first authenticate their session with the Voice Server, then exchange voice data in real-time. 
 The Voice Server acts as a stateless relay, forwarding voice packets to all clients listening on the same frequency. 
-Periodic keepalive messages maintain NAT bindings and update frequency subscriptions, while graceful disconnection is handled via BYE packets.
+Periodic keepalive messages maintain NAT bindings and session liveness, while graceful disconnection is handled via BYE packets.
 
 ```mermaid
 sequenceDiagram
     participant Client
     participant VoiceServer
 
-    Client->>VoiceServer: HELLO (SessionID, [freqs])
-    VoiceServer-->>Client: HELLO-ACK (optional)
+    Client->>VoiceServer: HELLO (SessionID, voice secret)
+    VoiceServer-->>Client: HELLO-ACK (only if the secret is valid)
 
     loop While PTT is down
         Client->>VoiceServer: VOICE (SessionID, freq, PTT=1, Opus frame)
@@ -198,20 +198,20 @@ sequenceDiagram
 
     Client->>VoiceServer: VOICE (SessionID, freq, PTT=0, Opus frame or empty)
 
-    Note over Client,VoiceServer: Periodic keepalive or frequency change
-    Client->>VoiceServer: KEEPALIVE (SessionID, [freqs])
+    Note over Client,VoiceServer: Periodic keepalive
+    Client->>VoiceServer: KEEPALIVE (SessionID, [echoed timestamp])
 
     Client->>VoiceServer: BYE (SessionID)
 ```
 
 #### Communication Flow
 
-1. **Client authenticates** with the control server and receives a Session ID and Voice Server endpoint.
-2. **Client sends HELLO** to the Voice Server, listing the frequencies it wants to monitor.
-3. **Voice Server (optionally) replies with HELLO-ACK**.
+1. **Client authenticates** with the control server and receives a Session ID, a voice secret, and a Voice Server endpoint (`ServerSyncResult.voice_secret` alongside `coalition_voice_addr` / `global_voice_addr`).
+2. **Client sends HELLO** to the Voice Server, presenting its voice secret in the packet payload.
+3. **Voice Server validates the secret** and, only on success, binds the client's UDP address and replies with HELLO-ACK. A HELLO with a missing, malformed or incorrect secret is silently dropped.
 4. **Client transmits VOICE packets** when PTT is active, specifying the frequency and including the Opus audio frame.
 5. **Voice Server fans out VOICE packets** to all other clients listening on the same frequency.
-6. **Client sends KEEPALIVE** packets periodically or when its listening set changes.
+6. **Client sends KEEPALIVE** packets periodically to maintain its NAT binding and its liveness on the server. The server replies with a timestamped ACK so the client can measure round-trip latency. Keepalives do not change the client's listening frequencies — those are set over the control channel.
 7. **Client sends BYE** when disconnecting.
 
 
@@ -219,10 +219,10 @@ sequenceDiagram
 
 #### Packet Types
 
-- **HELLO**: Announces client presence and the set of frequencies to listen to. Sent when connecting or when the listening set changes.
-- **HELLO-ACK**: (Optional) Acknowledgement from the server, may include server time or configuration.
+- **HELLO**: Announces client presence and authenticates the session. The payload carries the per-session voice secret (43 bytes, `base64url`, at offset 0; later bytes are reserved). This is the only packet type that may establish or change a client's address binding.
+- **HELLO-ACK**: Acknowledgement from the server, sent only after the secret has been validated.
 - **VOICE**: Carries voice data (Opus frames) from the client to the server, and from the server to all other clients listening on the same frequency. Includes a flag indicating whether Push-To-Talk (PTT) is active.
-- **KEEPALIVE**: Sent periodically by the client to maintain NAT bindings and update the server with the current listening frequencies.
+- **KEEPALIVE**: Sent periodically by the client to maintain its NAT binding and refresh its liveness. The server's ACK carries an 8-byte timestamp the client echoes back on the next cycle for round-trip latency measurement. It must arrive from the bound address, and it cannot change that binding. It does not carry frequency information.
 - **BYE**: Indicates client disconnection.
 
 #### Header Structure
@@ -239,6 +239,7 @@ sequenceDiagram
 
 - **Frequency** is encoded as an integer in kHz (e.g., 145.500 MHz → 145500).
 - **Session ID** is a short, random token issued after authentication (not a JWT).
+- **Payload** for HELLO is the per-session voice secret: 43 bytes of `base64url` text at offset 0. Bytes after it are reserved for future use and ignored.
 
 **Flags**:
 - **PTT**: Indicates if the client is currently transmitting (1) or not (0).
@@ -251,8 +252,24 @@ sequenceDiagram
 
 #### Statelessness
 
-- The Voice Server maintains only ephemeral state: a mapping of session IDs to their current listening frequencies.
-- All authentication, coalition membership, and access control are managed by the control server and enforced via the session token.
+- The Voice Server maintains only ephemeral state: a mapping of session IDs to their bound UDP address, last-seen time, and measured keepalive latency.
+- All authentication, coalition membership, and access control are managed by the control server and mirrored to voice nodes over the control stream.
+
+#### Trust Model
+
+**The secret authenticates the establishment of a binding. The binding authenticates everything else.**
+
+- **HELLO** carries the per-session voice secret and is the only packet type that may create or change a session's address binding. The secret is compared in constant time; on any failure nothing is bound, nothing is acknowledged and no state changes.
+- **VOICE, KEEPALIVE and BYE** carry no secret. They must arrive from the address a verified HELLO bound, or they are dropped.
+
+KEEPALIVE deliberately does not carry the secret. It cannot rebind, so it cannot be used to hijack a session, and repeating a long-lived credential on an unencrypted wire every few seconds would expose it far more than sending it once.
+
+**What this does not protect against:**
+
+- **Replay of a captured HELLO.** A HELLO carries the session ID and the secret together, in cleartext. An attacker who captures one can replay it from their own address and take over the session outright — no address forging needed. The secret does not rotate and HELLO carries no nonce or timestamp, so a captured HELLO stays valid for the life of the session. What the secret buys is that a HELLO is sent only at connect or reconnect, whereas voice packets flow continuously: the window narrows from "sniff any packet at any time" to "sniff the one HELLO at session start". Closing this needs transport encryption.
+- **Eavesdropping.** Payloads are cleartext. A passive observer on the network path still hears all traffic they can see. This needs transport encryption (DTLS/SRTP) and is not implemented.
+- **Source-address spoofing.** An attacker who can observe a session ID *and* forge the victim's source address — without needing to receive replies — can still inject VOICE and BYE packets on an existing binding. A forged BYE is the cheapest case: a single 27-byte packet that needs no reply disconnects the victim. On a shared LAN this is achievable. For this injection path specifically, the bar rises from "observe one packet" to "observe one packet and forge addresses blind" — a real improvement, though it does not apply to the HELLO-replay hijack above, which needs no forging at all.
+- **Flooding.** The server spawns a goroutine per received datagram with no backpressure. UDP flood mitigation is not implemented in-process.
 
 
 ## Distributed VOIP System Architecture

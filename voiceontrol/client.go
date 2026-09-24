@@ -268,10 +268,11 @@ func (v *VoiceControlClient) applySnapshot(snap *pb.ClientStateSnapshot) {
 			continue
 		}
 		v.serverState.Clients[id] = &state.ClientState{
-			Name:      info.Name,
-			Coalition: info.Coalition,
-			UnitId:    info.UnitId,
-			Role:      uint8(info.Role),
+			Name:        info.Name,
+			Coalition:   info.Coalition,
+			UnitId:      info.UnitId,
+			Role:        uint8(info.Role),
+			VoiceSecret: info.VoiceSecret,
 		}
 	}
 	for idStr, radio := range snap.Radios {
@@ -299,10 +300,11 @@ func (v *VoiceControlClient) applyDelta(delta *pb.ClientDelta) {
 	case pb.ClientDelta_JOINED, pb.ClientDelta_INFO_UPDATED:
 		if delta.ClientInfo != nil {
 			v.serverState.Clients[id] = &state.ClientState{
-				Name:      delta.ClientInfo.Name,
-				Coalition: delta.ClientInfo.Coalition,
-				UnitId:    delta.ClientInfo.UnitId,
-				Role:      uint8(delta.ClientInfo.Role),
+				Name:        delta.ClientInfo.Name,
+				Coalition:   delta.ClientInfo.Coalition,
+				UnitId:      delta.ClientInfo.UnitId,
+				Role:        uint8(delta.ClientInfo.Role),
+				VoiceSecret: delta.ClientInfo.VoiceSecret,
 			}
 			if _, exists := v.serverState.RadioClients[id]; !exists {
 				v.serverState.RadioClients[id] = &state.RadioState{Radios: []state.Radio{}}
@@ -394,10 +396,10 @@ func (v *VoiceControlClient) ReportClientDisconnected(clientID uuid.UUID) {
 		return
 	}
 	_, err := v.client.ReportClientDisconnected(context.Background(), &pb.ClientDisconnectedRequest{
-		ServerId:        v.serverId,
-		ClientId:        clientID.String(),
-		Reason:          pb.DisconnectReason_CLIENT_DISCONNECT,
-		DisconnectedAt:  time.Now().Unix(),
+		ServerId:       v.serverId,
+		ClientId:       clientID.String(),
+		Reason:         pb.DisconnectReason_CLIENT_DISCONNECT,
+		DisconnectedAt: time.Now().Unix(),
 	})
 	if err != nil {
 		v.logger.Warn("ReportClientDisconnected failed", "client", clientID, "error", err)

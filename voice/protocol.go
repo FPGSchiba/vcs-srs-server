@@ -58,7 +58,30 @@ type VCSPacket struct {
 const (
 	HeaderSize = 27 // Total header size in bytes
 	MagicVCS   = "VCS"
+
+	// VoiceSecretLen is the length of the per-session voice secret as it
+	// appears in a HELLO payload: base64.RawURLEncoding of 32 random bytes.
+	// The secret occupies bytes [0:VoiceSecretLen]; anything after it is
+	// reserved for future use and ignored.
+	VoiceSecretLen = 43
 )
+
+// NewVCSHelloPacket builds a HELLO announcing the client's session and
+// presenting its voice secret. The secret is carried as raw UTF-8 bytes at the
+// start of the payload; the voice server validates it before binding the
+// sender's address.
+func NewVCSHelloPacket(clientId uuid.UUID, secret string) *VCSPacket {
+	return &VCSPacket{
+		Magic:     [3]byte{'V', 'C', 'S'},
+		Version:   currentVersion,
+		Type:      PacketTypeHello,
+		Flags:     0,
+		Sequence:  0,
+		Frequency: 0,
+		SenderID:  clientId,
+		Payload:   []byte(secret),
+	}
+}
 
 func NewVCSHelloAckPacket(clientId uuid.UUID) *VCSPacket {
 	return &VCSPacket{
@@ -121,6 +144,16 @@ func ExtractKeepaliveTimestamp(payload []byte) int64 {
 		return 0
 	}
 	return int64(binary.BigEndian.Uint64(payload[:8]))
+}
+
+// HelloSecret returns the voice secret carried at the start of a HELLO
+// payload. ok is false if the payload is shorter than VoiceSecretLen. Bytes
+// beyond the secret are reserved and ignored, so a longer payload is valid.
+func (p *VCSPacket) HelloSecret() (string, bool) {
+	if len(p.Payload) < VoiceSecretLen {
+		return "", false
+	}
+	return string(p.Payload[:VoiceSecretLen]), true
 }
 
 // IsPTTActive returns true if the PTT flag is set

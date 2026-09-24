@@ -1,6 +1,7 @@
 package voice
 
 import (
+	"crypto/subtle"
 	"log/slog"
 	"net"
 	"sync"
@@ -16,9 +17,76 @@ const (
 	BufferSize = 1024 // UDP buffer size
 )
 
+// rejectLogWindow is the minimum interval between logged HELLO rejections.
+const rejectLogWindow = 30 * time.Second
+
+// rejectLimiter rate-limits rejection logging so repeated attempts stay visible
+// without letting an attacker flood the log.
+//
+// Deliberately keyed by rejection reason (a fixed array of four), never by
+// source address: UDP source addresses are trivially spoofable, so a
+// per-address map would itself be a memory-exhaustion vector and its
+// attribution would be unreliable anyway. Keying by reason instead has fixed,
+// attacker-independent cardinality — there are exactly four reasons a HELLO
+// can be rejected, and nothing about the packet chooses which limiter is
+// used beyond that fixed set — so it carries none of that risk, while
+// stopping a flood of one reason (e.g. "unknown client" from sprayed random
+// UUIDs) from arming the shared window and suppressing a different reason
+// (e.g. "invalid secret" against a real session, the highest-value signal
+// the server can emit).
+type rejectLimiter struct {
+	mu         sync.Mutex
+	lastLogged time.Time
+	suppressed int
+}
+
+// rejectReason identifies which guard refused a HELLO. It exists so each
+// reason can be rate-limited independently — see rejectLimiter.
+type rejectReason int
+
+const (
+	rejectUnknownClient rejectReason = iota
+	rejectNoSecretOnRecord
+	rejectMissingOrShortSecret
+	rejectInvalidSecret
+	numRejectReasons
+)
+
+// String returns the log-facing reason text. Existing tests assert on these
+// exact strings, so they must not change when the limiter keying does.
+func (r rejectReason) String() string {
+	switch r {
+	case rejectUnknownClient:
+		return "unknown client"
+	case rejectNoSecretOnRecord:
+		return "no secret on record"
+	case rejectMissingOrShortSecret:
+		return "missing or short secret"
+	case rejectInvalidSecret:
+		return "invalid secret"
+	default:
+		return "unknown reason"
+	}
+}
+
+// shouldLog reports whether this rejection should be logged now and, if so, how
+// many rejections were suppressed since the last logged one.
+func (r *rejectLimiter) shouldLog(now time.Time) (bool, int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.lastLogged.IsZero() || now.Sub(r.lastLogged) >= rejectLogWindow {
+		suppressed := r.suppressed
+		r.suppressed = 0
+		r.lastLogged = now
+		return true, suppressed
+	}
+	r.suppressed++
+	return false, 0
+}
+
 type Client struct {
-	Addr          *net.UDPAddr
-	LastSeen      time.Time
+	Addr             *net.UDPAddr
+	LastSeen         time.Time
 	LatencyToVoiceMs int64 // measured RTT to this voice node (from keepalive echo)
 }
 
@@ -35,6 +103,7 @@ type Server struct {
 	stopOnce          sync.Once
 	controlClient     *voiceontrol.VoiceControlClient
 	serverId          string
+	helloRejects      [numRejectReasons]rejectLimiter
 }
 
 func NewServer(state *state.ServerState, logger *slog.Logger, distributionState *state.DistributionState, settingsState *state.SettingsState) *Server {
@@ -153,22 +222,79 @@ func (v *Server) handlePacket(data []byte, addr *net.UDPAddr) {
 	case PacketTypeHello:
 		v.handleHelloPacket(packet, addr)
 	case PacketTypeVoice:
-		v.handleVoicePacket(packet)
+		v.handleVoicePacket(packet, addr)
 	case PacketTypeBye:
-		v.handleGoodbyePacket(packet)
+		v.handleGoodbyePacket(packet, addr)
 	case PacketTypeKeepalive:
 		v.handleKeepalivePacket(packet, addr)
 	default:
-		v.logger.Warn("Unknown packet type received", "type", packet.Type)
+		v.logger.Debug("Unknown packet type received", "type", packet.Type)
 	}
 }
 
+// rejectHello records a refused HELLO without binding anything, at a rate
+// that keeps repeated attempts visible without letting an attacker flood the
+// log. Each reason has its own limiter — see rejectLimiter — so a flood
+// under one reason cannot suppress a rejection logged for another.
+func (v *Server) rejectHello(reason rejectReason, senderID uuid.UUID, addr *net.UDPAddr) {
+	if ok, suppressed := v.helloRejects[reason].shouldLog(time.Now()); ok {
+		v.logger.Warn("Rejected voice HELLO",
+			"reason", reason.String(),
+			"sender_id", senderID,
+			"addr", addr.String(),
+			"suppressed_since_last", suppressed)
+	}
+}
+
+// isBoundAddr reports whether addr is the address currently bound to clientID.
+//
+// A verified HELLO is the only way to create or change a binding, so this is
+// what authenticates every other packet type. IP.Equal is used rather than an
+// addr.String() comparison. Not because a string compare would reject the
+// IPv4-mapped form — Go normalizes ::ffff:127.0.0.1 to 127.0.0.1 in String(),
+// so it would not — but because IP.Equal states the intent directly and does
+// not depend on that normalization remaining stable across Go versions and
+// platforms. Trade-off: IP.Equal ignores the IPv6 zone, which makes this
+// marginally more permissive than a String() compare would be.
+func (v *Server) isBoundAddr(clientID uuid.UUID, addr *net.UDPAddr) bool {
+	if addr == nil {
+		return false
+	}
+	v.RLock()
+	defer v.RUnlock()
+	client, exists := v.clients[clientID]
+	if !exists || client.Addr == nil {
+		return false
+	}
+	return client.Addr.IP.Equal(addr.IP) && client.Addr.Port == addr.Port
+}
+
 func (v *Server) handleHelloPacket(packet *VCSPacket, addr *net.UDPAddr) {
-	v.logger.Info("Received hello packet", "sender_id", packet.SenderID, "addr", addr.String())
-	if !v.serverState.DoesClientExist(packet.SenderID) {
-		v.logger.Warn("Client with hello, that does not exist", "sender_id", packet.SenderID)
+	expected, known := v.serverState.GetVoiceSecret(packet.SenderID)
+	if !known {
+		v.rejectHello(rejectUnknownClient, packet.SenderID, addr)
 		return
 	}
+	// Defensive: a voice node fed by an older control server may hold a client
+	// with no secret on record. No input reaches this today — a short payload is
+	// rejected by HelloSecret and a full-length one fails the length check inside
+	// ConstantTimeCompare — but relying on that is fragile, so reject explicitly
+	// rather than depending on the comparison's length behaviour.
+	if expected == "" {
+		v.rejectHello(rejectNoSecretOnRecord, packet.SenderID, addr)
+		return
+	}
+	presented, ok := packet.HelloSecret()
+	if !ok {
+		v.rejectHello(rejectMissingOrShortSecret, packet.SenderID, addr)
+		return
+	}
+	if subtle.ConstantTimeCompare([]byte(presented), []byte(expected)) != 1 {
+		v.rejectHello(rejectInvalidSecret, packet.SenderID, addr)
+		return
+	}
+
+	v.logger.Info("Accepted voice HELLO", "sender_id", packet.SenderID, "addr", addr.String())
 
 	v.Lock()
 	v.clients[packet.SenderID] = &Client{
@@ -179,6 +305,11 @@ func (v *Server) handleHelloPacket(packet *VCSPacket, addr *net.UDPAddr) {
 
 	if v.controlClient != nil {
 		go v.controlClient.ReportClientConnected(packet.SenderID, addr)
+	}
+
+	if v.conn == nil {
+		v.logger.Warn("No UDP connection available to send hello acknowledgment")
+		return
 	}
 
 	ackPacket := NewVCSHelloAckPacket(packet.SenderID)
@@ -193,10 +324,18 @@ func (v *Server) handleHelloPacket(packet *VCSPacket, addr *net.UDPAddr) {
 }
 
 func (v *Server) handleKeepalivePacket(packet *VCSPacket, addr *net.UDPAddr) {
+	if !v.isBoundAddr(packet.SenderID, addr) {
+		v.logger.Debug("Ignoring keepalive from an unbound address",
+			"sender_id", packet.SenderID, "addr", addr.String())
+		return
+	}
+
 	v.Lock()
 	client, exists := v.clients[packet.SenderID]
+	var boundAddr *net.UDPAddr
 	if exists {
 		client.LastSeen = time.Now()
+		boundAddr = client.Addr
 		// If the client echoed our timestamp, compute the round-trip latency.
 		if ts := ExtractKeepaliveTimestamp(packet.Payload); ts > 0 {
 			rtt := time.Now().UnixMilli() - ts
@@ -207,7 +346,6 @@ func (v *Server) handleKeepalivePacket(packet *VCSPacket, addr *net.UDPAddr) {
 	}
 	v.Unlock()
 	if !exists {
-		v.logger.Warn("Received keepalive from unknown client", "sender_id", packet.SenderID)
 		return
 	}
 	v.logger.Debug("Updated last seen for client", "sender_id", packet.SenderID, "addr", addr.String())
@@ -217,18 +355,25 @@ func (v *Server) handleKeepalivePacket(packet *VCSPacket, addr *net.UDPAddr) {
 		return
 	}
 
-	// Send ACK with embedded timestamp so the client can echo it back next cycle.
+	// Reply to the bound address rather than the packet source, so a spoofed
+	// keepalive cannot elicit a reply for a sniffed session id.
 	ackPacket := NewVCSKeepaliveAckPacket(packet.SenderID)
 	ackData := ackPacket.SerializePacket()
-	_, err := v.conn.WriteToUDP(ackData, addr)
+	_, err := v.conn.WriteToUDP(ackData, boundAddr)
 	if err != nil {
 		v.logger.Error("Failed to send keepalive acknowledgment",
-			"to", addr.String(),
+			"to", boundAddr.String(),
 			"error", err)
 	}
 }
 
-func (v *Server) handleVoicePacket(packet *VCSPacket) {
+func (v *Server) handleVoicePacket(packet *VCSPacket, addr *net.UDPAddr) {
+	if !v.isBoundAddr(packet.SenderID, addr) {
+		v.logger.Debug("Dropping voice packet from an unbound address",
+			"sender_id", packet.SenderID, "addr", addr.String())
+		return
+	}
+
 	if v.settingsState.IsFrequencyTest(packet.FrequencyAsFloat32()) {
 		v.handleTestFrequencyPacket(packet)
 		return
@@ -287,7 +432,12 @@ func (v *Server) handleTestFrequencyPacket(packet *VCSPacket) {
 	v.logger.Debug("Echoed test frequency packet to client", "to", addr.String(), "sender_id", packet.SenderID)
 }
 
-func (v *Server) handleGoodbyePacket(packet *VCSPacket) {
+func (v *Server) handleGoodbyePacket(packet *VCSPacket, addr *net.UDPAddr) {
+	if !v.isBoundAddr(packet.SenderID, addr) {
+		v.logger.Debug("Ignoring bye from an unbound address",
+			"sender_id", packet.SenderID, "addr", addr.String())
+		return
+	}
 	v.DisconnectClient(packet.SenderID)
 }
 
