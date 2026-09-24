@@ -494,8 +494,12 @@ func TestRejectLimiterConcurrentShouldLog(t *testing.T) {
 	}
 }
 
-// Review Focus 3: the same peer may present as 127.0.0.1 or ::ffff:127.0.0.1
-// depending on socket family. A string comparison would spuriously reject it.
+// Pins that an IPv4-mapped IPv6 form of the bound address is accepted, and
+// that a different IP or port is not. Note this does NOT distinguish IP.Equal
+// from an addr.String() comparison — Go normalizes ::ffff:127.0.0.1 to
+// 127.0.0.1 in String() — so it is a behavior test, not an implementation test.
+// IP.Equal is used anyway: it does not depend on String()'s normalization
+// remaining stable, and it ignores the IPv6 zone, which String() does not.
 func TestIsBoundAddrMatchesIPv4MappedIPv6(t *testing.T) {
 	s := newTestServer()
 	id := uuid.New()
@@ -610,8 +614,26 @@ func TestKeepaliveFromUnboundAddressIgnored(t *testing.T) {
 	s.handleHelloPacket(NewVCSHelloPacket(id, secret), victim.LocalAddr().(*net.UDPAddr))
 	expectAck(t, victim, PacketTypeHelloAck)
 
+	s.RLock()
+	before := s.clients[id].LastSeen
+	s.RUnlock()
+
+	// Sleep so a refresh would be observably different from `before`.
+	time.Sleep(5 * time.Millisecond)
+
 	s.handleKeepalivePacket(NewVCSKeepalivePacket(id), attacker.LocalAddr().(*net.UDPAddr))
 	expectNoAck(t, attacker)
+
+	// The ACK-to-bound-address behavior alone would let expectNoAck above pass
+	// even if the binding check were removed, since the ACK still would not
+	// reach the attacker. Pin the guard's real effect directly: a keepalive
+	// from an unbound address must not refresh session liveness.
+	s.RLock()
+	after := s.clients[id].LastSeen
+	s.RUnlock()
+	if !after.Equal(before) {
+		t.Fatal("a keepalive from an unbound address must not refresh the session")
+	}
 }
 
 // KEEPALIVE must never become a rebind path — a rebind is the whole attack.
