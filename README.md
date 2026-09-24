@@ -179,9 +179,9 @@ The protocol is codec-agnostic and supports efficient fan-out to all listeners o
 
 ### Architecture
 
-The communication flow follows a simple pattern: clients first announce their presence and listening frequencies, then exchange voice data in real-time. 
+The communication flow follows a simple pattern: clients first authenticate their session with the Voice Server, then exchange voice data in real-time. 
 The Voice Server acts as a stateless relay, forwarding voice packets to all clients listening on the same frequency. 
-Periodic keepalive messages maintain NAT bindings and update frequency subscriptions, while graceful disconnection is handled via BYE packets.
+Periodic keepalive messages maintain NAT bindings and session liveness, while graceful disconnection is handled via BYE packets.
 
 ```mermaid
 sequenceDiagram
@@ -198,7 +198,7 @@ sequenceDiagram
 
     Client->>VoiceServer: VOICE (SessionID, freq, PTT=0, Opus frame or empty)
 
-    Note over Client,VoiceServer: Periodic keepalive or frequency change
+    Note over Client,VoiceServer: Periodic keepalive
     Client->>VoiceServer: KEEPALIVE (SessionID, [echoed timestamp])
 
     Client->>VoiceServer: BYE (SessionID)
@@ -211,7 +211,7 @@ sequenceDiagram
 3. **Voice Server validates the secret** and, only on success, binds the client's UDP address and replies with HELLO-ACK. A HELLO with a missing, malformed or incorrect secret is silently dropped.
 4. **Client transmits VOICE packets** when PTT is active, specifying the frequency and including the Opus audio frame.
 5. **Voice Server fans out VOICE packets** to all other clients listening on the same frequency.
-6. **Client sends KEEPALIVE** packets periodically or when its listening set changes.
+6. **Client sends KEEPALIVE** packets periodically to maintain its NAT binding and its liveness on the server. The server replies with a timestamped ACK so the client can measure round-trip latency. Keepalives do not change the client's listening frequencies — those are set over the control channel.
 7. **Client sends BYE** when disconnecting.
 
 
@@ -222,7 +222,7 @@ sequenceDiagram
 - **HELLO**: Announces client presence and authenticates the session. The payload carries the per-session voice secret (43 bytes, `base64url`, at offset 0; later bytes are reserved). This is the only packet type that may establish or change a client's address binding.
 - **HELLO-ACK**: Acknowledgement from the server, sent only after the secret has been validated.
 - **VOICE**: Carries voice data (Opus frames) from the client to the server, and from the server to all other clients listening on the same frequency. Includes a flag indicating whether Push-To-Talk (PTT) is active.
-- **KEEPALIVE**: Sent periodically by the client to maintain NAT bindings and update the server with the current listening frequencies.
+- **KEEPALIVE**: Sent periodically by the client to maintain its NAT binding and refresh its liveness. The server's ACK carries an 8-byte timestamp the client echoes back on the next cycle for round-trip latency measurement. It must arrive from the bound address, and it cannot change that binding. It does not carry frequency information.
 - **BYE**: Indicates client disconnection.
 
 #### Header Structure
