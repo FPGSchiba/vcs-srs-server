@@ -1,41 +1,73 @@
 version: 2
+
+# Each ecosystem is grouped into a single PR per area: backend (Go),
+# frontend (npm) and cicd (GitHub Actions + the build image).
+#
+# Every area declares TWO groups. A group covers version updates only unless
+# it sets `applies-to: security-updates`, so without the second group
+# Dependabot opens one ungrouped PR per advisory — which is how the 7 separate
+# npm PRs (nanoid, postcss, brace-expansion, immutable, ...) appeared
+# alongside the grouped `all-npm` PR.
+#
+# Dependabot cannot combine ecosystems into one PR, so docker and
+# github-actions share the `cicd` name but still open separate PRs.
 updates:
-  # 1. Go Modules - Groups all Go updates into one PR
+  # Backend - Go modules
   - package-ecosystem: "gomod"
     directory: "/"
     schedule:
       interval: "weekly"
     groups:
-      all-go:
+      backend:
+        applies-to: version-updates
+        patterns:
+          - "*"
+      backend-security:
+        applies-to: security-updates
         patterns:
           - "*"
 
-  # 2. Docker - Groups all Docker updates into one PR
-  - package-ecosystem: "docker"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    groups:
-      all-docker:
-        patterns:
-          - "*"
-
-  # 3. NPM - Groups all NPM updates (in /frontend) into one PR
+  # Frontend - npm packages in /frontend
   - package-ecosystem: "npm"
     directory: "/frontend"
     schedule:
       interval: "weekly"
     groups:
-      all-npm:
+      frontend:
+        applies-to: version-updates
+        patterns:
+          - "*"
+      frontend-security:
+        applies-to: security-updates
         patterns:
           - "*"
 
-  # 4. GitHub Actions - Groups all GitHub Actions updates into one PR
+  # CI/CD - GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
     groups:
-      all-github-actions:
+      cicd:
+        applies-to: version-updates
+        patterns:
+          - "*"
+      cicd-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
+  # CI/CD - build image
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      cicd:
+        applies-to: version-updates
+        patterns:
+          - "*"
+      cicd-security:
+        applies-to: security-updates
         patterns:
           - "*"
