@@ -1,8 +1,11 @@
 package voice
 
 import (
+	"context"
 	"net"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -98,6 +101,57 @@ func newBoundTestServer(t *testing.T, ss *state.ServerState) *Server {
 	return s
 }
 
+// capturingHandler is a minimal slog.Handler that records the "reason"
+// attribute of every log record, so a test can assert WHICH guard refused a
+// HELLO rather than only that it was refused.
+type capturingHandler struct {
+	mu      sync.Mutex
+	reasons []string
+}
+
+func (h *capturingHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *capturingHandler) WithAttrs([]slog.Attr) slog.Handler       { return h }
+func (h *capturingHandler) WithGroup(string) slog.Handler            { return h }
+
+func (h *capturingHandler) Handle(_ context.Context, r slog.Record) error {
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key == "reason" {
+			h.mu.Lock()
+			h.reasons = append(h.reasons, a.Value.String())
+			h.mu.Unlock()
+		}
+		return true
+	})
+	return nil
+}
+
+func (h *capturingHandler) snapshot() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.reasons...)
+}
+
+// newCapturingTestServer is newBoundTestServer with a handler that records
+// the "reason" attribute of every rejection, so a test can assert WHICH
+// guard refused a HELLO rather than only that it was refused.
+func newCapturingTestServer(t *testing.T, ss *state.ServerState) (*Server, *capturingHandler) {
+	t.Helper()
+	h := &capturingHandler{}
+	s := NewServer(ss, slog.New(h), &state.DistributionState{}, &state.SettingsState{})
+	udpAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	conn, err := net.ListenUDP("udp", udpAddr)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	s.conn = conn
+	s.running = true
+	return s, h
+}
+
 // newTestPeer returns a loopback UDP socket standing in for a client.
 func newTestPeer(t *testing.T) *net.UDPConn {
 	t.Helper()
@@ -179,7 +233,7 @@ func TestHelloValidSecretBinds(t *testing.T) {
 
 func TestHelloWrongSecretDoesNotBind(t *testing.T) {
 	ss := &state.ServerState{}
-	s := newBoundTestServer(t, ss)
+	s, h := newCapturingTestServer(t, ss)
 	peer := newTestPeer(t)
 	id := uuid.New()
 	addClientWithSecret(t, ss, id)
@@ -194,12 +248,13 @@ func TestHelloWrongSecretDoesNotBind(t *testing.T) {
 		t.Fatal("a HELLO with a wrong secret must not bind")
 	}
 	expectNoAck(t, peer)
+	assertRejectReason(t, h, "invalid secret")
 }
 
 // The hijack case: a bound victim must not be moved by an unauthenticated HELLO.
 func TestHelloWrongSecretDoesNotOverwriteBinding(t *testing.T) {
 	ss := &state.ServerState{}
-	s := newBoundTestServer(t, ss)
+	s, h := newCapturingTestServer(t, ss)
 	victim := newTestPeer(t)
 	attacker := newTestPeer(t)
 	id := uuid.New()
@@ -222,11 +277,27 @@ func TestHelloWrongSecretDoesNotOverwriteBinding(t *testing.T) {
 		t.Fatalf("the binding was hijacked: expected port %d, got %d", victimAddr.Port, client.Addr.Port)
 	}
 	expectNoAck(t, attacker)
+	assertRejectReason(t, h, "invalid secret")
+}
+
+// assertRejectReason fails unless exactly one rejection with the given reason
+// was captured. Asserting the reason (not just "was rejected") is the only
+// way to tell a guard actually fired from it being silently shadowed by a
+// later guard that happens to reject the same input for a different cause.
+func assertRejectReason(t *testing.T, h *capturingHandler, want string) {
+	t.Helper()
+	got := h.snapshot()
+	if len(got) != 1 {
+		t.Fatalf("expected exactly 1 captured rejection, got %d: %v", len(got), got)
+	}
+	if got[0] != want {
+		t.Fatalf("expected rejection reason %q, got %q", want, got[0])
+	}
 }
 
 func TestHelloMissingSecretRejected(t *testing.T) {
 	ss := &state.ServerState{}
-	s := newBoundTestServer(t, ss)
+	s, h := newCapturingTestServer(t, ss)
 	peer := newTestPeer(t)
 	id := uuid.New()
 	addClientWithSecret(t, ss, id)
@@ -240,11 +311,12 @@ func TestHelloMissingSecretRejected(t *testing.T) {
 		t.Fatal("a HELLO with no secret must not bind")
 	}
 	expectNoAck(t, peer)
+	assertRejectReason(t, h, "missing or short secret")
 }
 
 func TestHelloShortSecretRejected(t *testing.T) {
 	ss := &state.ServerState{}
-	s := newBoundTestServer(t, ss)
+	s, h := newCapturingTestServer(t, ss)
 	peer := newTestPeer(t)
 	id := uuid.New()
 	secret := addClientWithSecret(t, ss, id)
@@ -258,12 +330,13 @@ func TestHelloShortSecretRejected(t *testing.T) {
 		t.Fatal("a truncated secret must not bind")
 	}
 	expectNoAck(t, peer)
+	assertRejectReason(t, h, "missing or short secret")
 }
 
 // The pre-existing DoesClientExist rejection must still hold.
 func TestHelloUnknownClientRejected(t *testing.T) {
 	ss := &state.ServerState{}
-	s := newBoundTestServer(t, ss)
+	s, h := newCapturingTestServer(t, ss)
 	peer := newTestPeer(t)
 	id := uuid.New() // never added to state
 
@@ -276,6 +349,7 @@ func TestHelloUnknownClientRejected(t *testing.T) {
 		t.Fatal("an unknown client must not bind")
 	}
 	expectNoAck(t, peer)
+	assertRejectReason(t, h, "unknown client")
 }
 
 // Review Focus 1: a ClientState built from an old control server's delta has an
@@ -289,7 +363,7 @@ func TestHelloEmptyStoredSecretRejected(t *testing.T) {
 		Clients:      map[uuid.UUID]*state.ClientState{id: {Name: "Pilot", VoiceSecret: ""}},
 		RadioClients: map[uuid.UUID]*state.RadioState{},
 	}
-	s := newBoundTestServer(t, ss)
+	s, h := newCapturingTestServer(t, ss)
 	peer := newTestPeer(t)
 
 	s.handleHelloPacket(NewVCSHelloPacket(id, strings.Repeat("a", VoiceSecretLen)), peer.LocalAddr().(*net.UDPAddr))
@@ -301,16 +375,19 @@ func TestHelloEmptyStoredSecretRejected(t *testing.T) {
 		t.Fatal("a client with no secret on record must never bind")
 	}
 	expectNoAck(t, peer)
+	assertRejectReason(t, h, "no secret on record")
 }
 
-// A client with no secret on record must also reject an empty presented secret.
-func TestHelloEmptyStoredSecretRejectsEmptyPresented(t *testing.T) {
+// A client with no secret on record must reject regardless of the presented
+// payload's length: this exercises the same guard as its sibling above, just
+// with a short (empty) payload instead of a full-length one.
+func TestHelloEmptyStoredSecretRejectsAnyPayloadLength(t *testing.T) {
 	id := uuid.New()
 	ss := &state.ServerState{
 		Clients:      map[uuid.UUID]*state.ClientState{id: {Name: "Pilot", VoiceSecret: ""}},
 		RadioClients: map[uuid.UUID]*state.RadioState{},
 	}
-	s := newBoundTestServer(t, ss)
+	s, h := newCapturingTestServer(t, ss)
 	peer := newTestPeer(t)
 
 	s.handleHelloPacket(NewVCSHelloPacket(id, ""), peer.LocalAddr().(*net.UDPAddr))
@@ -322,6 +399,7 @@ func TestHelloEmptyStoredSecretRejectsEmptyPresented(t *testing.T) {
 		t.Fatal("a client with no secret on record must never bind")
 	}
 	expectNoAck(t, peer)
+	assertRejectReason(t, h, "no secret on record")
 }
 
 // Review Focus 5: run with -race.
@@ -348,19 +426,70 @@ func TestRejectLimiterSuppressesWithinWindow(t *testing.T) {
 	var lim rejectLimiter
 	base := time.Now()
 
+	// The first rejection always logs immediately.
 	if ok, suppressed := lim.shouldLog(base); !ok || suppressed != 0 {
 		t.Fatalf("the first rejection must log: ok=%v suppressed=%d", ok, suppressed)
 	}
+
+	// Five rejections inside the window are suppressed.
 	for i := 0; i < 5; i++ {
 		if ok, _ := lim.shouldLog(base.Add(time.Second)); ok {
 			t.Fatal("rejections inside the window must be suppressed")
 		}
 	}
-	ok, suppressed := lim.shouldLog(base.Add(rejectLogWindow + time.Second))
+
+	// A rejection exactly at the window boundary must log: the guard is
+	// ">=", not ">". Using the boundary value itself (not boundary+something)
+	// pins that exact comparison.
+	boundary := base.Add(rejectLogWindow)
+	ok, suppressed := lim.shouldLog(boundary)
 	if !ok {
-		t.Fatal("a rejection after the window must log")
+		t.Fatal("a rejection exactly at the window boundary must log")
 	}
 	if suppressed != 5 {
 		t.Fatalf("expected 5 suppressed, got %d", suppressed)
+	}
+
+	// The suppressed counter must reset after logging, not accumulate: two
+	// further suppressed rejections in the next window, then a log at the
+	// following boundary must report exactly 2, not 5+2.
+	for i := 0; i < 2; i++ {
+		if ok, _ := lim.shouldLog(boundary.Add(time.Second)); ok {
+			t.Fatal("rejections inside the third window must be suppressed")
+		}
+	}
+	ok, suppressed = lim.shouldLog(boundary.Add(rejectLogWindow + time.Second))
+	if !ok {
+		t.Fatal("a rejection after the third window must log")
+	}
+	if suppressed != 2 {
+		t.Fatalf("expected the suppressed counter to reset: got %d, want 2", suppressed)
+	}
+}
+
+// TestRejectLimiterConcurrentShouldLog verifies that shouldLog, called
+// concurrently from many packet-handling goroutines as it is in production
+// (handlePacket spawns one goroutine per datagram), lets exactly one caller
+// log per window. Run with -race.
+func TestRejectLimiterConcurrentShouldLog(t *testing.T) {
+	var lim rejectLimiter
+	const n = 50
+	now := time.Now()
+
+	var wg sync.WaitGroup
+	var loggedCount int32
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if ok, _ := lim.shouldLog(now); ok {
+				atomic.AddInt32(&loggedCount, 1)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if loggedCount != 1 {
+		t.Fatalf("expected exactly 1 goroutine to log, got %d", loggedCount)
 	}
 }
