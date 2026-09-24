@@ -26,7 +26,7 @@ This spec introduces a per-session voice secret: generated on the control path, 
 
 | Attack | Mechanism today | Closed by |
 |---|---|---|
-| **Session hijack** | Attacker sniffs a UUID, sends HELLO, `handleHelloPacket` rebinds the session to the attacker's address. Victim silently stops receiving audio. | Secret validation on HELLO |
+| **Session hijack via a sniffed VOICE packet** | Attacker sniffs a UUID from any VOICE packet (no secret travels there), sends HELLO with just that UUID, `handleHelloPacket` rebinds the session to the attacker's address. Victim silently stops receiving audio. | Secret validation on HELLO — closes hijack via a UUID sniffed from ordinary voice traffic. Hijack via a captured HELLO itself remains open; see [What is not fixed](#what-is-not-fixed). |
 | **Impersonation** | Attacker sends VOICE packets with a sniffed UUID from any address. `handleVoicePacket` checks only that the session exists, never the source address — and is not even passed one. | Source-address binding check |
 | **Disconnect DoS** | Attacker sends a 27-byte BYE with a sniffed UUID. `handleGoodbyePacket` calls `DisconnectClient` with no address or existence check. | Source-address binding check |
 | **Keepalive reflection** | Attacker spoofs the source address as the victim's and sends KEEPALIVE; the server sends its ACK to the packet source, so the ACK lands on the victim. | ACK sent to the bound address |
@@ -35,6 +35,10 @@ This spec introduces a per-session voice secret: generated on the control path, 
 Neither reflection primitive carries bandwidth amplification — responses are smaller than requests — so they are poor flooding tools. They are listed because they are removed, not because they were severe.
 
 ### What is not fixed
+
+**Replay of a captured HELLO.** A HELLO carries the session ID and the secret together, in cleartext, and `handleHelloPacket` performs no freshness check — no nonce, no timestamp, no sequence validation, only a raw comparison of the secret bytes. An attacker who captures one HELLO can replay it verbatim from their own address: the secret is genuine, so validation passes, and the session rebinds to the attacker. The secret is generated exactly once, in `state.ServerState.AddClient` (`state/server.go:140`), and is never rotated or expired for the life of the session — so a captured HELLO stays valid for as long as the session lasts.
+
+What this spec's mechanism actually buys, stated precisely so it is neither overclaimed nor underclaimed: before, the UUID needed for a hijack traveled in cleartext on every VOICE packet, and voice packets flow continuously, so sniffing any packet at any time was enough. After, only HELLO carries the secret, and a client sends HELLO once per session — at connect, and again only on reconnect after a NAT change or server restart. An attacker who starts sniffing mid-session has missed the HELLO and cannot hijack until the client re-HELLOs. The window narrows from "any packet, any time" to "one specific packet, at session start". That is a real and useful improvement. It is not closure. Closing this needs transport encryption, so the HELLO payload itself cannot be observed.
 
 **Eavesdropping.** The payload remains cleartext. A passive observer on the network path still hears all traffic on frequencies their position lets them see. This requires transport encryption (DTLS/SRTP) and is not addressed here.
 

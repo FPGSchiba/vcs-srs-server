@@ -252,7 +252,7 @@ sequenceDiagram
 
 #### Statelessness
 
-- The Voice Server maintains only ephemeral state: a mapping of session IDs to their bound UDP address and last-seen time.
+- The Voice Server maintains only ephemeral state: a mapping of session IDs to their bound UDP address, last-seen time, and measured keepalive latency.
 - All authentication, coalition membership, and access control are managed by the control server and mirrored to voice nodes over the control stream.
 
 #### Trust Model
@@ -266,8 +266,9 @@ KEEPALIVE deliberately does not carry the secret. It cannot rebind, so it cannot
 
 **What this does not protect against:**
 
+- **Replay of a captured HELLO.** A HELLO carries the session ID and the secret together, in cleartext. An attacker who captures one can replay it from their own address and take over the session outright — no address forging needed. The secret does not rotate and HELLO carries no nonce or timestamp, so a captured HELLO stays valid for the life of the session. What the secret buys is that a HELLO is sent only at connect or reconnect, whereas voice packets flow continuously: the window narrows from "sniff any packet at any time" to "sniff the one HELLO at session start". Closing this needs transport encryption.
 - **Eavesdropping.** Payloads are cleartext. A passive observer on the network path still hears all traffic they can see. This needs transport encryption (DTLS/SRTP) and is not implemented.
-- **Source-address spoofing.** An attacker who can observe a session ID *and* forge the victim's source address — without needing to receive replies — can still inject VOICE and BYE packets. A forged BYE is the cheapest case: a single 27-byte packet that needs no reply disconnects the victim. On a shared LAN this is achievable. The bar rises from "observe one packet" to "observe one packet and forge addresses blind", which is a real improvement, not a wall.
+- **Source-address spoofing.** An attacker who can observe a session ID *and* forge the victim's source address — without needing to receive replies — can still inject VOICE and BYE packets on an existing binding. A forged BYE is the cheapest case: a single 27-byte packet that needs no reply disconnects the victim. On a shared LAN this is achievable. For this injection path specifically, the bar rises from "observe one packet" to "observe one packet and forge addresses blind" — a real improvement, though it does not apply to the HELLO-replay hijack above, which needs no forging at all.
 - **Flooding.** The server spawns a goroutine per received datagram with no backpressure. UDP flood mitigation is not implemented in-process.
 
 
