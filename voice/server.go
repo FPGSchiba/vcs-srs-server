@@ -191,7 +191,7 @@ func (v *Server) handlePacket(data []byte, addr *net.UDPAddr) {
 	case PacketTypeKeepalive:
 		v.handleKeepalivePacket(packet, addr)
 	default:
-		v.logger.Warn("Unknown packet type received", "type", packet.Type)
+		v.logger.Debug("Unknown packet type received", "type", packet.Type)
 	}
 }
 
@@ -210,9 +210,13 @@ func (v *Server) rejectHello(reason string, senderID uuid.UUID, addr *net.UDPAdd
 // isBoundAddr reports whether addr is the address currently bound to clientID.
 //
 // A verified HELLO is the only way to create or change a binding, so this is
-// what authenticates every other packet type. IP.Equal is used rather than a
-// string comparison so that an IPv4-mapped IPv6 form of the same address still
-// matches.
+// what authenticates every other packet type. IP.Equal is used rather than an
+// addr.String() comparison. Not because a string compare would reject the
+// IPv4-mapped form — Go normalizes ::ffff:127.0.0.1 to 127.0.0.1 in String(),
+// so it would not — but because IP.Equal states the intent directly and does
+// not depend on that normalization remaining stable across Go versions and
+// platforms. Trade-off: IP.Equal ignores the IPv6 zone, which makes this
+// marginally more permissive than a String() compare would be.
 func (v *Server) isBoundAddr(clientID uuid.UUID, addr *net.UDPAddr) bool {
 	if addr == nil {
 		return false

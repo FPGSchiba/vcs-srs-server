@@ -499,7 +499,9 @@ func TestRejectLimiterConcurrentShouldLog(t *testing.T) {
 // from an addr.String() comparison — Go normalizes ::ffff:127.0.0.1 to
 // 127.0.0.1 in String() — so it is a behavior test, not an implementation test.
 // IP.Equal is used anyway: it does not depend on String()'s normalization
-// remaining stable, and it ignores the IPv6 zone, which String() does not.
+// remaining stable across Go versions and platforms. Trade-off: IP.Equal
+// ignores the IPv6 zone, which makes it marginally more permissive than a
+// String() compare would be — a cost of this choice, not a reason for it.
 func TestIsBoundAddrMatchesIPv4MappedIPv6(t *testing.T) {
 	s := newTestServer()
 	id := uuid.New()
@@ -637,6 +639,13 @@ func TestKeepaliveFromUnboundAddressIgnored(t *testing.T) {
 }
 
 // KEEPALIVE must never become a rebind path — a rebind is the whole attack.
+//
+// This currently passes vacuously: v.clients has exactly one write site
+// (handleHelloPacket), so nothing in handleKeepalivePacket could rebind the
+// address regardless of this test. It is a forward-looking regression guard,
+// not evidence that handleKeepalivePacket actively defends against rebinding
+// today — it exists to fail if a future change adds a second write site to
+// v.clients.
 func TestKeepaliveNeverRebindsAddress(t *testing.T) {
 	ss := &state.ServerState{}
 	s := newBoundTestServer(t, ss)
@@ -661,6 +670,12 @@ func TestKeepaliveNeverRebindsAddress(t *testing.T) {
 
 // The ACK must go to the bound address, not the packet source, so nobody can
 // elicit a reply for a sniffed UUID.
+//
+// This test always sends the keepalive from the already-bound address, so
+// addr and boundAddr are equal by construction while the binding guard
+// holds — it cannot observe the ACK-destination change on its own. It is
+// TestKeepaliveFromUnboundAddressIgnored, sending from an unbound address,
+// that actually distinguishes the two destinations.
 func TestKeepaliveAckGoesToBoundAddress(t *testing.T) {
 	ss := &state.ServerState{}
 	s := newBoundTestServer(t, ss)
