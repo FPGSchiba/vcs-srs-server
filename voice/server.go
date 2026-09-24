@@ -185,9 +185,9 @@ func (v *Server) handlePacket(data []byte, addr *net.UDPAddr) {
 	case PacketTypeHello:
 		v.handleHelloPacket(packet, addr)
 	case PacketTypeVoice:
-		v.handleVoicePacket(packet)
+		v.handleVoicePacket(packet, addr)
 	case PacketTypeBye:
-		v.handleGoodbyePacket(packet)
+		v.handleGoodbyePacket(packet, addr)
 	case PacketTypeKeepalive:
 		v.handleKeepalivePacket(packet, addr)
 	default:
@@ -205,6 +205,25 @@ func (v *Server) rejectHello(reason string, senderID uuid.UUID, addr *net.UDPAdd
 			"addr", addr.String(),
 			"suppressed_since_last", suppressed)
 	}
+}
+
+// isBoundAddr reports whether addr is the address currently bound to clientID.
+//
+// A verified HELLO is the only way to create or change a binding, so this is
+// what authenticates every other packet type. IP.Equal is used rather than a
+// string comparison so that an IPv4-mapped IPv6 form of the same address still
+// matches.
+func (v *Server) isBoundAddr(clientID uuid.UUID, addr *net.UDPAddr) bool {
+	if addr == nil {
+		return false
+	}
+	v.RLock()
+	defer v.RUnlock()
+	client, exists := v.clients[clientID]
+	if !exists || client.Addr == nil {
+		return false
+	}
+	return client.Addr.IP.Equal(addr.IP) && client.Addr.Port == addr.Port
 }
 
 func (v *Server) handleHelloPacket(packet *VCSPacket, addr *net.UDPAddr) {
@@ -262,10 +281,18 @@ func (v *Server) handleHelloPacket(packet *VCSPacket, addr *net.UDPAddr) {
 }
 
 func (v *Server) handleKeepalivePacket(packet *VCSPacket, addr *net.UDPAddr) {
+	if !v.isBoundAddr(packet.SenderID, addr) {
+		v.logger.Debug("Ignoring keepalive from an unbound address",
+			"sender_id", packet.SenderID, "addr", addr.String())
+		return
+	}
+
 	v.Lock()
 	client, exists := v.clients[packet.SenderID]
+	var boundAddr *net.UDPAddr
 	if exists {
 		client.LastSeen = time.Now()
+		boundAddr = client.Addr
 		// If the client echoed our timestamp, compute the round-trip latency.
 		if ts := ExtractKeepaliveTimestamp(packet.Payload); ts > 0 {
 			rtt := time.Now().UnixMilli() - ts
@@ -276,7 +303,6 @@ func (v *Server) handleKeepalivePacket(packet *VCSPacket, addr *net.UDPAddr) {
 	}
 	v.Unlock()
 	if !exists {
-		v.logger.Warn("Received keepalive from unknown client", "sender_id", packet.SenderID)
 		return
 	}
 	v.logger.Debug("Updated last seen for client", "sender_id", packet.SenderID, "addr", addr.String())
@@ -286,18 +312,25 @@ func (v *Server) handleKeepalivePacket(packet *VCSPacket, addr *net.UDPAddr) {
 		return
 	}
 
-	// Send ACK with embedded timestamp so the client can echo it back next cycle.
+	// Reply to the bound address rather than the packet source, so a spoofed
+	// keepalive cannot elicit a reply for a sniffed session id.
 	ackPacket := NewVCSKeepaliveAckPacket(packet.SenderID)
 	ackData := ackPacket.SerializePacket()
-	_, err := v.conn.WriteToUDP(ackData, addr)
+	_, err := v.conn.WriteToUDP(ackData, boundAddr)
 	if err != nil {
 		v.logger.Error("Failed to send keepalive acknowledgment",
-			"to", addr.String(),
+			"to", boundAddr.String(),
 			"error", err)
 	}
 }
 
-func (v *Server) handleVoicePacket(packet *VCSPacket) {
+func (v *Server) handleVoicePacket(packet *VCSPacket, addr *net.UDPAddr) {
+	if !v.isBoundAddr(packet.SenderID, addr) {
+		v.logger.Debug("Dropping voice packet from an unbound address",
+			"sender_id", packet.SenderID, "addr", addr.String())
+		return
+	}
+
 	if v.settingsState.IsFrequencyTest(packet.FrequencyAsFloat32()) {
 		v.handleTestFrequencyPacket(packet)
 		return
@@ -356,7 +389,12 @@ func (v *Server) handleTestFrequencyPacket(packet *VCSPacket) {
 	v.logger.Debug("Echoed test frequency packet to client", "to", addr.String(), "sender_id", packet.SenderID)
 }
 
-func (v *Server) handleGoodbyePacket(packet *VCSPacket) {
+func (v *Server) handleGoodbyePacket(packet *VCSPacket, addr *net.UDPAddr) {
+	if !v.isBoundAddr(packet.SenderID, addr) {
+		v.logger.Debug("Ignoring bye from an unbound address",
+			"sender_id", packet.SenderID, "addr", addr.String())
+		return
+	}
 	v.DisconnectClient(packet.SenderID)
 }
 

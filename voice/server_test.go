@@ -493,3 +493,163 @@ func TestRejectLimiterConcurrentShouldLog(t *testing.T) {
 		t.Fatalf("expected exactly 1 goroutine to log, got %d", loggedCount)
 	}
 }
+
+// Review Focus 3: the same peer may present as 127.0.0.1 or ::ffff:127.0.0.1
+// depending on socket family. A string comparison would spuriously reject it.
+func TestIsBoundAddrMatchesIPv4MappedIPv6(t *testing.T) {
+	s := newTestServer()
+	id := uuid.New()
+	s.clients[id] = &Client{
+		Addr:     &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5002},
+		LastSeen: time.Now(),
+	}
+
+	mapped := &net.UDPAddr{IP: net.ParseIP("::ffff:127.0.0.1"), Port: 5002}
+	if !s.isBoundAddr(id, mapped) {
+		t.Fatal("an IPv4-mapped IPv6 address must match the same IPv4 binding")
+	}
+
+	wrongPort := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5003}
+	if s.isBoundAddr(id, wrongPort) {
+		t.Fatal("a different port must not match")
+	}
+
+	wrongIP := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 5002}
+	if s.isBoundAddr(id, wrongIP) {
+		t.Fatal("a different IP must not match")
+	}
+}
+
+func TestIsBoundAddrUnknownClient(t *testing.T) {
+	s := newTestServer()
+	addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5002}
+	if s.isBoundAddr(uuid.New(), addr) {
+		t.Fatal("an unbound client must not match any address")
+	}
+}
+
+// Impersonation: an attacker who sniffed the UUID must not be able to transmit
+// as the victim from a different address.
+func TestVoiceFromUnboundAddressDropped(t *testing.T) {
+	ss := &state.ServerState{}
+	s := newBoundTestServer(t, ss)
+	victim := newTestPeer(t)
+	attacker := newTestPeer(t)
+	id := uuid.New()
+	secret := addClientWithSecret(t, ss, id)
+
+	s.handleHelloPacket(NewVCSHelloPacket(id, secret), victim.LocalAddr().(*net.UDPAddr))
+	expectAck(t, victim, PacketTypeHelloAck)
+
+	s.RLock()
+	before := s.clients[id].LastSeen
+	s.RUnlock()
+
+	voicePkt := NewVCSVoicePacket(id, 1, 243000, make([]byte, 40))
+	s.handleVoicePacket(voicePkt, attacker.LocalAddr().(*net.UDPAddr))
+
+	s.RLock()
+	after := s.clients[id].LastSeen
+	s.RUnlock()
+	if !after.Equal(before) {
+		t.Fatal("a voice packet from an unbound address must not refresh the session")
+	}
+}
+
+// A spoofed BYE must not be able to disconnect an arbitrary player.
+func TestByeFromUnboundAddressDoesNotDisconnect(t *testing.T) {
+	ss := &state.ServerState{}
+	s := newBoundTestServer(t, ss)
+	victim := newTestPeer(t)
+	attacker := newTestPeer(t)
+	id := uuid.New()
+	secret := addClientWithSecret(t, ss, id)
+
+	s.handleHelloPacket(NewVCSHelloPacket(id, secret), victim.LocalAddr().(*net.UDPAddr))
+	expectAck(t, victim, PacketTypeHelloAck)
+
+	s.handleGoodbyePacket(&VCSPacket{SenderID: id}, attacker.LocalAddr().(*net.UDPAddr))
+
+	s.RLock()
+	_, stillBound := s.clients[id]
+	s.RUnlock()
+	if !stillBound {
+		t.Fatal("a BYE from an unbound address must not disconnect the client")
+	}
+}
+
+func TestByeFromBoundAddressDisconnects(t *testing.T) {
+	ss := &state.ServerState{}
+	s := newBoundTestServer(t, ss)
+	peer := newTestPeer(t)
+	id := uuid.New()
+	secret := addClientWithSecret(t, ss, id)
+	addr := peer.LocalAddr().(*net.UDPAddr)
+
+	s.handleHelloPacket(NewVCSHelloPacket(id, secret), addr)
+	expectAck(t, peer, PacketTypeHelloAck)
+
+	s.handleGoodbyePacket(&VCSPacket{SenderID: id}, addr)
+
+	s.RLock()
+	_, stillBound := s.clients[id]
+	s.RUnlock()
+	if stillBound {
+		t.Fatal("a BYE from the bound address must disconnect the client")
+	}
+}
+
+func TestKeepaliveFromUnboundAddressIgnored(t *testing.T) {
+	ss := &state.ServerState{}
+	s := newBoundTestServer(t, ss)
+	victim := newTestPeer(t)
+	attacker := newTestPeer(t)
+	id := uuid.New()
+	secret := addClientWithSecret(t, ss, id)
+
+	s.handleHelloPacket(NewVCSHelloPacket(id, secret), victim.LocalAddr().(*net.UDPAddr))
+	expectAck(t, victim, PacketTypeHelloAck)
+
+	s.handleKeepalivePacket(NewVCSKeepalivePacket(id), attacker.LocalAddr().(*net.UDPAddr))
+	expectNoAck(t, attacker)
+}
+
+// KEEPALIVE must never become a rebind path — a rebind is the whole attack.
+func TestKeepaliveNeverRebindsAddress(t *testing.T) {
+	ss := &state.ServerState{}
+	s := newBoundTestServer(t, ss)
+	victim := newTestPeer(t)
+	attacker := newTestPeer(t)
+	id := uuid.New()
+	secret := addClientWithSecret(t, ss, id)
+
+	victimAddr := victim.LocalAddr().(*net.UDPAddr)
+	s.handleHelloPacket(NewVCSHelloPacket(id, secret), victimAddr)
+	expectAck(t, victim, PacketTypeHelloAck)
+
+	s.handleKeepalivePacket(NewVCSKeepalivePacket(id), attacker.LocalAddr().(*net.UDPAddr))
+
+	s.RLock()
+	bound := s.clients[id].Addr
+	s.RUnlock()
+	if bound.Port != victimAddr.Port {
+		t.Fatalf("keepalive rebound the session: expected port %d, got %d", victimAddr.Port, bound.Port)
+	}
+}
+
+// The ACK must go to the bound address, not the packet source, so nobody can
+// elicit a reply for a sniffed UUID.
+func TestKeepaliveAckGoesToBoundAddress(t *testing.T) {
+	ss := &state.ServerState{}
+	s := newBoundTestServer(t, ss)
+	peer := newTestPeer(t)
+	id := uuid.New()
+	secret := addClientWithSecret(t, ss, id)
+	addr := peer.LocalAddr().(*net.UDPAddr)
+
+	s.handleHelloPacket(NewVCSHelloPacket(id, secret), addr)
+	expectAck(t, peer, PacketTypeHelloAck)
+
+	s.handleKeepalivePacket(NewVCSKeepalivePacket(id), addr)
+	expectAck(t, peer, PacketTypeKeepalive)
+}
