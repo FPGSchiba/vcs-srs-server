@@ -333,6 +333,10 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.GuestLoginReque
 		Role:      utils.GuestRole,
 	})
 
+	s.mu.Lock()
+	delete(s.authenticatingClients, clientGuid)
+	s.mu.Unlock()
+
 	// Return Response
 	s.settingsState.RLock()
 	token, err := utils.GenerateToken(
