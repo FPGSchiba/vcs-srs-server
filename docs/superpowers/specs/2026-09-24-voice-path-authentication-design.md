@@ -203,7 +203,7 @@ func (p *VCSPacket) HelloSecret() (secret string, ok bool)
 func (s *ServerState) GetVoiceSecret(clientGuid uuid.UUID) (string, bool)
 ```
 
-This subsumes the `DoesClientExist` call in `handleHelloPacket`. `DoesClientExist` itself stays — it has other callers.
+This subsumes the `DoesClientExist` call in `handleHelloPacket`. `DoesClientExist` had zero Go callers once this change landed — the "other callers" this section originally claimed did not exist — and has since been removed. See "Post-implementation corrections" at the end of this document.
 
 ### `voice` — HELLO validation
 
@@ -328,14 +328,23 @@ Recorded here and in the PR so this change is not read as "voice is now secure".
 
 ## Build and CI Notes
 
-### Pre-existing headless build break (fixed in a separate commit)
+### Pre-existing headless build break (already fixed on `main` by a different route)
 
-`go test -tags headless ./...` — the command CI runs — has been failing on both `main` and `develop`. The `test.yml` workflow has failed on all of its last 8 runs, going back to at least July 2026.
+`go test -tags headless ./...` — the command CI runs — was failing on both `main` and `develop` at the time this section was drafted.
 
-Cause: the `services` package is GUI-only. Its sole importer, `main.go`, is `//go:build !headless`, as is `app/app_gui.go`, which supplies the `guiApp` embedded struct holding the `App *application.App` field. In headless builds `app/app_headless.go` substitutes an empty `guiApp`, so the eight `c.App.App` / `s.App.App` references in `services/coalitions.go` and `services/settings.go` do not compile. The `services` files were simply never given the build constraint their importer already has.
+Cause as originally diagnosed: the `services` package is GUI-only. Its sole importer, `main.go`, is `//go:build !headless`, as is `app/app_gui.go`, which supplies the `guiApp` embedded struct holding the `App *application.App` field. In headless builds `app/app_headless.go` substitutes an empty `guiApp`, so `c.App.App` / `s.App.App` references in `services/coalitions.go` and `services/settings.go` would not compile.
 
-Fix: add `//go:build !headless` to the five files in `services/`, matching the existing pattern. Verified — the full headless suite passes and the GUI build is unaffected. This lands as its own commit (`fix: tag services package as GUI-only`), described separately in the PR body, because it is unrelated to voice authentication and should be reviewable on its own.
+This section originally proposed fixing that by adding `//go:build !headless` to five files in `services/`, as a commit on this branch. **That work was never done on this branch and was never needed**: `main` had already fixed the underlying break by a different route, in `b8953d2` (`fix(services): remove direct Wails imports to fix headless builds`), which removed the `services` package's direct `wails/v3/pkg/application` imports and the `.App.App` calls themselves, rather than adding a build tag around them. There are now zero `.App.App` references anywhere in `services/`. See "Post-implementation corrections" at the end of this document.
 
 ### Local toolchain note (no repository change)
 
 `GOROOT` is exported in the local shell environment, pinned to a module-cache toolchain path, while `go` on `PATH` is a different install. This breaks standard-library resolution with misleading `package X is not in std` errors. Go commands in this work run as `env -u GOROOT go ...` with `GOCACHE` redirected to a writable directory. This is a local environment issue only — CI is unaffected and no repository change is warranted.
+
+---
+
+## Post-implementation corrections
+
+This design was written before, and partly during, implementation — some of it describes intended work rather than work that was verified to exist. Two claims in it turned out to be wrong and have been corrected in place above; recorded here as well so the spec stays honest about having been drafted ahead of the code:
+
+1. **The "Build and CI Notes" section's headless-build fix.** It described adding `//go:build !headless` to five `services/*.go` files as a commit on this branch. That commit was never made and turned out not to be needed: `main` had already resolved the same headless build break by a different route, commit `b8953d2`, which removed the `services` package's direct Wails imports instead of tagging around them. There are now zero `.App.App` references in `services/`.
+2. **The `DoesClientExist` "it has other callers" claim.** The section on the `state` secret-lookup change asserted `DoesClientExist` would stay in place because other code called it. That was false — a repository-wide grep found zero Go callers, including at the time this was written. `DoesClientExist` has since been removed, both because it was dead code and because leaving a same-named "does this client exist" check in place invited a future handler to reintroduce the "client exists, therefore trust the packet" pattern this whole change exists to close off.
