@@ -188,8 +188,8 @@ sequenceDiagram
     participant Client
     participant VoiceServer
 
-    Client->>VoiceServer: HELLO (SessionID, [freqs])
-    VoiceServer-->>Client: HELLO-ACK (optional)
+    Client->>VoiceServer: HELLO (SessionID, voice secret)
+    VoiceServer-->>Client: HELLO-ACK (only if the secret is valid)
 
     loop While PTT is down
         Client->>VoiceServer: VOICE (SessionID, freq, PTT=1, Opus frame)
@@ -199,7 +199,7 @@ sequenceDiagram
     Client->>VoiceServer: VOICE (SessionID, freq, PTT=0, Opus frame or empty)
 
     Note over Client,VoiceServer: Periodic keepalive or frequency change
-    Client->>VoiceServer: KEEPALIVE (SessionID, [freqs])
+    Client->>VoiceServer: KEEPALIVE (SessionID, [echoed timestamp])
 
     Client->>VoiceServer: BYE (SessionID)
 ```
