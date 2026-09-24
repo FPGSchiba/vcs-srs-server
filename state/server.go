@@ -1,6 +1,8 @@
 package state
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"sync"
@@ -23,7 +25,8 @@ type ClientState struct {
 	Coalition          string
 	Role               uint8
 	LastUpdate         time.Time
-	LatencyToControlMs int64 // measured RTT to the SRS/control gRPC node
+	LatencyToControlMs int64  // measured RTT to the SRS/control gRPC node
+	VoiceSecret        string // per-session secret presented in the voice HELLO packet
 }
 
 type RadioState struct {
@@ -110,13 +113,31 @@ func (b *BannedState) Save() error {
 	return nil
 }
 
+// VoiceSecretBytes is the number of random bytes behind a voice secret.
+// base64.RawURLEncoding turns 32 bytes into a 43-character string.
+const VoiceSecretBytes = 32
+
+// generateVoiceSecret returns a fresh per-session voice secret.
+// crypto/rand.Read cannot fail on Go 1.24+, so there is no error to return.
+func generateVoiceSecret() string {
+	b := make([]byte, VoiceSecretBytes)
+	rand.Read(b)
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
 func (s *ServerState) AddClient(clientGuid uuid.UUID, client *ClientState) {
 	s.Lock()
 	defer s.Unlock()
 	if s.Clients == nil {
 		s.Clients = make(map[uuid.UUID]*ClientState)
 	}
+	if s.RadioClients == nil {
+		s.RadioClients = make(map[uuid.UUID]*RadioState)
+	}
 	client.LastUpdate = time.Now()
+	// Generated here rather than at the call sites so that every client in
+	// ServerState is guaranteed to have one.
+	client.VoiceSecret = generateVoiceSecret()
 	s.Clients[clientGuid] = client
 	s.RadioClients[clientGuid] = &RadioState{
 		Radios: []Radio{},
@@ -205,6 +226,19 @@ func (s *ServerState) DoesClientExist(clientGuid uuid.UUID) bool {
 		return false
 	}
 	return true
+}
+
+// GetVoiceSecret returns the client's voice secret. ok is false if the client
+// is unknown. A known client with an empty secret returns ("", true); callers
+// on the voice path must reject that case rather than compare against it.
+func (s *ServerState) GetVoiceSecret(clientGuid uuid.UUID) (string, bool) {
+	s.RLock()
+	defer s.RUnlock()
+	client, exists := s.Clients[clientGuid]
+	if !exists {
+		return "", false
+	}
+	return client.VoiceSecret, true
 }
 
 func (s *ServerState) IsClientMuted(clientGuid uuid.UUID) bool {
