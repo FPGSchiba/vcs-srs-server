@@ -48,6 +48,11 @@ jobs:
         with:
           files: coverage.out
           fail_ci_if_error: true
+          # Install the CLI from PyPI: the default path imports the signing key
+          # from https://keybase.io/codecovsecurity/pgp_keys.asc, which now 404s,
+          # so signature verification fails with "no valid OpenPGP data found".
+          # See https://github.com/codecov/codecov-action/issues/1955
+          use_pypi: true
           token: ${{ secrets.CODECOV_TOKEN }}
 
   frontend-test:
