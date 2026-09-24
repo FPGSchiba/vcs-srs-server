@@ -231,7 +231,9 @@ enum DistributionMode {
   DISTRIBUTED = 1; // Distribution of Voice servers supported by client
 }
 
-// Distribution preparation here
+// UNIMPLEMENTED: this message is not the request or response of any RPC in this
+// file, and the server never constructs it. Do not build a client against it.
+// The live voice secret is ServerSyncResult.voice_secret.
 message ServerInitializationResponse {
   string client_guid = 1; // Unique identifier for the client
   repeated VoiceHostDetails voice_hosts = 2; // Details of the voice server to connect to
@@ -242,7 +244,8 @@ message VoiceHostDetails {
   string host = 1; // Host address for the voice server
   int32 port = 2; // Port for the voice server
   repeated FrequencyRange frequencies = 3; // List of frequencies assigned to the voice server with these details
-  optional string secret = 4; // The secret for the voice server
+  // UNIMPLEMENTED: never populated by the server. Use ServerSyncResult.voice_secret.
+  optional string secret = 4;
 }
 
 message FrequencyRange {
@@ -281,11 +284,15 @@ message ServerUpdate {
 message VoiceAddressUpdate {
   string coalition_voice_addr = 1; // new UDP host:port for the client's coalition
   string global_voice_addr    = 2; // current global voice node address
+  string voice_secret         = 3; // unchanged across a rebalance; re-sent so a redirect is self-contained
 }
 
+// UNIMPLEMENTED: never emitted. It is declared as ServerUpdate.voice_hosts = 5,
+// but buildServerUpdate never sets that variant of the oneof.
 message DistributionUpdate {
   repeated VoiceHostDetails voice_hosts = 2; // Details of the voice server to connect to
-  optional string secret = 4; // The secret for the voice server
+  // UNIMPLEMENTED: never populated by the server. Use ServerSyncResult.voice_secret.
+  optional string secret = 4;
 }
 
 // Client update information
@@ -369,6 +376,7 @@ message ServerSyncResult {
   ServerSettings          settings             = 3; // Current server settings
   string                  coalition_voice_addr = 4; // UDP host:port for coalition audio
   string                  global_voice_addr    = 5; // UDP host:port for global freq audio
+  string                  voice_secret         = 6; // Per-session secret presented in the voice HELLO payload
 }
 
 // Generic server response
