@@ -23,13 +23,50 @@ const rejectLogWindow = 30 * time.Second
 // rejectLimiter rate-limits rejection logging so repeated attempts stay visible
 // without letting an attacker flood the log.
 //
-// Deliberately global rather than keyed by source address: UDP source addresses
-// are trivially spoofable, so a per-address map is itself a memory-exhaustion
-// vector and its attribution would be unreliable anyway.
+// Deliberately keyed by rejection reason (a fixed array of four), never by
+// source address: UDP source addresses are trivially spoofable, so a
+// per-address map would itself be a memory-exhaustion vector and its
+// attribution would be unreliable anyway. Keying by reason instead has fixed,
+// attacker-independent cardinality — there are exactly four reasons a HELLO
+// can be rejected, and nothing about the packet chooses which limiter is
+// used beyond that fixed set — so it carries none of that risk, while
+// stopping a flood of one reason (e.g. "unknown client" from sprayed random
+// UUIDs) from arming the shared window and suppressing a different reason
+// (e.g. "invalid secret" against a real session, the highest-value signal
+// the server can emit).
 type rejectLimiter struct {
 	mu         sync.Mutex
 	lastLogged time.Time
 	suppressed int
+}
+
+// rejectReason identifies which guard refused a HELLO. It exists so each
+// reason can be rate-limited independently — see rejectLimiter.
+type rejectReason int
+
+const (
+	rejectUnknownClient rejectReason = iota
+	rejectNoSecretOnRecord
+	rejectMissingOrShortSecret
+	rejectInvalidSecret
+	numRejectReasons
+)
+
+// String returns the log-facing reason text. Existing tests assert on these
+// exact strings, so they must not change when the limiter keying does.
+func (r rejectReason) String() string {
+	switch r {
+	case rejectUnknownClient:
+		return "unknown client"
+	case rejectNoSecretOnRecord:
+		return "no secret on record"
+	case rejectMissingOrShortSecret:
+		return "missing or short secret"
+	case rejectInvalidSecret:
+		return "invalid secret"
+	default:
+		return "unknown reason"
+	}
 }
 
 // shouldLog reports whether this rejection should be logged now and, if so, how
@@ -66,7 +103,7 @@ type Server struct {
 	stopOnce          sync.Once
 	controlClient     *voiceontrol.VoiceControlClient
 	serverId          string
-	helloRejects      rejectLimiter
+	helloRejects      [numRejectReasons]rejectLimiter
 }
 
 func NewServer(state *state.ServerState, logger *slog.Logger, distributionState *state.DistributionState, settingsState *state.SettingsState) *Server {
@@ -195,12 +232,14 @@ func (v *Server) handlePacket(data []byte, addr *net.UDPAddr) {
 	}
 }
 
-// rejectHello records a refused HELLO without binding anything, at a rate that
-// keeps repeated attempts visible without letting an attacker flood the log.
-func (v *Server) rejectHello(reason string, senderID uuid.UUID, addr *net.UDPAddr) {
-	if ok, suppressed := v.helloRejects.shouldLog(time.Now()); ok {
+// rejectHello records a refused HELLO without binding anything, at a rate
+// that keeps repeated attempts visible without letting an attacker flood the
+// log. Each reason has its own limiter — see rejectLimiter — so a flood
+// under one reason cannot suppress a rejection logged for another.
+func (v *Server) rejectHello(reason rejectReason, senderID uuid.UUID, addr *net.UDPAddr) {
+	if ok, suppressed := v.helloRejects[reason].shouldLog(time.Now()); ok {
 		v.logger.Warn("Rejected voice HELLO",
-			"reason", reason,
+			"reason", reason.String(),
 			"sender_id", senderID,
 			"addr", addr.String(),
 			"suppressed_since_last", suppressed)
@@ -233,7 +272,7 @@ func (v *Server) isBoundAddr(clientID uuid.UUID, addr *net.UDPAddr) bool {
 func (v *Server) handleHelloPacket(packet *VCSPacket, addr *net.UDPAddr) {
 	expected, known := v.serverState.GetVoiceSecret(packet.SenderID)
 	if !known {
-		v.rejectHello("unknown client", packet.SenderID, addr)
+		v.rejectHello(rejectUnknownClient, packet.SenderID, addr)
 		return
 	}
 	// Defensive: a voice node fed by an older control server may hold a client
@@ -242,16 +281,16 @@ func (v *Server) handleHelloPacket(packet *VCSPacket, addr *net.UDPAddr) {
 	// ConstantTimeCompare — but relying on that is fragile, so reject explicitly
 	// rather than depending on the comparison's length behaviour.
 	if expected == "" {
-		v.rejectHello("no secret on record", packet.SenderID, addr)
+		v.rejectHello(rejectNoSecretOnRecord, packet.SenderID, addr)
 		return
 	}
 	presented, ok := packet.HelloSecret()
 	if !ok {
-		v.rejectHello("missing or short secret", packet.SenderID, addr)
+		v.rejectHello(rejectMissingOrShortSecret, packet.SenderID, addr)
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(presented), []byte(expected)) != 1 {
-		v.rejectHello("invalid secret", packet.SenderID, addr)
+		v.rejectHello(rejectInvalidSecret, packet.SenderID, addr)
 		return
 	}
 

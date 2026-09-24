@@ -494,6 +494,46 @@ func TestRejectLimiterConcurrentShouldLog(t *testing.T) {
 	}
 }
 
+// TestRejectHelloPerReasonLimitersAreIndependent proves that flooding one
+// rejection reason does not arm the window for, and so does not suppress,
+// a different reason. Before the fix all four reasons shared one
+// rejectLimiter, so an attacker spraying random UUIDs ("unknown client")
+// could suppress logging of "invalid secret" against a real session -- the
+// highest-value signal the server can emit, since it means someone holds a
+// valid GUID and is attacking a live session.
+func TestRejectHelloPerReasonLimitersAreIndependent(t *testing.T) {
+	h := &capturingHandler{}
+	s := &Server{logger: slog.New(h)}
+	addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5002}
+
+	// Flood "unknown client": the first call logs and arms that reason's
+	// window, every subsequent call within the window is suppressed.
+	for i := 0; i < 10; i++ {
+		s.rejectHello(rejectUnknownClient, uuid.New(), addr)
+	}
+
+	// A different reason must still log immediately: it has its own,
+	// unarmed limiter.
+	s.rejectHello(rejectInvalidSecret, uuid.New(), addr)
+
+	got := h.snapshot()
+	unknownCount, invalidCount := 0, 0
+	for _, reason := range got {
+		switch reason {
+		case "unknown client":
+			unknownCount++
+		case "invalid secret":
+			invalidCount++
+		}
+	}
+	if unknownCount != 1 {
+		t.Fatalf("expected exactly 1 logged \"unknown client\" rejection (the rest suppressed within the window), got %d", unknownCount)
+	}
+	if invalidCount != 1 {
+		t.Fatalf("expected \"invalid secret\" to log despite the \"unknown client\" flood, got %d occurrences (reasons: %v)", invalidCount, got)
+	}
+}
+
 // Pins that an IPv4-mapped IPv6 form of the bound address is accepted, and
 // that a different IP or port is not. Note this does NOT distinguish IP.Equal
 // from an addr.String() comparison — Go normalizes ::ffff:127.0.0.1 to
