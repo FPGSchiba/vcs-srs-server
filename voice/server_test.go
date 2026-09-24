@@ -279,8 +279,32 @@ func TestHelloUnknownClientRejected(t *testing.T) {
 }
 
 // Review Focus 1: a ClientState built from an old control server's delta has an
-// empty secret. It must match nothing, not match an empty presented secret.
+// empty secret. It must match nothing, not match a full-length presented secret.
+// This is the dangerous path: a full-length presented secret is what an attacker
+// would actually send, so this is the input that must be pinned against the
+// stored-empty-secret case.
 func TestHelloEmptyStoredSecretRejected(t *testing.T) {
+	id := uuid.New()
+	ss := &state.ServerState{
+		Clients:      map[uuid.UUID]*state.ClientState{id: {Name: "Pilot", VoiceSecret: ""}},
+		RadioClients: map[uuid.UUID]*state.RadioState{},
+	}
+	s := newBoundTestServer(t, ss)
+	peer := newTestPeer(t)
+
+	s.handleHelloPacket(NewVCSHelloPacket(id, strings.Repeat("a", VoiceSecretLen)), peer.LocalAddr().(*net.UDPAddr))
+
+	s.RLock()
+	_, bound := s.clients[id]
+	s.RUnlock()
+	if bound {
+		t.Fatal("a client with no secret on record must never bind")
+	}
+	expectNoAck(t, peer)
+}
+
+// A client with no secret on record must also reject an empty presented secret.
+func TestHelloEmptyStoredSecretRejectsEmptyPresented(t *testing.T) {
 	id := uuid.New()
 	ss := &state.ServerState{
 		Clients:      map[uuid.UUID]*state.ClientState{id: {Name: "Pilot", VoiceSecret: ""}},

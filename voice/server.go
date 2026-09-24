@@ -214,7 +214,10 @@ func (v *Server) handleHelloPacket(packet *VCSPacket, addr *net.UDPAddr) {
 		return
 	}
 	// Defensive: a voice node fed by an older control server may hold a client
-	// with no secret. Without this, an empty presented secret would match.
+	// with no secret on record. No input reaches this today — a short payload is
+	// rejected by HelloSecret and a full-length one fails the length check inside
+	// ConstantTimeCompare — but relying on that is fragile, so reject explicitly
+	// rather than depending on the comparison's length behaviour.
 	if expected == "" {
 		v.rejectHello("no secret on record", packet.SenderID, addr)
 		return
