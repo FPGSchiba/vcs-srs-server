@@ -1,6 +1,7 @@
 package voice
 
 import (
+	"crypto/subtle"
 	"log/slog"
 	"net"
 	"sync"
@@ -16,9 +17,39 @@ const (
 	BufferSize = 1024 // UDP buffer size
 )
 
+// rejectLogWindow is the minimum interval between logged HELLO rejections.
+const rejectLogWindow = 30 * time.Second
+
+// rejectLimiter rate-limits rejection logging so repeated attempts stay visible
+// without letting an attacker flood the log.
+//
+// Deliberately global rather than keyed by source address: UDP source addresses
+// are trivially spoofable, so a per-address map is itself a memory-exhaustion
+// vector and its attribution would be unreliable anyway.
+type rejectLimiter struct {
+	mu         sync.Mutex
+	lastLogged time.Time
+	suppressed int
+}
+
+// shouldLog reports whether this rejection should be logged now and, if so, how
+// many rejections were suppressed since the last logged one.
+func (r *rejectLimiter) shouldLog(now time.Time) (bool, int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.lastLogged.IsZero() || now.Sub(r.lastLogged) >= rejectLogWindow {
+		suppressed := r.suppressed
+		r.suppressed = 0
+		r.lastLogged = now
+		return true, suppressed
+	}
+	r.suppressed++
+	return false, 0
+}
+
 type Client struct {
-	Addr          *net.UDPAddr
-	LastSeen      time.Time
+	Addr             *net.UDPAddr
+	LastSeen         time.Time
 	LatencyToVoiceMs int64 // measured RTT to this voice node (from keepalive echo)
 }
 
@@ -35,6 +66,7 @@ type Server struct {
 	stopOnce          sync.Once
 	controlClient     *voiceontrol.VoiceControlClient
 	serverId          string
+	helloRejects      rejectLimiter
 }
 
 func NewServer(state *state.ServerState, logger *slog.Logger, distributionState *state.DistributionState, settingsState *state.SettingsState) *Server {
@@ -163,12 +195,41 @@ func (v *Server) handlePacket(data []byte, addr *net.UDPAddr) {
 	}
 }
 
+// rejectHello records a refused HELLO without binding anything, at a rate that
+// keeps repeated attempts visible without letting an attacker flood the log.
+func (v *Server) rejectHello(reason string, senderID uuid.UUID, addr *net.UDPAddr) {
+	if ok, suppressed := v.helloRejects.shouldLog(time.Now()); ok {
+		v.logger.Warn("Rejected voice HELLO",
+			"reason", reason,
+			"sender_id", senderID,
+			"addr", addr.String(),
+			"suppressed_since_last", suppressed)
+	}
+}
+
 func (v *Server) handleHelloPacket(packet *VCSPacket, addr *net.UDPAddr) {
-	v.logger.Info("Received hello packet", "sender_id", packet.SenderID, "addr", addr.String())
-	if !v.serverState.DoesClientExist(packet.SenderID) {
-		v.logger.Warn("Client with hello, that does not exist", "sender_id", packet.SenderID)
+	expected, known := v.serverState.GetVoiceSecret(packet.SenderID)
+	if !known {
+		v.rejectHello("unknown client", packet.SenderID, addr)
 		return
 	}
+	// Defensive: a voice node fed by an older control server may hold a client
+	// with no secret. Without this, an empty presented secret would match.
+	if expected == "" {
+		v.rejectHello("no secret on record", packet.SenderID, addr)
+		return
+	}
+	presented, ok := packet.HelloSecret()
+	if !ok {
+		v.rejectHello("missing or short secret", packet.SenderID, addr)
+		return
+	}
+	if subtle.ConstantTimeCompare([]byte(presented), []byte(expected)) != 1 {
+		v.rejectHello("invalid secret", packet.SenderID, addr)
+		return
+	}
+
+	v.logger.Info("Accepted voice HELLO", "sender_id", packet.SenderID, "addr", addr.String())
 
 	v.Lock()
 	v.clients[packet.SenderID] = &Client{
@@ -179,6 +240,11 @@ func (v *Server) handleHelloPacket(packet *VCSPacket, addr *net.UDPAddr) {
 
 	if v.controlClient != nil {
 		go v.controlClient.ReportClientConnected(packet.SenderID, addr)
+	}
+
+	if v.conn == nil {
+		v.logger.Warn("No UDP connection available to send hello acknowledgment")
+		return
 	}
 
 	ackPacket := NewVCSHelloAckPacket(packet.SenderID)
