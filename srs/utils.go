@@ -1,16 +1,50 @@
 package srs
 
 import (
+	"regexp"
+	"strings"
+
 	pb "github.com/FPGSchiba/vcs-srs-server/srspb"
 	"github.com/FPGSchiba/vcs-srs-server/state"
 	"github.com/FPGSchiba/vcs-srs-server/utils"
-	"regexp"
+	"golang.org/x/mod/semver"
 )
 
+// MinClientVersion is the oldest client this server admits. Clients report
+// their version in ClientCapabilities.version on InitAuth.
+//
+// Exported so the value is greppable from the client repo, which has to keep
+// its own version at or above it.
+const MinClientVersion = "v0.1.0"
+
+// checkVersion reports whether a client's reported version is new enough.
+//
+// This used to be `version == "0.1.0"` -- an exact string equality, despite a
+// comment claiming all versions were accepted. That made the two repositories
+// silently co-dependent: bumping the client's version.Client constant by a
+// single patch release would have made EVERY login fail with "Unsupported
+// version", and nothing on either side said so. It was found by running the
+// client's integration tests against a real server.
+//
+// A floor comparison is what the check was evidently meant to be: new clients
+// keep working, genuinely ancient ones are still refused, and raising the bar
+// becomes a deliberate edit of MinClientVersion rather than an accident of
+// release numbering.
+//
+// The leading "v" that semver requires is supplied here rather than demanded
+// of the client, since the wire format has always carried a bare "0.1.0".
 func checkVersion(version string) bool {
-	// Check if the version is supported
-	// For now, we assume all versions are supported
-	return version == "0.1.0"
+	v := strings.TrimSpace(version)
+	if v == "" {
+		return false
+	}
+	if !strings.HasPrefix(v, "v") {
+		v = "v" + v
+	}
+	if !semver.IsValid(v) {
+		return false
+	}
+	return semver.Compare(v, MinClientVersion) >= 0
 }
 
 func checkUsername(username string) bool {

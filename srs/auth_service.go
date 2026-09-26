@@ -121,11 +121,15 @@ func (s *AuthServer) InitAuth(ctx context.Context, request *pb.AuthInitRequest) 
 		}, nil
 	}
 
-	// Check Version
+	// Check Version. The message names both the version we got and the floor
+	// we require -- "Unsupported version" alone gives a user nothing to act
+	// on, and this is the first thing a mismatched client ever sees.
 	if !checkVersion(request.Capabilities.Version) {
 		return &pb.AuthInitResponse{
-			Success:    false,
-			InitResult: &pb.AuthInitResponse_ErrorMessage{ErrorMessage: "Unsupported version"},
+			Success: false,
+			InitResult: &pb.AuthInitResponse_ErrorMessage{ErrorMessage: fmt.Sprintf(
+				"Unsupported client version %q; this server requires %s or newer",
+				request.Capabilities.Version, MinClientVersion)},
 		}, nil
 	}
 
