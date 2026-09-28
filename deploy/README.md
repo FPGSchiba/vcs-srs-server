@@ -170,7 +170,10 @@ clientTLS:
 Omit the block entirely to serve plaintext. The server logs a WARN at
 startup when you do, because client credentials then cross the network in
 the clear. Setting one of `certificateFile` / `privateKeyFile` without the
-other fails startup rather than quietly serving plaintext.
+other leaves the client-facing gRPC port down rather than quietly serving
+plaintext: the server process itself keeps running, the admin HTTP/GraphQL
+surface is unaffected, and the error names the missing field. No client can
+connect until it is fixed.
 
 **Public deployments** should point these at a certificate issued by a real
 CA for the hostname users type. Clients then verify against their OS trust

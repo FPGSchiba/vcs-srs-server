@@ -2,8 +2,11 @@ package control
 
 import (
 	"bytes"
+	"crypto/x509"
+	"encoding/pem"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -90,6 +93,40 @@ func TestClientTransportCredentials(t *testing.T) {
 		}
 		if !strings.Contains(string(certPEM), "-----BEGIN CERTIFICATE-----") {
 			t.Fatalf("expected a certificate PEM at %s, got: %s", certPath, certPEM)
+		}
+
+		// Review Focus 5: cfg.ServerName is passed to LoadOrGenerateKeyPair as
+		// extraHosts (server.go:200). That is the argument that makes remote
+		// pinning work at all -- prove it actually lands in the generated
+		// certificate's SANs, not merely that a certificate was produced.
+		block, _ := pem.Decode(certPEM)
+		if block == nil {
+			t.Fatalf("expected a decodable PEM block at %s", certPath)
+		}
+		parsed, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			t.Fatalf("parse generated certificate: %v", err)
+		}
+		const wantServerName = "vcs.test"
+		found := false
+		for _, name := range parsed.DNSNames {
+			if name == wantServerName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			if ip := net.ParseIP(wantServerName); ip != nil {
+				for _, addr := range parsed.IPAddresses {
+					if addr.Equal(ip) {
+						found = true
+						break
+					}
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("expected %q in DNSNames %v or IPAddresses %v", wantServerName, parsed.DNSNames, parsed.IPAddresses)
 		}
 	})
 
