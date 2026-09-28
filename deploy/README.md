@@ -151,3 +151,36 @@ voiceControl:
 Mount `./certs` into every container. The Control node writes the cert/key pair on first
 start. Copy `voicecontrol-cert.pem` (the public certificate only) to the `certs/`
 directory of every voice node so they can verify the Control node's TLS identity.
+
+### Client-facing TLS
+
+The `certs/` material described above secures the **voice-control channel
+between nodes**. It does nothing for the port your users' clients connect
+to. That port is configured separately:
+
+```yaml
+clientTLS:
+  certificateFile: /certs/srs-cert.pem
+  privateKeyFile:  /certs/srs-private-key.pem
+  serverName:      vcs.vngd.net
+```
+
+Omit the block entirely to serve plaintext. The server logs a WARN at
+startup when you do, because client credentials then cross the network in
+the clear. Setting one of `certificateFile` / `privateKeyFile` without the
+other fails startup rather than quietly serving plaintext.
+
+**Public deployments** should point these at a certificate issued by a real
+CA for the hostname users type. Clients then verify against their OS trust
+store with no configuration at all.
+
+**Self-hosted or LAN deployments** can leave the files absent: the server
+generates a self-signed pair at those paths on first start, the same way the
+Control node generates its voice-control pair. Copy the **certificate only**
+(`srs-cert.pem`) to each client and point that client's `tls_ca_file` at it.
+
+> Clients connecting by bare IP rather than hostname need that address in the
+> certificate's SANs. Set `serverName` to the IP before first start so the
+> generated certificate carries it — the pair is only generated when the
+> files are absent, so changing `serverName` later has no effect until you
+> delete them.
