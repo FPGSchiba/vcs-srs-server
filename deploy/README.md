@@ -3,8 +3,10 @@
 ## Prerequisites
 
 - Docker 24+ and Docker Compose v2
-- TLS certificates for the voice-control gRPC channel (generated automatically on first
-  Control node start; see [Config notes](#config-notes) for how to persist them)
+- TLS certificates for the **server-to-server voice-control channel only**
+  (generated automatically on first Control node start; see [Config notes](#config-notes)
+  for how to persist them). The client-facing port is configured separately — see
+  [Client-facing TLS](#client-facing-tls).
 - A `config/` directory containing one YAML settings file per service (see below)
 
 ---
