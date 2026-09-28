@@ -10,6 +10,7 @@ type SettingsSnapshot struct {
 	General      GeneralSettings
 	Security     SecuritySettings
 	VoiceControl VoiceControlSettings
+	ClientTLS    ClientTLSSettings
 	Api          ApiSettings
 }
 
@@ -26,6 +27,7 @@ func (s *SettingsState) Snapshot() SettingsSnapshot {
 		General:      s.General,
 		Security:     s.Security,
 		VoiceControl: s.VoiceControl,
+		ClientTLS:    s.ClientTLS,
 		Api:          s.Api,
 	}
 }
