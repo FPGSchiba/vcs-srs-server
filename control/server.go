@@ -100,6 +100,20 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 
 	clientCreds, err := clientTransportCredentials(clientTLS, s.logger)
 	if err != nil {
+		// The caller (StartControlServer) is not fatal on this error: it logs,
+		// records ControlStatus.Error, and lets the process stay up. That
+		// means a half-started server must not keep the port(s) it already
+		// bound -- otherwise a corrected retry hits "address already in use"
+		// with nothing in the logs explaining why. Close what we bound and
+		// clear the fields so a later Start rebinds cleanly.
+		if s.clientListener != nil {
+			_ = s.clientListener.Close()
+			s.clientListener = nil
+		}
+		if s.controlListener != nil {
+			_ = s.controlListener.Close()
+			s.controlListener = nil
+		}
 		s.mu.Unlock()
 		return fmt.Errorf("client TLS: %w", err)
 	}
