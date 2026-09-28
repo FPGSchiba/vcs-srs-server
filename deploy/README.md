@@ -35,7 +35,7 @@ Ports exposed on the host:
 
 | Port | Protocol | Purpose |
 |------|----------|---------|
-| 14446 | TCP | Client gRPC (SRS clients connect here) |
+| 14446 | TCP | Client gRPC (SRS clients connect here) — plaintext unless `clientTLS` is set (see [Client-facing TLS](#client-facing-tls)) |
 | 14448 | TCP | Voice-control gRPC (voice nodes connect here) |
 | 5002 | UDP | Coalition voice node (DCS audio) |
 | 5003 | UDP | Global voice node (cross-coalition audio) |
