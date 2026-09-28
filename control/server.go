@@ -94,7 +94,31 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 		}
 	}
 
-	s.clientGrpcServer = grpc.NewServer(
+	s.settingsState.RLock()
+	clientTLS := s.settingsState.ClientTLS
+	s.settingsState.RUnlock()
+
+	clientCreds, err := clientTransportCredentials(clientTLS, s.logger)
+	if err != nil {
+		// The caller (StartControlServer) is not fatal on this error: it logs,
+		// records ControlStatus.Error, and lets the process stay up. That
+		// means a half-started server must not keep the port(s) it already
+		// bound -- otherwise a corrected retry hits "address already in use"
+		// with nothing in the logs explaining why. Close what we bound and
+		// clear the fields so a later Start rebinds cleanly.
+		if s.clientListener != nil {
+			_ = s.clientListener.Close()
+			s.clientListener = nil
+		}
+		if s.controlListener != nil {
+			_ = s.controlListener.Close()
+			s.controlListener = nil
+		}
+		s.mu.Unlock()
+		return fmt.Errorf("client TLS: %w", err)
+	}
+
+	clientOpts := []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(s.loggingInterceptor, s.authInterceptor),
 		grpc.ChainStreamInterceptor(s.authStreamInterceptor),
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
@@ -105,7 +129,12 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 			Time:    60 * time.Second, // server sends pings every 30s if idle
 			Timeout: 10 * time.Second, // wait 10s for ping ack
 		}),
-	)
+	}
+	if clientCreds != nil {
+		clientOpts = append(clientOpts, grpc.Creds(clientCreds))
+	}
+
+	s.clientGrpcServer = grpc.NewServer(clientOpts...)
 
 	controlServer := voiceontrol.NewVoiceControlServer(s.serverState, s.settingsState, s.eventBus, s.logger)
 	s.voiceControlServer = controlServer
@@ -141,6 +170,39 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 	go s.handleShutdown(stopChan)
 
 	return nil
+}
+
+// clientTransportCredentials builds transport credentials for the
+// client-facing gRPC listener from cfg.
+//
+// Returns (nil, nil) when TLS is not configured, which leaves the listener
+// plaintext -- the behaviour every deployment predating this block already
+// has. Returns an error when the block is HALF configured, because an
+// operator who set one field of two believes they enabled TLS, and silently
+// serving plaintext to that operator is worse than refusing to start.
+//
+// The keypair is generated at the configured paths if absent, reusing
+// LoadOrGenerateKeyPair exactly as the VoiceControl channel does, so a
+// self-hoster ends up with a certificate they can copy to their clients.
+// Regeneration only happens when the files are missing: a restart must not
+// mint a new certificate, or every client pinning the old one breaks.
+func clientTransportCredentials(cfg state.ClientTLSSettings, logger *slog.Logger) (credentials.TransportCredentials, error) {
+	switch {
+	case cfg.CertificateFile == "" && cfg.PrivateKeyFile == "":
+		logger.Warn("client-facing gRPC port is PLAINTEXT: no clientTLS block configured, so client credentials cross the network in the clear")
+		return nil, nil
+	case cfg.PrivateKeyFile == "":
+		return nil, fmt.Errorf("clientTLS.certificateFile is set but clientTLS.privateKeyFile is empty: configure both or neither")
+	case cfg.CertificateFile == "":
+		return nil, fmt.Errorf("clientTLS.privateKeyFile is set but clientTLS.certificateFile is empty: configure both or neither")
+	}
+
+	cert, _, err := voiceontrol.LoadOrGenerateKeyPair(cfg.PrivateKeyFile, cfg.CertificateFile, cfg.ServerName)
+	if err != nil {
+		return nil, fmt.Errorf("load or generate client TLS keypair: %w", err)
+	}
+	logger.Info("client-facing gRPC port is TLS", "certificateFile", cfg.CertificateFile, "serverName", cfg.ServerName)
+	return credentials.NewServerTLSFromCert(cert), nil
 }
 
 func (s *Server) initControlServer(controlServer voicecontrolpb.VoiceControlServiceServer) {

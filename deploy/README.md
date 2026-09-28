@@ -3,8 +3,10 @@
 ## Prerequisites
 
 - Docker 24+ and Docker Compose v2
-- TLS certificates for the voice-control gRPC channel (generated automatically on first
-  Control node start; see [Config notes](#config-notes) for how to persist them)
+- TLS certificates for the **server-to-server voice-control channel only**
+  (generated automatically on first Control node start; see [Config notes](#config-notes)
+  for how to persist them). The client-facing port is configured separately — see
+  [Client-facing TLS](#client-facing-tls).
 - A `config/` directory containing one YAML settings file per service (see below)
 
 ---
@@ -33,7 +35,7 @@ Ports exposed on the host:
 
 | Port | Protocol | Purpose |
 |------|----------|---------|
-| 14446 | TCP | Client gRPC (SRS clients connect here) |
+| 14446 | TCP | Client gRPC (SRS clients connect here) — plaintext unless `clientTLS` is set (see [Client-facing TLS](#client-facing-tls)) |
 | 14448 | TCP | Voice-control gRPC (voice nodes connect here) |
 | 5002 | UDP | Coalition voice node (DCS audio) |
 | 5003 | UDP | Global voice node (cross-coalition audio) |
@@ -151,3 +153,39 @@ voiceControl:
 Mount `./certs` into every container. The Control node writes the cert/key pair on first
 start. Copy `voicecontrol-cert.pem` (the public certificate only) to the `certs/`
 directory of every voice node so they can verify the Control node's TLS identity.
+
+### Client-facing TLS
+
+The `certs/` material described above secures the **voice-control channel
+between nodes**. It does nothing for the port your users' clients connect
+to. That port is configured separately:
+
+```yaml
+clientTLS:
+  certificateFile: /certs/srs-cert.pem
+  privateKeyFile:  /certs/srs-private-key.pem
+  serverName:      vcs.vngd.net
+```
+
+Omit the block entirely to serve plaintext. The server logs a WARN at
+startup when you do, because client credentials then cross the network in
+the clear. Setting one of `certificateFile` / `privateKeyFile` without the
+other leaves the client-facing gRPC port down rather than quietly serving
+plaintext: the server process itself keeps running, the admin HTTP/GraphQL
+surface is unaffected, and the error names the missing field. No client can
+connect until it is fixed.
+
+**Public deployments** should point these at a certificate issued by a real
+CA for the hostname users type. Clients then verify against their OS trust
+store with no configuration at all.
+
+**Self-hosted or LAN deployments** can leave the files absent: the server
+generates a self-signed pair at those paths on first start, the same way the
+Control node generates its voice-control pair. Copy the **certificate only**
+(`srs-cert.pem`) to each client and point that client's `tls_ca_file` at it.
+
+> Clients connecting by bare IP rather than hostname need that address in the
+> certificate's SANs. Set `serverName` to the IP before first start so the
+> generated certificate carries it — the pair is only generated when the
+> files are absent, so changing `serverName` later has no effect until you
+> delete them.
