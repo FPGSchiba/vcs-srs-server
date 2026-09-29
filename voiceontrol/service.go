@@ -62,8 +62,8 @@ type VoiceControlServer struct {
 	eventBus       *events.EventBus
 	nodes          map[string]*registeredNode
 	globalNodeAddr string
-	pendingMoves   map[string]pendingMove  // coalition name → queued move (sticky rebalance)
-	clientNodes    map[uuid.UUID]string    // clientID → nodeServerID (from ReportClientConnected)
+	pendingMoves   map[string]pendingMove // coalition name → queued move (sticky rebalance)
+	clientNodes    map[uuid.UUID]string   // clientID → nodeServerID (from ReportClientConnected)
 }
 
 func NewVoiceControlServer(serverState *state.ServerState, settingsState *state.SettingsState, eventBus *events.EventBus, logger *slog.Logger) *VoiceControlServer {
@@ -574,10 +574,11 @@ func (s *VoiceControlServer) buildStateSnapshot(node *registeredNode) *pb.Contro
 	for id, client := range s.serverState.Clients {
 		if node.isGlobal || containsStr(node.coalitions, client.Coalition) {
 			clients[id.String()] = &pb.VoiceClientInfo{
-				Name:      client.Name,
-				Coalition: client.Coalition,
-				UnitId:    client.UnitId,
-				Role:      uint32(client.Role),
+				Name:        client.Name,
+				Coalition:   client.Coalition,
+				UnitId:      client.UnitId,
+				Role:        uint32(client.Role),
+				VoiceSecret: client.VoiceSecret,
 			}
 		}
 	}
@@ -624,10 +625,11 @@ func (s *VoiceControlServer) buildClientDelta(node *registeredNode, event events
 		}
 
 		info := &pb.VoiceClientInfo{
-			Name:      client.Name,
-			Coalition: client.Coalition,
-			UnitId:    client.UnitId,
-			Role:      uint32(client.Role),
+			Name:        client.Name,
+			Coalition:   client.Coalition,
+			UnitId:      client.UnitId,
+			Role:        uint32(client.Role),
+			VoiceSecret: client.VoiceSecret,
 		}
 		deltaType := pb.ClientDelta_INFO_UPDATED
 		if ce.Type == events.ClientJoined {

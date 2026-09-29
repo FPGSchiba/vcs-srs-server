@@ -7,7 +7,6 @@ import (
 	"github.com/FPGSchiba/vcs-srs-server/events"
 	"github.com/FPGSchiba/vcs-srs-server/state"
 	"github.com/FPGSchiba/vcs-srs-server/utils"
-	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 type CoalitionService struct {
@@ -47,10 +46,6 @@ func (c *CoalitionService) AddCoalition(coalition state.Coalition) {
 		c.App.Logger.Error("Failed to save settings", "error", err)
 		return
 	}
-	c.App.App.Event.EmitEvent(&application.CustomEvent{
-		Name: events.CoalitionsChanged,
-		Data: c.App.SettingsState.Coalitions,
-	})
 	c.App.EmitEvent(events.Event{Name: events.CoalitionsChanged, Data: c.App.SettingsState.Snapshot()})
 	c.App.Notify(events.NewNotification("Coalition added", fmt.Sprintf("Coalition %s added", coalition.Name), "info"))
 }
@@ -65,10 +60,6 @@ func (c *CoalitionService) RemoveCoalition(coalition state.Coalition) {
 		c.App.Logger.Error("Failed to save settings", "error", err)
 		return
 	}
-	c.App.App.Event.EmitEvent(&application.CustomEvent{
-		Name: events.CoalitionsChanged,
-		Data: c.App.SettingsState.Coalitions,
-	})
 	c.App.EmitEvent(events.Event{Name: events.CoalitionsChanged, Data: c.App.SettingsState.Snapshot()})
 	c.App.Notify(events.NewNotification("Coalition removed", fmt.Sprintf("Coalition %s removed", coalition.Name), "info"))
 }
@@ -88,10 +79,6 @@ func (c *CoalitionService) UpdateCoalition(coalition state.Coalition) {
 		c.App.Logger.Error("Failed to save settings", "error", err)
 		return
 	}
-	c.App.App.Event.EmitEvent(&application.CustomEvent{
-		Name: events.CoalitionsChanged,
-		Data: c.App.SettingsState.Coalitions,
-	})
 	c.App.EmitEvent(events.Event{Name: events.CoalitionsChanged, Data: c.App.SettingsState.Snapshot()})
 	c.App.Notify(events.NewNotification("Coalition updated", fmt.Sprintf("Coalition %s updated", coalition.Name), "info"))
 }

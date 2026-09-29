@@ -5,6 +5,7 @@ package graphql
 // It serves as dependency injection for your app, add any dependencies you require here.
 
 import (
+	"github.com/FPGSchiba/vcs-srs-server/graphql/generated"
 	"github.com/FPGSchiba/vcs-srs-server/state"
 	"github.com/FPGSchiba/vcs-srs-server/voiceontrol"
 	"github.com/google/uuid"
@@ -49,4 +50,11 @@ type Resolver struct {
 // NewResolver creates a Resolver backed by the given app.
 func NewResolver(app AppInterface) *Resolver {
 	return &Resolver{App: app}
+}
+
+// ok builds a successful MutationResult with the given message.
+// It lives here rather than in schema.resolvers.go because gqlgen relocates
+// helper functions out of generated resolver files on every regeneration.
+func ok(msg string) *generated.MutationResult {
+	return &generated.MutationResult{Success: true, Message: &msg}
 }

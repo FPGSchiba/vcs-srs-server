@@ -26,6 +26,7 @@ type SettingsState struct {
 	General      GeneralSettings      `yaml:"general"`
 	Security     SecuritySettings     `yaml:"security"`
 	VoiceControl VoiceControlSettings `yaml:"voiceControl"`
+	ClientTLS    ClientTLSSettings    `yaml:"clientTLS"`
 	Api          ApiSettings          `yaml:"api"`
 	file         string               `yaml:"-"`
 }
@@ -103,6 +104,29 @@ type VoiceControlSettings struct {
 	PublicAddr      string `yaml:"publicAddr"` // public UDP host:port of this voice node
 	Region          string `yaml:"region"`     // region hint: "eu", "us", "apac"
 	ServerName      string `yaml:"serverName"` // TLS ServerName used by voice clients and cert SANs
+}
+
+// ClientTLSSettings configures TLS on the CLIENT-FACING gRPC listener --
+// the one serving SRSService and AuthService, which the VCS client dials.
+// It is distinct from VoiceControlSettings, whose certificate secures the
+// server-to-server VoiceControl channel on a different port entirely.
+//
+// Leaving CertificateFile or PrivateKeyFile empty means plaintext, which is
+// what every deployment predating this block already has.
+//
+// This is deliberately TOP-LEVEL rather than nested under
+// servers.control.tls. SaveServerSettings in app/settings.go assigns
+// SettingsState.Servers = *newSettings wholesale, and the GraphQL resolver
+// rebuilds ServerSettings from an input carrying only host and port -- so a
+// TLS block living inside Servers would be silently erased by any admin
+// settings save and then written to disk as plaintext, downgrading the
+// server on its next restart.
+type ClientTLSSettings struct {
+	CertificateFile string `yaml:"certificateFile"`
+	PrivateKeyFile  string `yaml:"privateKeyFile"`
+	// ServerName is used as an additional SAN when the pair is generated,
+	// and is what clients verify against.
+	ServerName string `yaml:"serverName"`
 }
 
 type ApiSettings struct {

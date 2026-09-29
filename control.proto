@@ -252,10 +252,15 @@ message ClientStateSnapshot {
 }
 
 message VoiceClientInfo {
-  string name      = 1;
-  string coalition = 2;
-  string unit_id   = 3;
-  uint32 role      = 4;
+  string name         = 1;
+  string coalition    = 2;
+  string unit_id      = 3;
+  uint32 role         = 4;
+  // Per-session voice secret. Load-bearing: a distributed voice node builds its
+  // ServerState from these messages and has no other source for the secret.
+  // It must also be carried on every INFO_UPDATED delta, because applyDelta
+  // replaces the whole ClientState and would otherwise wipe it.
+  string voice_secret = 5;
 }
 
 message VoiceRadioInfo {

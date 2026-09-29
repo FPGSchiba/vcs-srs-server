@@ -26,7 +26,7 @@ This spec introduces a per-session voice secret: generated on the control path, 
 
 | Attack | Mechanism today | Closed by |
 |---|---|---|
-| **Session hijack** | Attacker sniffs a UUID, sends HELLO, `handleHelloPacket` rebinds the session to the attacker's address. Victim silently stops receiving audio. | Secret validation on HELLO |
+| **Session hijack via a sniffed VOICE packet** | Attacker sniffs a UUID from any VOICE packet (no secret travels there), sends HELLO with just that UUID, `handleHelloPacket` rebinds the session to the attacker's address. Victim silently stops receiving audio. | Secret validation on HELLO — closes hijack via a UUID sniffed from ordinary voice traffic. Hijack via a captured HELLO itself remains open; see [What is not fixed](#what-is-not-fixed). |
 | **Impersonation** | Attacker sends VOICE packets with a sniffed UUID from any address. `handleVoicePacket` checks only that the session exists, never the source address — and is not even passed one. | Source-address binding check |
 | **Disconnect DoS** | Attacker sends a 27-byte BYE with a sniffed UUID. `handleGoodbyePacket` calls `DisconnectClient` with no address or existence check. | Source-address binding check |
 | **Keepalive reflection** | Attacker spoofs the source address as the victim's and sends KEEPALIVE; the server sends its ACK to the packet source, so the ACK lands on the victim. | ACK sent to the bound address |
@@ -35,6 +35,10 @@ This spec introduces a per-session voice secret: generated on the control path, 
 Neither reflection primitive carries bandwidth amplification — responses are smaller than requests — so they are poor flooding tools. They are listed because they are removed, not because they were severe.
 
 ### What is not fixed
+
+**Replay of a captured HELLO.** A HELLO carries the session ID and the secret together, in cleartext, and `handleHelloPacket` performs no freshness check — no nonce, no timestamp, no sequence validation, only a raw comparison of the secret bytes. An attacker who captures one HELLO can replay it verbatim from their own address: the secret is genuine, so validation passes, and the session rebinds to the attacker. The secret is generated exactly once, in `state.ServerState.AddClient` (`state/server.go:140`), and is never rotated or expired for the life of the session — so a captured HELLO stays valid for as long as the session lasts.
+
+What this spec's mechanism actually buys, stated precisely so it is neither overclaimed nor underclaimed: before, the UUID needed for a hijack traveled in cleartext on every VOICE packet, and voice packets flow continuously, so sniffing any packet at any time was enough. After, only HELLO carries the secret, and a client sends HELLO once per session — at connect, and again only on reconnect after a NAT change or server restart. An attacker who starts sniffing mid-session has missed the HELLO and cannot hijack until the client re-HELLOs. The window narrows from "any packet, any time" to "one specific packet, at session start". That is a real and useful improvement. It is not closure. Closing this needs transport encryption, so the HELLO payload itself cannot be observed.
 
 **Eavesdropping.** The payload remains cleartext. A passive observer on the network path still hears all traffic on frequencies their position lets them see. This requires transport encryption (DTLS/SRTP) and is not addressed here.
 
@@ -199,7 +203,7 @@ func (p *VCSPacket) HelloSecret() (secret string, ok bool)
 func (s *ServerState) GetVoiceSecret(clientGuid uuid.UUID) (string, bool)
 ```
 
-This subsumes the `DoesClientExist` call in `handleHelloPacket`. `DoesClientExist` itself stays — it has other callers.
+This subsumes the `DoesClientExist` call in `handleHelloPacket`. `DoesClientExist` had zero Go callers once this change landed — the "other callers" this section originally claimed did not exist — and has since been removed. See "Post-implementation corrections" at the end of this document.
 
 ### `voice` — HELLO validation
 
@@ -324,14 +328,23 @@ Recorded here and in the PR so this change is not read as "voice is now secure".
 
 ## Build and CI Notes
 
-### Pre-existing headless build break (fixed in a separate commit)
+### Pre-existing headless build break (already fixed on `main` by a different route)
 
-`go test -tags headless ./...` — the command CI runs — has been failing on both `main` and `develop`. The `test.yml` workflow has failed on all of its last 8 runs, going back to at least July 2026.
+`go test -tags headless ./...` — the command CI runs — was failing on both `main` and `develop` at the time this section was drafted.
 
-Cause: the `services` package is GUI-only. Its sole importer, `main.go`, is `//go:build !headless`, as is `app/app_gui.go`, which supplies the `guiApp` embedded struct holding the `App *application.App` field. In headless builds `app/app_headless.go` substitutes an empty `guiApp`, so the eight `c.App.App` / `s.App.App` references in `services/coalitions.go` and `services/settings.go` do not compile. The `services` files were simply never given the build constraint their importer already has.
+Cause as originally diagnosed: the `services` package is GUI-only. Its sole importer, `main.go`, is `//go:build !headless`, as is `app/app_gui.go`, which supplies the `guiApp` embedded struct holding the `App *application.App` field. In headless builds `app/app_headless.go` substitutes an empty `guiApp`, so `c.App.App` / `s.App.App` references in `services/coalitions.go` and `services/settings.go` would not compile.
 
-Fix: add `//go:build !headless` to the five files in `services/`, matching the existing pattern. Verified — the full headless suite passes and the GUI build is unaffected. This lands as its own commit (`fix: tag services package as GUI-only`), described separately in the PR body, because it is unrelated to voice authentication and should be reviewable on its own.
+This section originally proposed fixing that by adding `//go:build !headless` to five files in `services/`, as a commit on this branch. **That work was never done on this branch and was never needed**: `main` had already fixed the underlying break by a different route, in `b8953d2` (`fix(services): remove direct Wails imports to fix headless builds`), which removed the `services` package's direct `wails/v3/pkg/application` imports and the `.App.App` calls themselves, rather than adding a build tag around them. There are now zero `.App.App` references anywhere in `services/`. See "Post-implementation corrections" at the end of this document.
 
 ### Local toolchain note (no repository change)
 
 `GOROOT` is exported in the local shell environment, pinned to a module-cache toolchain path, while `go` on `PATH` is a different install. This breaks standard-library resolution with misleading `package X is not in std` errors. Go commands in this work run as `env -u GOROOT go ...` with `GOCACHE` redirected to a writable directory. This is a local environment issue only — CI is unaffected and no repository change is warranted.
+
+---
+
+## Post-implementation corrections
+
+This design was written before, and partly during, implementation — some of it describes intended work rather than work that was verified to exist. Two claims in it turned out to be wrong and have been corrected in place above; recorded here as well so the spec stays honest about having been drafted ahead of the code:
+
+1. **The "Build and CI Notes" section's headless-build fix.** It described adding `//go:build !headless` to five `services/*.go` files as a commit on this branch. That commit was never made and turned out not to be needed: `main` had already resolved the same headless build break by a different route, commit `b8953d2`, which removed the `services` package's direct Wails imports instead of tagging around them. There are now zero `.App.App` references in `services/`.
+2. **The `DoesClientExist` "it has other callers" claim.** The section on the `state` secret-lookup change asserted `DoesClientExist` would stay in place because other code called it. That was false — a repository-wide grep found zero Go callers, including at the time this was written. `DoesClientExist` has since been removed, both because it was dead code and because leaving a same-named "does this client exist" check in place invited a future handler to reintroduce the "client exists, therefore trust the packet" pattern this whole change exists to close off.

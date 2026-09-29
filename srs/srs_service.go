@@ -67,6 +67,23 @@ func (s *SimpleRadioServer) getVoiceAddresses(coalition string) (coalitionAddr, 
 	return "", ""
 }
 
+// voiceSecretFor returns the client's voice secret, or "" if the client is
+// unknown. The secret is delivered alongside the voice address so the client
+// has everything it needs to send a HELLO.
+//
+// An empty return should be unreachable in practice -- the auth interceptor
+// guarantees callerID names a valid, already-authenticated client -- but a
+// caller that received "" would silently get an unusable secret with
+// Success: true and nothing logged, so warn here to keep that failure mode
+// diagnosable rather than silent.
+func (s *SimpleRadioServer) voiceSecretFor(clientID uuid.UUID) string {
+	secret, ok := s.serverState.GetVoiceSecret(clientID)
+	if secret == "" {
+		s.logger.Warn("voiceSecretFor returned an empty secret", "ClientID", clientID, "known", ok)
+	}
+	return secret
+}
+
 func (s *SimpleRadioServer) GetServerState() healthpb.HealthCheckResponse_ServingStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -130,7 +147,9 @@ func (s *SimpleRadioServer) SyncClient(ctx context.Context, _ *pb.Empty) (*pb.Sy
 	})
 
 	var coalition string
+	var callerID uuid.UUID
 	if clientID, err := clientIDFromContext(ctx); err == nil {
+		callerID = clientID
 		s.serverState.RLock()
 		if client, exists := s.serverState.Clients[clientID]; exists {
 			coalition = client.Coalition
@@ -148,6 +167,7 @@ func (s *SimpleRadioServer) SyncClient(ctx context.Context, _ *pb.Empty) (*pb.Sy
 				Settings:           s.buildServerSettings(),
 				CoalitionVoiceAddr: coalitionVoiceAddr,
 				GlobalVoiceAddr:    globalVoiceAddr,
+				VoiceSecret:        s.voiceSecretFor(callerID),
 			},
 		},
 	}, nil
@@ -403,6 +423,7 @@ func (s *SimpleRadioServer) SubscribeToUpdates(_ *pb.Empty, stream grpc.ServerSt
 								VoiceAddressUpdate: &pb.VoiceAddressUpdate{
 									CoalitionVoiceAddr: ce.NewAddr,
 									GlobalVoiceAddr:    ce.GlobalAddr,
+									VoiceSecret:        s.voiceSecretFor(clientID),
 								},
 							},
 						}

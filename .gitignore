@@ -9,6 +9,7 @@ banned_clients.json
 bin/
 .task/
 *.pb.go
+graphql/generated/
 *.pem
 coverage.out
 .claude/

@@ -158,3 +158,78 @@ func TestApplySnapshot_Race(t *testing.T) {
 	<-done
 	_ = time.Now()
 }
+
+func TestApplySnapshotCarriesVoiceSecret(t *testing.T) {
+	ss := &state.ServerState{
+		Clients:      make(map[uuid.UUID]*state.ClientState),
+		RadioClients: make(map[uuid.UUID]*state.RadioState),
+	}
+	c := newTestClient(ss)
+	id := uuid.New()
+
+	c.applySnapshot(&pb.ClientStateSnapshot{
+		Clients: map[string]*pb.VoiceClientInfo{
+			id.String(): {Name: "Pilot", Coalition: "Blue", VoiceSecret: "snapshot-secret"},
+		},
+	})
+
+	ss.RLock()
+	defer ss.RUnlock()
+	if got := ss.Clients[id].VoiceSecret; got != "snapshot-secret" {
+		t.Fatalf("expected the snapshot secret, got %q", got)
+	}
+}
+
+func TestApplyDeltaJoinedCarriesVoiceSecret(t *testing.T) {
+	ss := &state.ServerState{
+		Clients:      make(map[uuid.UUID]*state.ClientState),
+		RadioClients: make(map[uuid.UUID]*state.RadioState),
+	}
+	c := newTestClient(ss)
+	id := uuid.New()
+
+	c.applyDelta(&pb.ClientDelta{
+		Type:       pb.ClientDelta_JOINED,
+		ClientId:   id.String(),
+		ClientInfo: &pb.VoiceClientInfo{Name: "Pilot", Coalition: "Blue", VoiceSecret: "joined-secret"},
+	})
+
+	ss.RLock()
+	defer ss.RUnlock()
+	if got := ss.Clients[id].VoiceSecret; got != "joined-secret" {
+		t.Fatalf("expected the delta secret, got %q", got)
+	}
+}
+
+// An INFO_UPDATED delta replaces the whole ClientState. If the secret is not
+// carried on it, a client changing unit silently loses the ability to send a
+// valid HELLO.
+func TestApplyDeltaInfoUpdatedPreservesVoiceSecret(t *testing.T) {
+	ss := &state.ServerState{
+		Clients:      make(map[uuid.UUID]*state.ClientState),
+		RadioClients: make(map[uuid.UUID]*state.RadioState),
+	}
+	c := newTestClient(ss)
+	id := uuid.New()
+
+	c.applyDelta(&pb.ClientDelta{
+		Type:       pb.ClientDelta_JOINED,
+		ClientId:   id.String(),
+		ClientInfo: &pb.VoiceClientInfo{Name: "Pilot", Coalition: "Blue", UnitId: "A1", VoiceSecret: "stable-secret"},
+	})
+	c.applyDelta(&pb.ClientDelta{
+		Type:       pb.ClientDelta_INFO_UPDATED,
+		ClientId:   id.String(),
+		ClientInfo: &pb.VoiceClientInfo{Name: "Pilot", Coalition: "Blue", UnitId: "B2", VoiceSecret: "stable-secret"},
+	})
+
+	ss.RLock()
+	defer ss.RUnlock()
+	client := ss.Clients[id]
+	if client.UnitId != "B2" {
+		t.Fatalf("expected the unit to update to B2, got %q", client.UnitId)
+	}
+	if client.VoiceSecret != "stable-secret" {
+		t.Fatalf("the secret must survive an INFO_UPDATED delta, got %q", client.VoiceSecret)
+	}
+}

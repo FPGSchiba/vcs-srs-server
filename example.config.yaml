@@ -37,5 +37,9 @@ voiceControl: # Voice control configuration only needed if distribution is activ
   listenHost: 0.0.0.0 # Host to listen for voice control (for control distribution)
   certificateFile: /path/to/voicecontrol-cert.pem # Path to the certificate file
   privateKeyFile: /path/to/voicecontrol-private-key.pem # Path to the private key file
+clientTLS: # TLS for the client-facing control port (servers.control). Omit the block for plaintext.
+  certificateFile: /path/to/srs-cert.pem # Generated at this location if not present
+  privateKeyFile: /path/to/srs-private-key.pem # Generated at this location if not present
+  serverName: vcs.vngd.net # Added to the generated certificate's SANs; clients verify against this name
 api:
   key: my-api # API key for external integrations, replace with a secure value
