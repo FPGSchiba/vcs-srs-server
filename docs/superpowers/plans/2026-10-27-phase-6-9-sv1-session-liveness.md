@@ -368,3 +368,12 @@ Executed inline (superpowers:executing-plans) on 2026-10-27 from `origin/main` `
 - Task 7: `TestKickHandlerDropsBinding` is a pin rather than a RED test; the `Listen` wiring needs a live control node (manual item 9).
 - Task 9: `sessionRemover` has `IsRunning()`; `TestBanClientControlNotRunning` added; a failed ban `Save()` keeps its pre-existing behaviour.
 - Task 10: one environmental failure in a verbose rerun (`TestIntegrationReHelloAfterSourceAddressChange`: the client fixture picked UDP 60004, inside a Windows excluded port range); two reruns 7/7 PASS, and the full `-race` client suite was green.
+
+### Review follow-ups (after an independent review, verdict approve, seven minor findings)
+
+- `app.remover` is behind `removerMu` and read once per call through `currentRemover` (data race between `startGrpcServer` and the Kick/Ban bindings; `TestRemoverAccessSynchronised` reported it under `-race` first).
+- `control.Server.RemoveClient` copies `srsServer`/`isRunning` under `s.mu.RLock` and removes outside it, so `Stop` never waits behind a blocked voice-node send (`TestRemoveClientDoesNotHoldMuAcrossDrop`, failed first).
+- `BanClient` runs a read-locked precheck (unknown, then already banned) before the voice-IP lookup, so the failure an admin sees is the same as on `main`; both checks are repeated under the write lock (`TestBanClientUnknownUnbound`, `TestBanClientAlreadyBannedUnbound`, failed first).
+- `Disconnect` logs `client_name` again and only for a known client.
+- `TestRemoveClientFinalLastUnderBusTraffic` pins the final-last property under bus contention (a pin: passes on the existing code). `newTestServer(t)` stops the bus it creates.
+- Not changed: no automated test for `Listen`'s `SetKickHandler` wiring (manual item 9).
