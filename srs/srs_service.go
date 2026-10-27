@@ -110,55 +110,45 @@ func (s *SimpleRadioServer) GetServerState() healthpb.HealthCheckResponse_Servin
 }
 
 func (s *SimpleRadioServer) SyncClient(ctx context.Context, _ *pb.Empty) (*pb.SyncResponse, error) {
-	clients := s.serverState.GetAllClients()
-	radioClients := s.serverState.GetAllRadios()
-
+	// SRV-15: the whole roster and radio set are built under one read lock,
+	// and the roster carries UnitId/RoleId as buildServerUpdate's do.
 	var srsClients map[string]*pb.ClientInfo
 	var srsRadios map[string]*pb.RadioInfo
-	for _, client := range clients {
-		if client.State == nil {
+	s.serverState.RLock()
+	for id, client := range s.serverState.Clients {
+		if client == nil {
 			continue
 		}
 		if srsClients == nil {
 			srsClients = make(map[string]*pb.ClientInfo)
 		}
-		srsClients[client.ID.String()] = &pb.ClientInfo{
-			Name:       client.State.Name,
-			Coalition:  client.State.Coalition,
-			LastUpdate: ptrInt64(client.State.LastUpdate.Unix()),
+		srsClients[id.String()] = &pb.ClientInfo{
+			Name:       client.Name,
+			Coalition:  client.Coalition,
+			UnitId:     client.UnitId,
+			RoleId:     uint32(client.Role),
+			LastUpdate: ptrInt64(client.LastUpdate.Unix()),
 		}
 	}
-
-	for _, radio := range radioClients {
-		if radio.State == nil {
+	for id, radio := range s.serverState.RadioClients {
+		if radio == nil {
 			continue
 		}
-		s.serverState.RLock()
-		clientEntry, clientExists := s.serverState.Clients[radio.ID]
-		s.serverState.RUnlock()
+		clientEntry, clientExists := s.serverState.Clients[id]
 		if !clientExists || clientEntry == nil {
 			continue
 		}
 		if srsRadios == nil {
 			srsRadios = make(map[string]*pb.RadioInfo)
 		}
-		srsRadios[radio.ID.String()] = &pb.RadioInfo{
-			Radios:     convertRadios(radio.State.Radios),
-			Muted:      radio.State.Muted,
+		srsRadios[id.String()] = &pb.RadioInfo{
+			Radios:     convertRadios(radio.Radios),
+			Muted:      radio.Muted,
 			LastUpdate: ptrInt64(clientEntry.LastUpdate.Unix()),
 		}
 	}
-
-	s.serverState.RLock()
-	clientsSnap := make(map[uuid.UUID]*state.ClientState, len(s.serverState.Clients))
-	for k, v := range s.serverState.Clients {
-		clientsSnap[k] = v
-	}
 	s.serverState.RUnlock()
-	s.eventBus.Publish(events.Event{
-		Name: events.ClientsChanged,
-		Data: events.ClientChangeEvent{Type: events.ClientInfoUpdated, Clients: clientsSnap},
-	})
+	// SRV-15: no ClientsChanged publish; SyncClient changes no roster field.
 
 	var coalition string
 	var callerID uuid.UUID

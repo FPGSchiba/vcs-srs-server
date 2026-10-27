@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -297,4 +298,70 @@ func TestUpdateRadioInfoSnapshotIndependent(t *testing.T) {
 	if got.Muted || got.Radios[0].Frequency != 251 {
 		t.Fatalf("event snapshot changed with live state: muted=%v freq=%v", got.Muted, got.Radios[0].Frequency)
 	}
+}
+
+// SRV-15: the SyncClient roster carries UnitId and RoleId.
+func TestSyncClientRosterHasUnitAndRole(t *testing.T) {
+	s := newTestServer(t)
+	id := uuid.New()
+	s.serverState.AddClient(id, &state.ClientState{Name: "A", UnitId: "AB", Coalition: "Blue", Role: utils.MemberRole})
+
+	resp, err := s.SyncClient(clientCtx(id), &pb.Empty{})
+	if err != nil {
+		t.Fatalf("SyncClient: %v", err)
+	}
+	data := resp.GetData()
+	c, ok := data.GetClients()[id.String()]
+	if !ok {
+		t.Fatal("caller missing from the roster")
+	}
+	if c.GetUnitId() != "AB" || c.GetRoleId() != uint32(utils.MemberRole) {
+		t.Fatalf("roster entry UnitId=%q RoleId=%d, want AB/%d", c.GetUnitId(), c.GetRoleId(), utils.MemberRole)
+	}
+	if _, ok := data.GetRadios()[id.String()]; !ok {
+		t.Fatal("caller's radios missing from the sync result")
+	}
+}
+
+// SRV-15: SyncClient changes no roster field, so it publishes nothing.
+func TestSyncClientPublishesNothing(t *testing.T) {
+	s := newTestServer(t)
+	id := addTestClient(s)
+	ch := s.eventBus.Subscribe(events.ClientsChanged)
+
+	if _, err := s.SyncClient(clientCtx(id), &pb.Empty{}); err != nil {
+		t.Fatalf("SyncClient: %v", err)
+	}
+	select {
+	case e := <-ch:
+		t.Fatalf("SyncClient published %+v", e)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// SRV-09/SRV-15: SyncClient reads state under the lock, so it is race-free
+// against Ping and UpdateClientInfo writes.
+func TestSyncClientConcurrentWithPing(t *testing.T) {
+	s := newTestServer(t)
+	id := uuid.New()
+	s.serverState.AddClient(id, &state.ClientState{Name: "Alice", UnitId: "AB", Coalition: "Blue", Role: utils.MemberRole})
+	ctx := clientCtx(id)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = s.SyncClient(ctx, &pb.Empty{})
+			_, _ = s.Ping(ctx, &pb.PingRequest{})
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 20; i++ {
+			_, _ = s.UpdateClientInfo(ctx, &pb.ClientInfo{Name: "Alice", UnitId: "AB", Coalition: "Blue", RoleId: uint32(utils.MemberRole)})
+		}
+	}()
+	wg.Wait()
 }
