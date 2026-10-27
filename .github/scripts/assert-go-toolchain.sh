@@ -10,7 +10,7 @@ set -euo pipefail
 
 modfile="${1:-./go.mod}"
 
-want="$(go mod edit -json "$modfile" | jq -r '.Toolchain // empty')"
+want="$(go mod edit -json "$modfile" | jq -r '.Toolchain // empty' | tr -d '\r')"
 if [ -z "$want" ]; then
   echo "::error title=No toolchain directive::$modfile has no 'toolchain' directive; add one (go mod edit -toolchain=goX.Y.Z) so CI pins an exact Go patch."
   exit 1
