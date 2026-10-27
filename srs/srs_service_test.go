@@ -1,29 +1,96 @@
 package srs
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/FPGSchiba/vcs-srs-server/events"
 	pb "github.com/FPGSchiba/vcs-srs-server/srspb"
 	"github.com/FPGSchiba/vcs-srs-server/state"
+	"github.com/FPGSchiba/vcs-srs-server/utils"
 	"github.com/google/uuid"
-	"google.golang.org/grpc"
 )
 
-func newTestServer() *SimpleRadioServer {
+// newTestServer builds a SimpleRadioServer with its own event bus, which
+// is stopped when the test ends.
+func newTestServer(t *testing.T) *SimpleRadioServer {
+	t.Helper()
+	bus := events.NewEventBus()
+	t.Cleanup(bus.Stop)
 	return &SimpleRadioServer{
-		serverState:   &state.ServerState{},
+		serverState: &state.ServerState{
+			Clients:      make(map[uuid.UUID]*state.ClientState),
+			RadioClients: make(map[uuid.UUID]*state.RadioState),
+		},
 		settingsState: &state.SettingsState{},
 		logger:        slog.New(slog.NewTextHandler(os.Stderr, nil)),
-		streams:       make(map[uuid.UUID]grpc.ServerStreamingServer[pb.ServerUpdate]),
+		eventBus:      bus,
+		now:           time.Now,
+		staleAfter:    10 * time.Minute,
+		streams:       make(map[uuid.UUID]*subscription),
+		detachedAt:    make(map[uuid.UUID]time.Time),
 		stopChan:      make(chan struct{}),
 	}
 }
 
+// withSRSClock swaps the server's clock for a fake one and returns it.
+func withSRSClock(s *SimpleRadioServer) *fakeClock {
+	c := &fakeClock{t: time.Now()}
+	s.mu.Lock()
+	s.now = c.Now
+	s.mu.Unlock()
+	return c
+}
+
+func clientCtx(id uuid.UUID) context.Context {
+	return context.WithValue(context.Background(), utils.ClientIDKey, id.String())
+}
+
+// SRV-01: every unary RPC a live client makes refreshes its LastUpdate, so
+// a client that only pings is never mistaken for a stale one.
+func TestRPCsRefreshLastUpdate(t *testing.T) {
+	calls := map[string]func(s *SimpleRadioServer, ctx context.Context){
+		"Ping": func(s *SimpleRadioServer, ctx context.Context) {
+			_, _ = s.Ping(ctx, &pb.PingRequest{})
+		},
+		"SyncClient": func(s *SimpleRadioServer, ctx context.Context) {
+			_, _ = s.SyncClient(ctx, &pb.Empty{})
+		},
+		"UpdateRadioInfo": func(s *SimpleRadioServer, ctx context.Context) {
+			_, _ = s.UpdateRadioInfo(ctx, &pb.RadioInfo{})
+		},
+		"UpdateClientInfo": func(s *SimpleRadioServer, ctx context.Context) {
+			_, _ = s.UpdateClientInfo(ctx, &pb.ClientInfo{Name: "Alice", UnitId: "AB"})
+		},
+	}
+	for name, call := range calls {
+		t.Run(name, func(t *testing.T) {
+			s := newTestServer(t)
+			clock := withSRSClock(s)
+			id := uuid.New()
+			s.serverState.AddClient(id, &state.ClientState{Name: "Alice"})
+			s.serverState.Lock()
+			s.serverState.Clients[id].LastUpdate = clock.Now().Add(-time.Hour)
+			s.serverState.Unlock()
+			clock.Advance(time.Minute)
+
+			call(s, clientCtx(id))
+
+			s.serverState.RLock()
+			got := s.serverState.Clients[id].LastUpdate
+			s.serverState.RUnlock()
+			if !got.Equal(clock.Now()) {
+				t.Fatalf("LastUpdate = %v, want %v", got, clock.Now())
+			}
+		})
+	}
+}
+
 func TestBuildServerUpdate_ClientJoined(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	id := uuid.New()
 	evt := events.Event{
 		Name: events.ClientsChanged,
@@ -53,7 +120,7 @@ func TestBuildServerUpdate_ClientJoined(t *testing.T) {
 }
 
 func TestBuildServerUpdate_ClientLeft(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	id := uuid.New()
 	evt := events.Event{
 		Name: events.ClientsChanged,
@@ -74,7 +141,7 @@ func TestBuildServerUpdate_ClientLeft(t *testing.T) {
 }
 
 func TestBuildServerUpdate_RadioUpdate(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	id := uuid.New()
 	evt := events.Event{
 		Name: events.RadioClientsChanged,
@@ -101,7 +168,7 @@ func TestBuildServerUpdate_RadioUpdate(t *testing.T) {
 }
 
 func TestBuildServerUpdate_ServerAction_Kick(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	id := uuid.New()
 	evt := events.Event{
 		Name: events.ServerAction,
@@ -131,7 +198,7 @@ func TestBuildServerUpdate_ServerAction_Kick(t *testing.T) {
 }
 
 func TestBuildServerUpdate_UnknownEvent_ReturnsNil(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	evt := events.Event{Name: "unknown/event", Data: nil}
 	if s.buildServerUpdate(evt) != nil {
 		t.Fatal("expected nil for unknown event")
@@ -139,7 +206,7 @@ func TestBuildServerUpdate_UnknownEvent_ReturnsNil(t *testing.T) {
 }
 
 func TestBuildServerUpdate_BadPayload_ReturnsNil(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	evt := events.Event{Name: events.ClientsChanged, Data: "not a ClientChangeEvent"}
 	if s.buildServerUpdate(evt) != nil {
 		t.Fatal("expected nil when payload is wrong type")
@@ -147,7 +214,7 @@ func TestBuildServerUpdate_BadPayload_ReturnsNil(t *testing.T) {
 }
 
 func TestBuildServerUpdate_ClientInfoUpdated(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	id := uuid.New()
 	evt := events.Event{
 		Name: events.ClientsChanged,
@@ -171,7 +238,7 @@ func TestBuildServerUpdate_ClientInfoUpdated(t *testing.T) {
 }
 
 func TestBuildServerUpdate_SettingsChanged(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	evt := events.Event{Name: events.SettingsChanged, Data: nil}
 	update := s.buildServerUpdate(evt)
 	if update == nil || update.Type != pb.ServerUpdate_SERVER_SETTINGS_CHANGED {
@@ -180,7 +247,7 @@ func TestBuildServerUpdate_SettingsChanged(t *testing.T) {
 }
 
 func TestVoiceSecretForKnownClient(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	id := uuid.New()
 	s.serverState.AddClient(id, &state.ClientState{Name: "Alice", Coalition: "Blue"})
 
@@ -197,7 +264,7 @@ func TestVoiceSecretForKnownClient(t *testing.T) {
 }
 
 func TestVoiceSecretForUnknownClientIsEmpty(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	if got := s.voiceSecretFor(uuid.New()); got != "" {
 		t.Fatalf("expected an empty secret for an unknown client, got %q", got)
 	}

@@ -170,14 +170,15 @@ func (a *VCSApplication) startVoiceServer() {
 	a.SettingsState.RUnlock()
 
 	go func() {
-		a.voiceServer = voice.NewServer(a.ServerState, a.Logger, a.DistributionState, a.SettingsState)
+		v := voice.NewServer(a.ServerState, a.Logger, a.DistributionState, a.SettingsState)
+		a.setVoiceServer(v)
 
 		a.AdminState.Lock()
 		a.AdminState.VoiceStatus.IsRunning = true
 		a.AdminState.VoiceStatus.Error = ""
 		a.AdminState.Unlock()
 
-		if err := a.voiceServer.Listen(serverHost, stopChan); err != nil {
+		if err := v.Listen(serverHost, stopChan); err != nil {
 			a.AdminState.Lock()
 			a.AdminState.VoiceStatus.Error = err.Error()
 			a.AdminState.VoiceStatus.IsRunning = false
@@ -217,7 +218,7 @@ func (a *VCSApplication) stopVoiceServer() {
 	a.AdminState.Unlock()
 
 	// Stop the server without holding the lock
-	if err := a.voiceServer.Stop(); err != nil {
+	if err := a.currentVoiceServer().Stop(); err != nil {
 		a.AdminState.Lock()
 		a.AdminState.VoiceStatus.Error = err.Error()
 		a.AdminState.Unlock()
@@ -259,8 +260,9 @@ func (a *VCSApplication) startGrpcServer() {
 	a.StopSignals["control"] = stopChan
 	a.AdminState.Unlock()
 
-	controlServer := control.NewServer(a.ServerState, a.SettingsState, a.Logger, a.DistributionState, a.eventBus)
+	controlServer := control.NewServer(a.ServerState, a.SettingsState, a.Logger, a.DistributionState, a.eventBus, localVoiceDropper{a})
 	a.controlServer = controlServer
+	a.setRemover(controlServer)
 
 	a.SettingsState.Lock()
 	serverHost := fmt.Sprintf("%s:%d", a.SettingsState.Servers.Control.Host, a.SettingsState.Servers.Control.Port)

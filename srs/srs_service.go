@@ -32,9 +32,20 @@ type SimpleRadioServer struct {
 	settingsState *state.SettingsState
 	eventBus      *events.EventBus
 	voiceRegistry VoiceAddressProvider
-	streams       map[uuid.UUID]grpc.ServerStreamingServer[pb.ServerUpdate]
-	stopChan      chan struct{}
-	stopOnce      sync.Once
+	streams       map[uuid.UUID]*subscription
+	// detachedAt records when a client's stream ended from the client side;
+	// the 120s reconnect grace runs from here. Guarded by mu.
+	detachedAt map[uuid.UUID]time.Time
+	// dropper drops a removed client's voice binding (local server and
+	// remote voice nodes). May be nil.
+	dropper  VoiceSessionDropper
+	stopChan chan struct{}
+	stopOnce sync.Once
+	// staleAfter: a client with a live stream but no RPC for this long is
+	// removed. Set by StartCleanupRoutine. Guarded by mu.
+	staleAfter time.Duration
+	// now is the server's clock (time.Now outside tests).
+	now func() time.Time
 }
 
 func clientIDFromContext(ctx context.Context) (uuid.UUID, error) {
@@ -45,16 +56,19 @@ func clientIDFromContext(ctx context.Context) (uuid.UUID, error) {
 	return uuid.Parse(rawID)
 }
 
-func NewSimpleRadioServer(serverState *state.ServerState, settingsState *state.SettingsState, logger *slog.Logger, bus *events.EventBus, voiceRegistry VoiceAddressProvider) *SimpleRadioServer {
+func NewSimpleRadioServer(serverState *state.ServerState, settingsState *state.SettingsState, logger *slog.Logger, bus *events.EventBus, voiceRegistry VoiceAddressProvider, dropper VoiceSessionDropper) *SimpleRadioServer {
 	server := SimpleRadioServer{
 		serverState:   serverState,
 		settingsState: settingsState,
 		eventBus:      bus,
 		logger:        logger,
 		voiceRegistry: voiceRegistry,
+		dropper:       dropper,
 		mu:            sync.Mutex{},
-		streams:       make(map[uuid.UUID]grpc.ServerStreamingServer[pb.ServerUpdate]),
+		streams:       make(map[uuid.UUID]*subscription),
+		detachedAt:    make(map[uuid.UUID]time.Time),
 		stopChan:      make(chan struct{}),
+		now:           time.Now,
 	}
 	server.StartCleanupRoutine(time.Second*15, time.Minute*10)
 	return &server
@@ -71,11 +85,11 @@ func (s *SimpleRadioServer) getVoiceAddresses(coalition string) (coalitionAddr, 
 // unknown. The secret is delivered alongside the voice address so the client
 // has everything it needs to send a HELLO.
 //
-// An empty return should be unreachable in practice -- the auth interceptor
-// guarantees callerID names a valid, already-authenticated client -- but a
-// caller that received "" would silently get an unusable secret with
-// Success: true and nothing logged, so warn here to keep that failure mode
-// diagnosable rather than silent.
+// The auth interceptor rejects any token whose GUID is not in
+// serverState.Clients (control.Server.authenticate, SRV-06), so an empty
+// return is only reachable when the session is removed between that check
+// and this call. A caller that received "" would silently get an unusable
+// secret with Success: true, so warn here to keep that race diagnosable.
 func (s *SimpleRadioServer) voiceSecretFor(clientID uuid.UUID) string {
 	secret, ok := s.serverState.GetVoiceSecret(clientID)
 	if secret == "" {
@@ -150,11 +164,12 @@ func (s *SimpleRadioServer) SyncClient(ctx context.Context, _ *pb.Empty) (*pb.Sy
 	var callerID uuid.UUID
 	if clientID, err := clientIDFromContext(ctx); err == nil {
 		callerID = clientID
-		s.serverState.RLock()
+		s.serverState.Lock()
 		if client, exists := s.serverState.Clients[clientID]; exists {
 			coalition = client.Coalition
+			client.LastUpdate = s.now() // SRV-01: any RPC proves the client alive
 		}
-		s.serverState.RUnlock()
+		s.serverState.Unlock()
 	}
 	coalitionVoiceAddr, globalVoiceAddr := s.getVoiceAddresses(coalition)
 
@@ -183,6 +198,7 @@ func (s *SimpleRadioServer) Ping(ctx context.Context, req *pb.PingRequest) (*pb.
 		s.serverState.Lock()
 		if client, exists := s.serverState.Clients[clientID]; exists {
 			client.LatencyToControlMs = req.LastRttMs
+			client.LastUpdate = s.now() // SRV-01: a pinging client is alive
 		}
 		s.serverState.Unlock()
 	}
@@ -199,31 +215,22 @@ func (s *SimpleRadioServer) Disconnect(ctx context.Context, _ *pb.Empty) (*pb.Se
 		}, nil
 	}
 	s.serverState.RLock()
-	client, exists := s.serverState.Clients[clientID]
-	_, existsRadio := s.serverState.RadioClients[clientID]
+	client, known := s.serverState.Clients[clientID]
+	var clientName string
+	if known {
+		clientName = client.Name
+	}
 	s.serverState.RUnlock()
-
-	if !exists || !existsRadio {
+	if known {
+		s.logger.Info("Disconnecting client", "client_id", clientID, "client_name", clientName)
+	}
+	if !s.RemoveClient(clientID, ReasonDisconnect, nil) {
 		s.logger.Error("Disconnect failed: client not found", "client_id", clientID)
-		s.cleanupClientState(clientID) // Make sure no single radio or client state is left dangling
 		return &pb.ServerResponse{
 			Success:      false,
 			ErrorMessage: "Internal error: You may already have been disconnected.",
 		}, nil
 	}
-
-	s.logger.Info("Disconnecting client", "client_id", clientID, "client_name", client.Name)
-	s.cleanupClientState(clientID)
-	s.serverState.RLock()
-	clientsSnap := make(map[uuid.UUID]*state.ClientState, len(s.serverState.Clients))
-	for k, v := range s.serverState.Clients {
-		clientsSnap[k] = v
-	}
-	s.serverState.RUnlock()
-	s.eventBus.Publish(events.Event{
-		Name: events.ClientsChanged,
-		Data: events.ClientChangeEvent{Type: events.ClientLeft, ClientID: clientID, Clients: clientsSnap},
-	})
 
 	return &pb.ServerResponse{
 		Success:      true,
@@ -291,7 +298,7 @@ func (s *SimpleRadioServer) UpdateClientInfo(ctx context.Context, req *pb.Client
 	}
 
 	s.serverState.Lock()
-	client.LastUpdate = time.Now()
+	client.LastUpdate = s.now()
 	s.serverState.Unlock()
 
 	s.logger.Info("Updated client info", "client_id", clientID, "client_name", client.Name)
@@ -351,6 +358,9 @@ func (s *SimpleRadioServer) UpdateRadioInfo(ctx context.Context, req *pb.RadioIn
 	newState := convertRadioInfo(req)
 	newState.Muted = existingMuted
 	s.serverState.RadioClients[clientID] = newState
+	if client, ok := s.serverState.Clients[clientID]; ok {
+		client.LastUpdate = s.now() // SRV-01
+	}
 	s.serverState.Unlock()
 
 	s.serverState.RLock()
@@ -370,40 +380,88 @@ func (s *SimpleRadioServer) UpdateRadioInfo(ctx context.Context, req *pb.RadioIn
 	}, nil
 }
 
+func (s *SimpleRadioServer) clientExists(id uuid.UUID) bool {
+	s.serverState.RLock()
+	defer s.serverState.RUnlock()
+	_, ok := s.serverState.Clients[id]
+	return ok
+}
+
 func (s *SimpleRadioServer) SubscribeToUpdates(_ *pb.Empty, stream grpc.ServerStreamingServer[pb.ServerUpdate]) error {
 	clientID, err := clientIDFromContext(stream.Context())
 	if err != nil {
 		s.logger.Error("SubscribeToUpdates failed: invalid client ID", "error", err)
 		return err
 	}
+	if !s.clientExists(clientID) {
+		return errNoSession
+	}
 
 	ch := s.eventBus.Subscribe("*")
 	defer s.eventBus.Unsubscribe(ch)
 
+	// CON-05: the last subscriber wins. A reconnecting client whose old
+	// transport the server has not yet noticed as dead must not be refused.
+	sub := newSubscription()
 	s.mu.Lock()
-	if _, exists := s.streams[clientID]; exists {
-		s.mu.Unlock()
-		return fmt.Errorf("client %s is already subscribed to updates", clientID)
-	}
-	s.streams[clientID] = stream
+	old := s.streams[clientID]
+	s.streams[clientID] = sub
+	delete(s.detachedAt, clientID)
 	s.mu.Unlock()
 
-	defer func() {
+	// A removal may have run between the presence check and registration;
+	// it would not have seen this subscription, so re-check now.
+	if !s.clientExists(clientID) {
 		s.mu.Lock()
-		delete(s.streams, clientID)
+		if s.streams[clientID] == sub {
+			delete(s.streams, clientID)
+		}
+		s.mu.Unlock()
+		if old != nil {
+			old.end(nil, errSuperseded)
+		}
+		return errNoSession
+	}
+	if old != nil {
+		old.end(nil, errSuperseded)
+	}
+
+	defer func() {
+		// Only a subscription ended by the client side is still registered
+		// here (see the subscription invariant); that starts the grace.
+		s.mu.Lock()
+		if s.streams[clientID] == sub {
+			delete(s.streams, clientID)
+			s.detachedAt[clientID] = s.now()
+		}
 		s.mu.Unlock()
 	}()
 
 	s.logger.Info("Client subscribed to updates", "client_id", clientID)
 
+	finish := func() error {
+		if sub.final != nil {
+			if err := stream.Send(sub.final); err != nil {
+				s.logger.Warn("Failed to send final update", "client_id", clientID, "error", err)
+			}
+		}
+		s.logger.Info("Update stream ended by server", "client_id", clientID, "status", sub.err)
+		return sub.err
+	}
+
 	for {
 		select {
+		case <-sub.done:
+			return finish()
 		case <-stream.Context().Done():
 			s.logger.Info("Client unsubscribed from updates", "client_id", clientID)
 			return nil
 		case event, ok := <-ch:
 			if !ok {
 				return nil
+			}
+			if sub.ended() {
+				return finish()
 			}
 
 			// Per-client voice address redirect after coalition rebalancing.
@@ -436,6 +494,9 @@ func (s *SimpleRadioServer) SubscribeToUpdates(_ *pb.Empty, stream grpc.ServerSt
 				continue
 			}
 
+			if !forwardServerAction(event, clientID) {
+				continue
+			}
 			update := s.buildServerUpdate(event)
 			if update == nil {
 				continue
@@ -473,23 +534,12 @@ func (s *SimpleRadioServer) buildServerSettings() *pb.ServerSettings {
 	return settings
 }
 
-func (s *SimpleRadioServer) cleanupClientState(clientID uuid.UUID) {
-	s.serverState.Lock()
-	defer s.serverState.Unlock()
-
-	// Remove client from server state
-	if _, exists := s.serverState.Clients[clientID]; exists {
-		delete(s.serverState.Clients, clientID)
-	}
-
-	// Remove radio state if it exists
-	if _, exists := s.serverState.RadioClients[clientID]; exists {
-		delete(s.serverState.RadioClients, clientID)
-	}
-}
-
-// StartCleanupRoutine launches a goroutine that periodically removes stale clients.
+// StartCleanupRoutine launches a goroutine that periodically removes dead
+// sessions (see reapOnce).
 func (s *SimpleRadioServer) StartCleanupRoutine(interval time.Duration, staleAfter time.Duration) {
+	s.mu.Lock()
+	s.staleAfter = staleAfter
+	s.mu.Unlock()
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -500,23 +550,7 @@ func (s *SimpleRadioServer) StartCleanupRoutine(interval time.Duration, staleAft
 			case <-s.stopChan:
 				return
 			case <-ticker.C:
-				now := time.Now()
-				var stale []uuid.UUID
-				s.mu.Lock()
-				for clientID := range s.streams {
-					s.serverState.RLock()
-					client, exists := s.serverState.Clients[clientID]
-					s.serverState.RUnlock()
-					if !exists || now.Sub(client.LastUpdate) > staleAfter {
-						stale = append(stale, clientID)
-						delete(s.streams, clientID)
-					}
-				}
-				s.mu.Unlock()
-				for _, id := range stale {
-					s.cleanupClientState(id)
-					s.logger.Info("Cleaned up stale client", "client_id", id)
-				}
+				s.reapOnce(s.now())
 			}
 		}
 	}()
@@ -622,31 +656,59 @@ func (s *SimpleRadioServer) buildServerUpdate(event events.Event) *pb.ServerUpda
 		if !ok {
 			return nil
 		}
-		var actionType pb.ServerAction_ActionType
-		switch ae.ActionType {
-		case events.ActionKick:
-			actionType = pb.ServerAction_KICK
-		case events.ActionBan:
-			actionType = pb.ServerAction_BAN
-		case events.ActionMute:
-			actionType = pb.ServerAction_MUTE
-		case events.ActionUnmute:
-			actionType = pb.ServerAction_UNMUTE
-		default:
-			return nil
-		}
-		return &pb.ServerUpdate{
-			Type: pb.ServerUpdate_SERVER_ACTION,
-			Update: &pb.ServerUpdate_ServerAction{
-				ServerAction: &pb.ServerAction{
-					Type:             actionType,
-					TargetClientGuid: ae.TargetClientID.String(),
-					Reason:           ae.Reason,
-				},
-			},
-		}
+		return ServerActionUpdate(ae.ActionType, ae.TargetClientID, ae.Reason)
 
 	default:
 		return nil
+	}
+}
+
+// ServerActionUpdate builds the SERVER_ACTION update for action against
+// target, or nil for an unknown action.
+func ServerActionUpdate(action events.ActionType, target uuid.UUID, reason string) *pb.ServerUpdate {
+	var actionType pb.ServerAction_ActionType
+	switch action {
+	case events.ActionKick:
+		actionType = pb.ServerAction_KICK
+	case events.ActionBan:
+		actionType = pb.ServerAction_BAN
+	case events.ActionMute:
+		actionType = pb.ServerAction_MUTE
+	case events.ActionUnmute:
+		actionType = pb.ServerAction_UNMUTE
+	default:
+		return nil
+	}
+	return &pb.ServerUpdate{
+		Type: pb.ServerUpdate_SERVER_ACTION,
+		Update: &pb.ServerUpdate_ServerAction{
+			ServerAction: &pb.ServerAction{
+				Type:             actionType,
+				TargetClientGuid: target.String(),
+				Reason:           reason,
+			},
+		},
+	}
+}
+
+// forwardServerAction reports whether a bus event may be forwarded on
+// clientID's update stream. SERVER_ACTION is delivered only to its target:
+// MUTE/UNMUTE from the bus, and KICK/BAN never from the bus -- they reach
+// the target only as its subscription's final update (see RemoveClient), so
+// they arrive exactly once and immediately before the stream ends. Every
+// other event is forwarded.
+func forwardServerAction(event events.Event, clientID uuid.UUID) bool {
+	if event.Name != events.ServerAction {
+		return true
+	}
+	ae, ok := event.Data.(events.ServerActionEvent)
+	if !ok {
+		return false
+	}
+	switch ae.ActionType {
+	case events.ActionMute, events.ActionUnmute:
+		return ae.TargetClientID == clientID
+	default:
+		return false
 	}
 }

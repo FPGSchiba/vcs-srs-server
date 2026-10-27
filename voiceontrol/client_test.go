@@ -3,6 +3,7 @@ package voiceontrol
 import (
 	"log/slog"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -232,4 +233,102 @@ func TestApplyDeltaInfoUpdatedPreservesVoiceSecret(t *testing.T) {
 	if client.VoiceSecret != "stable-secret" {
 		t.Fatalf("the secret must survive an INFO_UPDATED delta, got %q", client.VoiceSecret)
 	}
+}
+
+// --- SV1: kick_client and LEFT drop the voice binding ---
+
+type kickRecorder struct {
+	mu  sync.Mutex
+	ids []uuid.UUID
+}
+
+func (k *kickRecorder) handle(id uuid.UUID) {
+	k.mu.Lock()
+	k.ids = append(k.ids, id)
+	k.mu.Unlock()
+}
+
+func (k *kickRecorder) got() []uuid.UUID {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return append([]uuid.UUID(nil), k.ids...)
+}
+
+func emptyState() *state.ServerState {
+	return &state.ServerState{
+		Clients:      make(map[uuid.UUID]*state.ClientState),
+		RadioClients: make(map[uuid.UUID]*state.RadioState),
+	}
+}
+
+func kickMsg(clientID string) *pb.ControlMessage {
+	return &pb.ControlMessage{Command: &pb.ControlMessage_KickClient{KickClient: &pb.KickClientRequest{ClientId: clientID, Reason: "kicked"}}}
+}
+
+func TestApplyKickClientCallsHandler(t *testing.T) {
+	c := newTestClient(emptyState())
+	rec := &kickRecorder{}
+	c.SetKickHandler(rec.handle)
+	id := uuid.New()
+
+	c.applyControlMessage(kickMsg(id.String()))
+
+	if got := rec.got(); len(got) != 1 || got[0] != id {
+		t.Fatalf("handler got %v, want [%s]", got, id)
+	}
+}
+
+func TestApplyKickClientInvalidGUID(t *testing.T) {
+	c := newTestClient(emptyState())
+	rec := &kickRecorder{}
+	c.SetKickHandler(rec.handle)
+
+	c.applyControlMessage(kickMsg("nope"))
+
+	if got := rec.got(); len(got) != 0 {
+		t.Fatalf("handler called with %v for an invalid GUID", got)
+	}
+}
+
+func TestApplyDeltaLeftCallsHandler(t *testing.T) {
+	id := uuid.New()
+	ss := emptyState()
+	ss.Clients[id] = &state.ClientState{Name: "Pilot"}
+	ss.RadioClients[id] = &state.RadioState{}
+	c := newTestClient(ss)
+	rec := &kickRecorder{}
+	// The handler takes the state lock, so it must run after applyDelta has
+	// released it -- the real handler (voice.Server.DisconnectClient) may.
+	c.SetKickHandler(func(got uuid.UUID) {
+		ss.RLock()
+		ss.RUnlock()
+		rec.handle(got)
+	})
+
+	done := make(chan struct{})
+	go func() {
+		c.applyControlMessage(&pb.ControlMessage{Command: &pb.ControlMessage_ClientDelta{ClientDelta: &pb.ClientDelta{Type: pb.ClientDelta_LEFT, ClientId: id.String()}}})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("deadlock: the handler ran under the state lock")
+	}
+
+	ss.RLock()
+	_, c1 := ss.Clients[id]
+	_, r1 := ss.RadioClients[id]
+	ss.RUnlock()
+	if c1 || r1 {
+		t.Fatal("LEFT must still clear the state maps")
+	}
+	if got := rec.got(); len(got) != 1 || got[0] != id {
+		t.Fatalf("handler got %v, want [%s]", got, id)
+	}
+}
+
+func TestApplyKickWithoutHandler(t *testing.T) {
+	c := newTestClient(emptyState())
+	c.applyControlMessage(kickMsg(uuid.NewString())) // must not panic
 }

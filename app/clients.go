@@ -1,7 +1,10 @@
 package app
 
 import (
+	"net"
+
 	"github.com/FPGSchiba/vcs-srs-server/events"
+	"github.com/FPGSchiba/vcs-srs-server/srs"
 	"github.com/FPGSchiba/vcs-srs-server/state"
 	"github.com/FPGSchiba/vcs-srs-server/utils"
 	"github.com/google/uuid"
@@ -45,15 +48,82 @@ func (a *VCSApplication) GetBannedClients() []state.BannedClient {
 	return a.ServerState.BannedState.BannedClients
 }
 
+// voiceIP returns the client's address on the local voice server, or false
+// when there is no local voice server or the client is not bound to it.
+// It must be called without ServerState held: the voice server takes its
+// own lock and then ServerState on its hot path (D17).
+func (a *VCSApplication) voiceIP(id uuid.UUID) (net.IP, bool) {
+	if a.voiceIPLookup != nil {
+		return a.voiceIPLookup(id)
+	}
+	v := a.currentVoiceServer()
+	if v == nil {
+		return nil, false
+	}
+	return v.GetClientIPFromId(id)
+}
+
+// runningRemover returns the session remover if there is a running control
+// server to end sessions through, else nil.
+func (a *VCSApplication) runningRemover() sessionRemover {
+	r := a.currentRemover()
+	if r == nil || !r.IsRunning() {
+		return nil
+	}
+	return r
+}
+
+// banPrecheck reports, under a read lock, whether clientGuid is a known
+// client that is not banned yet; otherwise it notifies and returns false.
+func (a *VCSApplication) banPrecheck(clientGuid uuid.UUID, clientId, reason string) bool {
+	a.ServerState.RLock()
+	_, known := a.ServerState.Clients[clientGuid]
+	_, alreadyBanned := utils.FindByFunc(a.ServerState.BannedState.BannedClients, func(bc state.BannedClient) bool {
+		return bc.ID == clientGuid
+	})
+	a.ServerState.RUnlock()
+	if !known {
+		a.Notify(events.NewNotification("Ban failed", "Client not found", "error"))
+		a.Logger.Error("Failed to ban client", "clientId", clientId, "reason", reason)
+		return false
+	}
+	if alreadyBanned {
+		a.Notify(events.NewNotification("Ban failed", "Client is already banned", "error"))
+		a.Logger.Error("Failed to ban client: already banned", "clientId", clientId)
+		return false
+	}
+	return true
+}
+
 func (a *VCSApplication) BanClient(clientId string, reason string) {
-	a.ServerState.Lock()
 	clientGuid, err := uuid.Parse(clientId)
 	if err != nil {
-		a.ServerState.Unlock()
 		a.Notify(events.NewNotification("Ban failed", "Invalid client ID format", "error"))
 		a.Logger.Error("Failed to parse client ID", "clientId", clientId, "error", err)
 		return
 	}
+	remover := a.runningRemover()
+	if remover == nil {
+		a.Notify(events.NewNotification("Ban failed", "Control server is not running", "error"))
+		a.Logger.Error("Failed to ban client: control server is not running", "clientId", clientId)
+		return
+	}
+	// Same check order as before the removal helper: unknown, then already
+	// banned, then not bound to voice. Both checks are repeated under the
+	// write lock below, since the voice lookup must run without ServerState.
+	if !a.banPrecheck(clientGuid, clientId, reason) {
+		return
+	}
+	// Read the voice IP before taking ServerState (lock order, and no
+	// local voice server must not panic).
+	clientIp, ok := a.voiceIP(clientGuid)
+	if !ok {
+		a.Notify(events.NewNotification("Ban failed", "Client not found in voice server", "error"))
+		a.Logger.Error("Failed to ban client: not found in voice server", "clientId", clientId)
+		return
+	}
+
+	a.ServerState.Lock()
 	client, ok := a.ServerState.Clients[clientGuid]
 	if !ok {
 		a.ServerState.Unlock()
@@ -70,13 +140,6 @@ func (a *VCSApplication) BanClient(clientId string, reason string) {
 		a.Logger.Error("Failed to ban client: already banned", "clientId", clientId)
 		return
 	}
-	clientIp, ok := a.voiceServer.GetClientIPFromId(clientGuid)
-	if !ok {
-		a.ServerState.Unlock()
-		a.Notify(events.NewNotification("Ban failed", "Client not found in voice server", "error"))
-		a.Logger.Error("Failed to ban client: not found in voice server", "clientId", clientId)
-		return
-	}
 	a.ServerState.BannedState.BannedClients = append(a.ServerState.BannedState.BannedClients, state.BannedClient{
 		Name:      client.Name,
 		IPAddress: clientIp.String(),
@@ -90,22 +153,17 @@ func (a *VCSApplication) BanClient(clientId string, reason string) {
 		a.Logger.Error("Failed to save banned clients", "error", err)
 		return
 	}
-	delete(a.ServerState.Clients, clientGuid)
-	a.ServerState.Unlock()
-
-	a.ServerState.RLock()
-	clientsSnap := make(map[uuid.UUID]*state.ClientState, len(a.ServerState.Clients))
-	for k, v := range a.ServerState.Clients {
-		cp := *v
-		clientsSnap[k] = &cp
-	}
 	bannedSnap := make([]state.BannedClient, len(a.ServerState.BannedState.BannedClients))
 	copy(bannedSnap, a.ServerState.BannedState.BannedClients)
-	a.ServerState.RUnlock()
-	a.EmitEvent(events.Event{
-		Name: events.ClientsChanged,
-		Data: events.ClientChangeEvent{Type: events.ClientLeft, ClientID: clientGuid, Clients: clientsSnap},
-	})
+	a.ServerState.Unlock()
+
+	// The removal helper ends the stream (BAN as its last update), drops the
+	// voice binding everywhere and publishes ClientLeft.
+	if _, running := remover.RemoveClient(clientGuid, srs.ReasonBanned, srs.ServerActionUpdate(events.ActionBan, clientGuid, reason)); !running {
+		// The control server stopped between the check and here; the ban is
+		// recorded, so a re-login is refused anyway.
+		a.Logger.Warn("Ban recorded but the session could not be ended: control server stopped", "clientId", clientId)
+	}
 	a.EmitEvent(events.Event{Name: events.BannedClientsChanged, Data: bannedSnap})
 	a.EmitEvent(events.Event{
 		Name: events.ServerAction,
@@ -156,28 +214,31 @@ func (a *VCSApplication) UnbanClient(clientId string) {
 }
 
 func (a *VCSApplication) KickClient(clientId string, reason string) {
-	a.ServerState.Lock()
 	clientGuid, err := uuid.Parse(clientId)
 	if err != nil {
-		a.ServerState.Unlock()
 		a.Notify(events.NewNotification("Kick failed", "Invalid client ID format", "error"))
 		a.Logger.Error("Failed to parse client ID", "clientId", clientId, "error", err)
 		return
 	}
-	delete(a.ServerState.Clients, clientGuid)
-	a.ServerState.Unlock()
-
-	a.ServerState.RLock()
-	clientsSnap := make(map[uuid.UUID]*state.ClientState, len(a.ServerState.Clients))
-	for k, v := range a.ServerState.Clients {
-		cp := *v
-		clientsSnap[k] = &cp
+	remover := a.currentRemover()
+	if remover == nil {
+		a.Notify(events.NewNotification("Kick failed", "Control server is not running", "error"))
+		a.Logger.Error("Failed to kick client: control server is not running", "clientId", clientId)
+		return
 	}
-	a.ServerState.RUnlock()
-	a.EmitEvent(events.Event{
-		Name: events.ClientsChanged,
-		Data: events.ClientChangeEvent{Type: events.ClientLeft, ClientID: clientGuid, Clients: clientsSnap},
-	})
+	// The removal helper ends the stream (KICK as its last update), drops
+	// the voice binding everywhere and publishes ClientLeft.
+	existed, running := remover.RemoveClient(clientGuid, srs.ReasonKicked, srs.ServerActionUpdate(events.ActionKick, clientGuid, reason))
+	if !running {
+		a.Notify(events.NewNotification("Kick failed", "Control server is not running", "error"))
+		a.Logger.Error("Failed to kick client: control server is not running", "clientId", clientId)
+		return
+	}
+	if !existed {
+		a.Notify(events.NewNotification("Kick failed", "Client not found", "error"))
+		a.Logger.Error("Failed to kick client: not found", "clientId", clientId)
+		return
+	}
 	a.EmitEvent(events.Event{
 		Name: events.ServerAction,
 		Data: events.ServerActionEvent{ActionType: events.ActionKick, TargetClientID: clientGuid, Reason: reason},

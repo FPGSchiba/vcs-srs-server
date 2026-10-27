@@ -17,6 +17,7 @@ import (
 	"github.com/FPGSchiba/vcs-srs-server/utils"
 	"github.com/FPGSchiba/vcs-srs-server/voicecontrolpb"
 	"github.com/FPGSchiba/vcs-srs-server/voiceontrol"
+	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -30,6 +31,9 @@ import (
 var (
 	sleep = time.Second * 5
 )
+
+// The control node's VoiceControlServer drops bindings on remote voice nodes.
+var _ srs.VoiceSessionDropper = (*voiceontrol.VoiceControlServer)(nil)
 
 const (
 	healthServiceSystem  = ""        // empty string represents the health of the healthServiceSystem
@@ -52,18 +56,38 @@ type Server struct {
 	srsServer          *srs.SimpleRadioServer
 	authServer         *srs.AuthServer
 	voiceControlServer *voiceontrol.VoiceControlServer
-	isRunning          bool
-	stopOnce           sync.Once
+	// localVoice drops a removed client's binding on this process's own
+	// voice server. May be nil (no local voice server, or tests).
+	localVoice srs.VoiceSessionDropper
+	isRunning  bool
+	stopOnce   sync.Once
 }
 
-func NewServer(serverState *state.ServerState, settingsState *state.SettingsState, logger *slog.Logger, distributionState *state.DistributionState, eventBus *events.EventBus) *Server {
+func NewServer(serverState *state.ServerState, settingsState *state.SettingsState, logger *slog.Logger, distributionState *state.DistributionState, eventBus *events.EventBus, localVoice srs.VoiceSessionDropper) *Server {
 	return &Server{
 		serverState:       serverState,
 		settingsState:     settingsState,
 		eventBus:          eventBus,
 		logger:            logger,
 		distributionState: distributionState,
+		localVoice:        localVoice,
 	}
+}
+
+// RemoveClient ends a client's session through the SRS server's removal
+// helper (see srs.SimpleRadioServer.RemoveClient). running is false when the
+// control server is not running, in which case nothing is changed.
+// s.mu is released before the removal: the voice drop sends to every voice
+// node and may block, and Stop must not wait behind it. srs.RemoveClient is
+// safe to call after Stop.
+func (s *Server) RemoveClient(id uuid.UUID, reason srs.RemovalReason, final *srspb.ServerUpdate) (existed, running bool) {
+	s.mu.RLock()
+	srsServer, isRunning := s.srsServer, s.isRunning
+	s.mu.RUnlock()
+	if !isRunning || srsServer == nil {
+		return false, false
+	}
+	return srsServer.RemoveClient(id, reason, final), true
 }
 
 func (s *Server) isControlServer() bool {
@@ -166,7 +190,7 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 	// goroutines that fail() would not stop.
 	s.voiceControlServer = controlServer
 
-	srsServer := srs.NewSimpleRadioServer(s.serverState, s.settingsState, s.logger, s.eventBus, controlServer)
+	srsServer := srs.NewSimpleRadioServer(s.serverState, s.settingsState, s.logger, s.eventBus, controlServer, srs.VoiceSessionDroppers{s.localVoice, controlServer})
 	s.srsServer = srsServer
 	authServer := srs.NewAuthServer(s.serverState, s.settingsState, s.logger, s.distributionState, s.eventBus)
 	s.authServer = authServer
@@ -449,7 +473,11 @@ func (s *Server) loggingInterceptor(ctx context.Context, req interface{}, info *
 // carrying the client GUID, or a gRPC status error. AuthService and
 // VoiceControlService are exempt and get ctx back unchanged. Both the unary and
 // the stream interceptor go through here so they cannot drift apart again.
-// SV1 adds its unknown-GUID check (SRV-06) here.
+//
+// SRV-06: a token is only as alive as its session. A token whose GUID is
+// malformed or no longer in serverState.Clients (removed, kicked, banned,
+// reaped, or issued before a server restart) gets Unauthenticated
+// "session not found for <method>: log in again".
 func (s *Server) authenticate(ctx context.Context, fullMethod string) (context.Context, error) {
 	elements := strings.Split(fullMethod, "/")
 	if len(elements) < 3 {
@@ -493,8 +521,24 @@ func (s *Server) authenticate(ctx context.Context, fullMethod string) (context.C
 	if claims == nil {
 		return nil, status.Errorf(codes.Unauthenticated, "authentication error for %s: no claims", fullMethod)
 	}
+	if !s.sessionExists(claims.ClientGuid) {
+		return nil, status.Errorf(codes.Unauthenticated, "session not found for %s: log in again", fullMethod)
+	}
 
 	return context.WithValue(ctx, utils.ClientIDKey, claims.ClientGuid), nil
+}
+
+// sessionExists reports whether guid parses and names a client that is still
+// in serverState.Clients.
+func (s *Server) sessionExists(guid string) bool {
+	id, err := uuid.Parse(guid)
+	if err != nil {
+		return false
+	}
+	s.serverState.RLock()
+	defer s.serverState.RUnlock()
+	_, ok := s.serverState.Clients[id]
+	return ok
 }
 
 // authError maps a utils.GetTokenClaims error to a gRPC status error. This is
