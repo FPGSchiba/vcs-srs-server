@@ -15,7 +15,7 @@
     "@emotion/styled": "^11.14.1",
     "@hookform/resolvers": "^5.9.1",
     "@mui/icons-material": "^9.4.0",
-    "@mui/lab": "^7.0.0-beta.17",
+    "@mui/lab": "^9.0.0-beta.9",
     "@mui/material": "^9.4.0",
     "@testing-library/dom": "^10.4.2",
     "@wailsio/runtime": "^3.0.0-beta.24",

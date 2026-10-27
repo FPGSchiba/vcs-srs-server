@@ -1,7 +1,10 @@
 package utils
 
 import (
+	"errors"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -86,5 +89,26 @@ func TestGetJWTClaimsValid(t *testing.T) {
 	}
 	if result.ClientGuid != "test-guid" {
 		t.Fatalf("expected client_guid=test-guid, got %s", result.ClientGuid)
+	}
+}
+
+// A token key path whose directory does not exist -- the shipped
+// "/path/to/ecdsa_key.pem" placeholder, on Windows D:\path\to\ -- must fail
+// with an error that names the path and the OS cause, not a bare
+// "could not be written".
+func TestGenerateKeyUnwritablePathNamesTheCause(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "does-not-exist")
+	priv := filepath.Join(dir, "ecdsa_key.pem")
+	pub := filepath.Join(dir, "ecdsa_pubkey.pem")
+
+	_, _, err := generateKey(priv, pub)
+	if err == nil {
+		t.Fatal("expected an error writing into a missing directory")
+	}
+	if !strings.Contains(err.Error(), priv) {
+		t.Fatalf("error %q does not name the private key path %q", err, priv)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("error %q does not wrap the underlying os.ErrNotExist", err)
 	}
 }

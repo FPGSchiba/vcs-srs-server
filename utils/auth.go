@@ -90,10 +90,18 @@ func generateKey(privateKeyFile, publicKeyFile string) (*ecdsa.PrivateKey, *ecds
 	if err != nil {
 		return nil, nil, err
 	}
-	privErr := os.WriteFile(privateKeyFile, []byte(pemEncoded), 0600)
-	pubErr := os.WriteFile(publicKeyFile, []byte(pemEncodedPub), 0644)
-	if privErr != nil || pubErr != nil {
-		return nil, nil, errors.New("private key or public key could not be written to file")
+	// Keep both OS errors: a bare "could not be written" hides whether the
+	// path is wrong (e.g. the example config's /path/to/ placeholder), the
+	// directory is missing, or permissions deny it.
+	var writeErrs []error
+	if err := os.WriteFile(privateKeyFile, []byte(pemEncoded), 0600); err != nil {
+		writeErrs = append(writeErrs, fmt.Errorf("write token private key %q: %w", privateKeyFile, err))
+	}
+	if err := os.WriteFile(publicKeyFile, []byte(pemEncodedPub), 0644); err != nil {
+		writeErrs = append(writeErrs, fmt.Errorf("write token public key %q: %w", publicKeyFile, err))
+	}
+	if len(writeErrs) > 0 {
+		return nil, nil, fmt.Errorf("private key or public key could not be written to file (check security.token.privateKeyFile/publicKeyFile): %w", errors.Join(writeErrs...))
 	}
 	return privateKey, publicKey, nil
 }

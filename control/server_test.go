@@ -169,3 +169,35 @@ func TestClientTransportCredentials(t *testing.T) {
 		}
 	})
 }
+
+// grpc-go reports a failed security handshake only through grpclog, which is
+// silent by default, so a plaintext client hitting a TLS-only port left no
+// trace in the server log at all. The client-port credentials must log it.
+func TestClientTransportCredentialsLogsFailedHandshake(t *testing.T) {
+	dir := t.TempDir()
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	creds, err := clientTransportCredentials(state.ClientTLSSettings{
+		CertificateFile: filepath.Join(dir, "cert.pem"),
+		PrivateKeyFile:  filepath.Join(dir, "key.pem"),
+		ServerName:      "localhost",
+	}, logger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	serverSide, clientSide := net.Pipe()
+	defer clientSide.Close()
+	go func() {
+		// What a plaintext gRPC client sends first: the HTTP/2 preface.
+		_, _ = clientSide.Write([]byte("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"))
+	}()
+	if _, _, err := creds.ServerHandshake(serverSide); err == nil {
+		t.Fatal("expected the handshake to fail on a plaintext preface")
+	}
+	out := buf.String()
+	if !strings.Contains(out, "handshake failed") || !strings.Contains(out, "plaintext") {
+		t.Fatalf("expected a handshake-failure warning naming plaintext, got log output: %s", out)
+	}
+}
