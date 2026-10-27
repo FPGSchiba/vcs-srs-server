@@ -14,7 +14,12 @@ import (
 	"github.com/google/uuid"
 )
 
-func newTestServer() *SimpleRadioServer {
+// newTestServer builds a SimpleRadioServer with its own event bus, which
+// is stopped when the test ends.
+func newTestServer(t *testing.T) *SimpleRadioServer {
+	t.Helper()
+	bus := events.NewEventBus()
+	t.Cleanup(bus.Stop)
 	return &SimpleRadioServer{
 		serverState: &state.ServerState{
 			Clients:      make(map[uuid.UUID]*state.ClientState),
@@ -22,7 +27,7 @@ func newTestServer() *SimpleRadioServer {
 		},
 		settingsState: &state.SettingsState{},
 		logger:        slog.New(slog.NewTextHandler(os.Stderr, nil)),
-		eventBus:      events.NewEventBus(),
+		eventBus:      bus,
 		now:           time.Now,
 		staleAfter:    10 * time.Minute,
 		streams:       make(map[uuid.UUID]*subscription),
@@ -63,7 +68,7 @@ func TestRPCsRefreshLastUpdate(t *testing.T) {
 	}
 	for name, call := range calls {
 		t.Run(name, func(t *testing.T) {
-			s := newTestServer()
+			s := newTestServer(t)
 			clock := withSRSClock(s)
 			id := uuid.New()
 			s.serverState.AddClient(id, &state.ClientState{Name: "Alice"})
@@ -85,7 +90,7 @@ func TestRPCsRefreshLastUpdate(t *testing.T) {
 }
 
 func TestBuildServerUpdate_ClientJoined(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	id := uuid.New()
 	evt := events.Event{
 		Name: events.ClientsChanged,
@@ -115,7 +120,7 @@ func TestBuildServerUpdate_ClientJoined(t *testing.T) {
 }
 
 func TestBuildServerUpdate_ClientLeft(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	id := uuid.New()
 	evt := events.Event{
 		Name: events.ClientsChanged,
@@ -136,7 +141,7 @@ func TestBuildServerUpdate_ClientLeft(t *testing.T) {
 }
 
 func TestBuildServerUpdate_RadioUpdate(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	id := uuid.New()
 	evt := events.Event{
 		Name: events.RadioClientsChanged,
@@ -163,7 +168,7 @@ func TestBuildServerUpdate_RadioUpdate(t *testing.T) {
 }
 
 func TestBuildServerUpdate_ServerAction_Kick(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	id := uuid.New()
 	evt := events.Event{
 		Name: events.ServerAction,
@@ -193,7 +198,7 @@ func TestBuildServerUpdate_ServerAction_Kick(t *testing.T) {
 }
 
 func TestBuildServerUpdate_UnknownEvent_ReturnsNil(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	evt := events.Event{Name: "unknown/event", Data: nil}
 	if s.buildServerUpdate(evt) != nil {
 		t.Fatal("expected nil for unknown event")
@@ -201,7 +206,7 @@ func TestBuildServerUpdate_UnknownEvent_ReturnsNil(t *testing.T) {
 }
 
 func TestBuildServerUpdate_BadPayload_ReturnsNil(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	evt := events.Event{Name: events.ClientsChanged, Data: "not a ClientChangeEvent"}
 	if s.buildServerUpdate(evt) != nil {
 		t.Fatal("expected nil when payload is wrong type")
@@ -209,7 +214,7 @@ func TestBuildServerUpdate_BadPayload_ReturnsNil(t *testing.T) {
 }
 
 func TestBuildServerUpdate_ClientInfoUpdated(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	id := uuid.New()
 	evt := events.Event{
 		Name: events.ClientsChanged,
@@ -233,7 +238,7 @@ func TestBuildServerUpdate_ClientInfoUpdated(t *testing.T) {
 }
 
 func TestBuildServerUpdate_SettingsChanged(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	evt := events.Event{Name: events.SettingsChanged, Data: nil}
 	update := s.buildServerUpdate(evt)
 	if update == nil || update.Type != pb.ServerUpdate_SERVER_SETTINGS_CHANGED {
@@ -242,7 +247,7 @@ func TestBuildServerUpdate_SettingsChanged(t *testing.T) {
 }
 
 func TestVoiceSecretForKnownClient(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	id := uuid.New()
 	s.serverState.AddClient(id, &state.ClientState{Name: "Alice", Coalition: "Blue"})
 
@@ -259,7 +264,7 @@ func TestVoiceSecretForKnownClient(t *testing.T) {
 }
 
 func TestVoiceSecretForUnknownClientIsEmpty(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	if got := s.voiceSecretFor(uuid.New()); got != "" {
 		t.Fatalf("expected an empty secret for an unknown client, got %q", got)
 	}

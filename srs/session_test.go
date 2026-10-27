@@ -1,7 +1,10 @@
 package srs
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -105,7 +108,7 @@ func addTestClient(s *SimpleRadioServer) uuid.UUID {
 }
 
 func TestDuplicateSubscribeLastWins(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	id := addTestClient(s)
 
 	_, resultA, _ := startSubscriber(t, s, id)
@@ -138,7 +141,7 @@ func TestDuplicateSubscribeLastWins(t *testing.T) {
 }
 
 func TestSubscribeUnknownClient(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	id := uuid.New()
 	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), utils.ClientIDKey, id.String()))
 	defer cancel()
@@ -157,7 +160,7 @@ func TestSubscribeUnknownClient(t *testing.T) {
 }
 
 func TestStreamEndStartsGrace(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	clock := withSRSClock(s)
 	id := addTestClient(s)
 
@@ -176,7 +179,7 @@ func TestStreamEndStartsGrace(t *testing.T) {
 }
 
 func TestResubscribeClearsGrace(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	withSRSClock(s)
 	id := addTestClient(s)
 
@@ -277,7 +280,7 @@ func assertSessionEnded(t *testing.T, err error, reason string) {
 }
 
 func TestRemoveClientEndsEverything(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	d := withDropper(s)
 	id := addTestClient(s)
 	left := watchClientLeft(t, s.eventBus, id)
@@ -297,7 +300,7 @@ func TestRemoveClientEndsEverything(t *testing.T) {
 }
 
 func TestRemoveClientDeliversFinalLast(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	id := addTestClient(s)
 	_, result, stream := startSubscriber(t, s, id)
 
@@ -310,8 +313,114 @@ func TestRemoveClientDeliversFinalLast(t *testing.T) {
 	}
 }
 
+// TestRemoveClientFinalLastUnderBusTraffic pins the final-update ordering
+// while the target's own handler is busy forwarding bus events: the final
+// update must be sent exactly once and be the last thing on the stream.
+func TestRemoveClientFinalLastUnderBusTraffic(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		s := newTestServer(t)
+		id := addTestClient(s)
+		_, result, stream := startSubscriber(t, s, id)
+
+		stop := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				s.eventBus.Publish(events.Event{
+					Name: events.RadioClientsChanged,
+					Data: events.RadioChangeEvent{
+						Type:     events.RadioUpdated,
+						ClientID: id,
+						Radios:   map[uuid.UUID]*state.RadioState{id: {}},
+					},
+				})
+			}
+		}()
+		// Let the handler pick up radio updates before the removal.
+		select {
+		case <-stream.sentCh:
+		case <-time.After(2 * time.Second):
+			t.Fatal("subscriber never received bus traffic")
+		}
+
+		final := ServerActionUpdate(events.ActionKick, id, "bye")
+		s.RemoveClient(id, ReasonKicked, final)
+		err := waitResult(t, result)
+		close(stop)
+		wg.Wait()
+		assertSessionEnded(t, err, "kicked")
+
+		sent := stream.sentCopy()
+		n := 0
+		for _, u := range sent {
+			if u == final {
+				n++
+			}
+		}
+		if n != 1 {
+			t.Fatalf("final update sent %d times, want 1", n)
+		}
+		if sent[len(sent)-1] != final {
+			t.Fatalf("last sent update is %v, not the final one", sent[len(sent)-1])
+		}
+	}
+}
+
+func TestDisconnectLogsClientName(t *testing.T) {
+	s := newTestServer(t)
+	var buf syncBuffer
+	s.logger = slog.New(slog.NewTextHandler(&buf, nil))
+	id := uuid.New()
+	s.serverState.AddClient(id, &state.ClientState{Name: "Maverick", Coalition: "Blue"})
+
+	if resp, err := s.Disconnect(clientCtx(id), &pb.Empty{}); err != nil || !resp.GetSuccess() {
+		t.Fatalf("Disconnect: %+v, %v", resp, err)
+	}
+	if !strings.Contains(buf.String(), "client_name=Maverick") {
+		t.Fatalf("Disconnect log does not name the client: %s", buf.String())
+	}
+}
+
+func TestDisconnectUnknownLogsNoInfo(t *testing.T) {
+	s := newTestServer(t)
+	var buf syncBuffer
+	s.logger = slog.New(slog.NewTextHandler(&buf, nil))
+
+	if resp, _ := s.Disconnect(clientCtx(uuid.New()), &pb.Empty{}); resp.GetSuccess() {
+		t.Fatal("Disconnect of an unknown client succeeded")
+	}
+	if strings.Contains(buf.String(), "level=INFO") {
+		t.Fatalf("an unknown client must not log \"Disconnecting client\" at INFO: %s", buf.String())
+	}
+}
+
+// syncBuffer is a bytes.Buffer safe for concurrent log writes.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.String()
+}
+
 func TestRemoveClientConcurrent(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	id := addTestClient(s)
 	left := watchClientLeft(t, s.eventBus, id)
 
@@ -339,7 +448,7 @@ func TestRemoveClientConcurrent(t *testing.T) {
 }
 
 func TestRemoveUnknownClient(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	d := withDropper(s)
 	id := uuid.New()
 	left := watchClientLeft(t, s.eventBus, id)
@@ -355,7 +464,7 @@ func TestRemoveUnknownClient(t *testing.T) {
 }
 
 func TestDisconnectRemoves(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	d := withDropper(s)
 	id := addTestClient(s)
 	left := watchClientLeft(t, s.eventBus, id)
@@ -384,7 +493,7 @@ func setLastUpdate(s *SimpleRadioServer, id uuid.UUID, t time.Time) {
 }
 
 func TestReapPingingClientSurvives(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	clock := withSRSClock(s)
 	id := addTestClient(s)
 	setLastUpdate(s, id, clock.Now())
@@ -403,7 +512,7 @@ func TestReapPingingClientSurvives(t *testing.T) {
 }
 
 func TestReapStaleLiveStream(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	clock := withSRSClock(s)
 	id := addTestClient(s)
 	T := clock.Now()
@@ -436,7 +545,7 @@ func detach(t *testing.T, s *SimpleRadioServer, clock *fakeClock, id uuid.UUID) 
 }
 
 func TestReapStreamLostAfterGrace(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	clock := withSRSClock(s)
 	d := withDropper(s)
 	id := addTestClient(s)
@@ -455,7 +564,7 @@ func TestReapStreamLostAfterGrace(t *testing.T) {
 }
 
 func TestReapResubscribeKeepsSession(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	clock := withSRSClock(s)
 	id := addTestClient(s)
 	T := detach(t, s, clock, id)
@@ -467,7 +576,7 @@ func TestReapResubscribeKeepsSession(t *testing.T) {
 }
 
 func TestReapPingExtendsGrace(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	clock := withSRSClock(s)
 	id := addTestClient(s)
 	T := detach(t, s, clock, id)
@@ -483,7 +592,7 @@ func TestReapPingExtendsGrace(t *testing.T) {
 }
 
 func TestReapNeverSubscribed(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	clock := withSRSClock(s)
 	id := addTestClient(s)
 	T := clock.Now()
@@ -496,7 +605,7 @@ func TestReapNeverSubscribed(t *testing.T) {
 }
 
 func TestReapRevalidatesUnderLock(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	clock := withSRSClock(s)
 	id := addTestClient(s)
 	T := detach(t, s, clock, id)
@@ -557,7 +666,7 @@ func TestForwardServerActionTargetOnly(t *testing.T) {
 }
 
 func TestMuteReachesOnlyTarget(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	x, y := addTestClient(s), addTestClient(s)
 	_, _, streamX := startSubscriber(t, s, x)
 	_, _, streamY := startSubscriber(t, s, y)
