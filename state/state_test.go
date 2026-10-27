@@ -139,3 +139,62 @@ func TestIsListeningOnFrequency(t *testing.T) {
 		})
 	}
 }
+
+func TestRadioStateCloneIndependent(t *testing.T) {
+	src := &RadioState{Radios: []Radio{{ID: 1, Frequency: 100}}, Muted: false}
+	cl := src.Clone()
+	src.Radios[0].Frequency = 200
+	src.Muted = true
+	if cl.Radios[0].Frequency != 100 || cl.Muted {
+		t.Fatalf("clone changed with its source: %+v", cl)
+	}
+
+	if got := (&RadioState{}).Clone(); got.Radios != nil {
+		t.Fatalf("nil Radios cloned to %#v, want nil", got.Radios)
+	}
+	if got := (&RadioState{Radios: []Radio{}}).Clone(); got.Radios == nil {
+		t.Fatal("empty Radios cloned to nil, want empty")
+	}
+	if got := (*RadioState)(nil).Clone(); got != nil {
+		t.Fatalf("nil Clone = %+v, want nil", got)
+	}
+	if got := (*ClientState)(nil).Clone(); got != nil {
+		t.Fatalf("nil ClientState Clone = %+v, want nil", got)
+	}
+}
+
+func TestCloneClientsLockedSkipsNilAndCopies(t *testing.T) {
+	s := newTestServerState()
+	a, b, n := uuid.New(), uuid.New(), uuid.New()
+	s.Clients[a] = &ClientState{Name: "A"}
+	s.Clients[b] = &ClientState{Name: "B"}
+	s.Clients[n] = nil
+	s.RadioClients[a] = &RadioState{Radios: []Radio{{ID: 1}}}
+	s.RadioClients[n] = nil
+
+	s.RLock()
+	clients := s.CloneClientsLocked()
+	radios := s.CloneRadiosLocked()
+	s.RUnlock()
+
+	if len(clients) != 2 {
+		t.Fatalf("len(clients) = %d, want 2", len(clients))
+	}
+	for id, c := range clients {
+		if c == s.Clients[id] {
+			t.Fatalf("client %s shares its pointer with live state", id)
+		}
+	}
+	s.Clients[a].Name = "changed"
+	if clients[a].Name != "A" {
+		t.Fatalf("clone Name = %q, want A", clients[a].Name)
+	}
+
+	if len(radios) != 1 {
+		t.Fatalf("len(radios) = %d, want 1", len(radios))
+	}
+	s.RadioClients[a].Radios[0].ID = 9
+	if radios[a].Radios[0].ID != 1 {
+		t.Fatal("radio clone shares its Radios slice with live state")
+	}
+}

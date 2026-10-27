@@ -269,3 +269,32 @@ func TestVoiceSecretForUnknownClientIsEmpty(t *testing.T) {
 		t.Fatalf("expected an empty secret for an unknown client, got %q", got)
 	}
 }
+
+// SRV-09: the RadioClientsChanged snapshot never shares memory with live state.
+func TestUpdateRadioInfoSnapshotIndependent(t *testing.T) {
+	s := newTestServer(t)
+	id := uuid.New()
+	s.serverState.AddClient(id, &state.ClientState{Name: "Alice"})
+	ch := s.eventBus.Subscribe(events.RadioClientsChanged)
+
+	if _, err := s.UpdateRadioInfo(clientCtx(id), &pb.RadioInfo{Radios: []*pb.Radio{{Id: 1, Frequency: 251}}}); err != nil {
+		t.Fatalf("UpdateRadioInfo: %v", err)
+	}
+	var ev events.RadioChangeEvent
+	select {
+	case e := <-ch:
+		ev = e.Data.(events.RadioChangeEvent)
+	case <-time.After(time.Second):
+		t.Fatal("no RadioClientsChanged event")
+	}
+
+	s.serverState.Lock()
+	s.serverState.RadioClients[id].Muted = true
+	s.serverState.RadioClients[id].Radios[0].Frequency = 1
+	s.serverState.Unlock()
+
+	got := ev.Radios[id]
+	if got.Muted || got.Radios[0].Frequency != 251 {
+		t.Fatalf("event snapshot changed with live state: muted=%v freq=%v", got.Muted, got.Radios[0].Frequency)
+	}
+}

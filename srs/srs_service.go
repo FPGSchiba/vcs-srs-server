@@ -361,14 +361,8 @@ func (s *SimpleRadioServer) UpdateRadioInfo(ctx context.Context, req *pb.RadioIn
 	if client, ok := s.serverState.Clients[clientID]; ok {
 		client.LastUpdate = s.now() // SRV-01
 	}
+	radioSnap := s.serverState.CloneRadiosLocked() // SRV-09
 	s.serverState.Unlock()
-
-	s.serverState.RLock()
-	radioSnap := make(map[uuid.UUID]*state.RadioState, len(s.serverState.RadioClients))
-	for k, v := range s.serverState.RadioClients {
-		radioSnap[k] = v
-	}
-	s.serverState.RUnlock()
 	s.eventBus.Publish(events.Event{
 		Name: events.RadioClientsChanged,
 		Data: events.RadioChangeEvent{Type: events.RadioUpdated, ClientID: clientID, Radios: radioSnap},

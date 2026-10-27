@@ -121,14 +121,7 @@ func (s *SimpleRadioServer) removeClientIf(id uuid.UUID, reason RemovalReason, f
 	delete(s.serverState.RadioClients, id)
 	var snap map[uuid.UUID]*state.ClientState
 	if existed {
-		snap = make(map[uuid.UUID]*state.ClientState, len(s.serverState.Clients))
-		for k, v := range s.serverState.Clients {
-			if v == nil {
-				continue
-			}
-			c := *v
-			snap[k] = &c
-		}
+		snap = s.serverState.CloneClientsLocked() // SRV-09
 	}
 	s.serverState.Unlock()
 	sub := s.streams[id]

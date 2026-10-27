@@ -307,3 +307,27 @@ func TestBanClientAlreadyBannedUnbound(t *testing.T) {
 		t.Fatal("nothing may be removed")
 	}
 }
+
+// SRV-09: the GUI getters return copies that never alias live state.
+func TestClientGettersReturnCopies(t *testing.T) {
+	a := newClientsTestApp(t)
+	id := addClient(a)
+	a.ServerState.Lock()
+	a.ServerState.RadioClients[id] = &state.RadioState{Radios: []state.Radio{{ID: 1, Frequency: 100}}}
+	a.ServerState.Unlock()
+
+	a.GetRadioClientMap()[id].Radios[0].Frequency = 1
+	a.GetRadioClients().RadioClients[id.String()].Radios[0].Frequency = 2
+	a.GetClientMap()[id].Name = "changed"
+	cs := a.GetClients().Clients[id.String()]
+	cs.Name = "changed2"
+
+	a.ServerState.RLock()
+	defer a.ServerState.RUnlock()
+	if f := a.ServerState.RadioClients[id].Radios[0].Frequency; f != 100 {
+		t.Fatalf("live Frequency = %v, want 100", f)
+	}
+	if n := a.ServerState.Clients[id].Name; n != "target" {
+		t.Fatalf("live Name = %q, want target", n)
+	}
+}

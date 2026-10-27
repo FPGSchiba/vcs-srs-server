@@ -21,23 +21,27 @@ type RadioClients struct {
 }
 
 func (a *VCSApplication) GetRadioClients() RadioClients {
-	a.ServerState.Lock()
-	defer a.ServerState.Unlock()
+	a.ServerState.RLock()
+	defer a.ServerState.RUnlock()
 	clients := make(map[string]state.RadioState, len(a.ServerState.RadioClients))
-	count := 0
 	for k, v := range a.ServerState.RadioClients {
-		clients[k.String()] = *v
-		count++
+		if v == nil {
+			continue
+		}
+		clients[k.String()] = *v.Clone()
 	}
 	return RadioClients{RadioClients: clients}
 }
 
 func (a *VCSApplication) GetClients() Clients {
-	a.ServerState.Lock()
-	defer a.ServerState.Unlock()
+	a.ServerState.RLock()
+	defer a.ServerState.RUnlock()
 	clients := make(map[string]state.ClientState, len(a.ServerState.Clients))
 	for k, v := range a.ServerState.Clients {
-		clients[k.String()] = *v
+		if v == nil {
+			continue
+		}
+		clients[k.String()] = *v.Clone()
 	}
 	return Clients{clients}
 }
@@ -265,15 +269,8 @@ func (a *VCSApplication) MuteClient(clientId string) {
 	}
 	client.Muted = true
 	a.ServerState.RadioClients[clientGuid] = client
+	radioSnap := a.ServerState.CloneRadiosLocked() // SRV-09
 	a.ServerState.Unlock()
-
-	a.ServerState.RLock()
-	radioSnap := make(map[uuid.UUID]*state.RadioState, len(a.ServerState.RadioClients))
-	for k, v := range a.ServerState.RadioClients {
-		cp := *v
-		radioSnap[k] = &cp
-	}
-	a.ServerState.RUnlock()
 	a.EmitEvent(events.Event{
 		Name: events.RadioClientsChanged,
 		Data: events.RadioChangeEvent{Type: events.RadioUpdated, ClientID: clientGuid, Radios: radioSnap},
@@ -304,15 +301,8 @@ func (a *VCSApplication) UnmuteClient(clientId string) {
 	}
 	client.Muted = false
 	a.ServerState.RadioClients[clientGuid] = client
+	radioSnap := a.ServerState.CloneRadiosLocked() // SRV-09
 	a.ServerState.Unlock()
-
-	a.ServerState.RLock()
-	radioSnap := make(map[uuid.UUID]*state.RadioState, len(a.ServerState.RadioClients))
-	for k, v := range a.ServerState.RadioClients {
-		cp := *v
-		radioSnap[k] = &cp
-	}
-	a.ServerState.RUnlock()
 	a.EmitEvent(events.Event{
 		Name: events.RadioClientsChanged,
 		Data: events.RadioChangeEvent{Type: events.RadioUpdated, ClientID: clientGuid, Radios: radioSnap},
@@ -328,23 +318,13 @@ func (a *VCSApplication) UnmuteClient(clientId string) {
 func (a *VCSApplication) GetClientMap() map[uuid.UUID]*state.ClientState {
 	a.ServerState.RLock()
 	defer a.ServerState.RUnlock()
-	snap := make(map[uuid.UUID]*state.ClientState, len(a.ServerState.Clients))
-	for k, v := range a.ServerState.Clients {
-		cp := *v
-		snap[k] = &cp
-	}
-	return snap
+	return a.ServerState.CloneClientsLocked()
 }
 
 func (a *VCSApplication) GetRadioClientMap() map[uuid.UUID]*state.RadioState {
 	a.ServerState.RLock()
 	defer a.ServerState.RUnlock()
-	snap := make(map[uuid.UUID]*state.RadioState, len(a.ServerState.RadioClients))
-	for k, v := range a.ServerState.RadioClients {
-		cp := *v
-		snap[k] = &cp
-	}
-	return snap
+	return a.ServerState.CloneRadiosLocked()
 }
 
 func (a *VCSApplication) IsClientMuted(clientId string) bool {
