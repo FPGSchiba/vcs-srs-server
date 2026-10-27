@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*.*.*'
 
+# Least privilege by default; jobs that need more (docker: packages,
+# release: contents) declare it themselves.
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Test
@@ -14,31 +19,16 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.25'
+          go-version-file: go.mod
 
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y gcc libgtk-4-dev libwebkitgtk-6.0-dev protobuf-compiler libasound2-dev
+      - name: Assert Go toolchain
+        run: bash .github/scripts/assert-go-toolchain.sh
 
-      - name: Install Wails
-        run: go install -v github.com/wailsapp/wails/v3/cmd/wails3@latest
-
-      - name: Install protoc plugins
-        run: |
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
-
-      - name: Regenerate protobuf files
-        run: |
-          mkdir -p srspb voicecontrolpb vcsauthpb
-          protoc --go_out=./srspb --go_opt=paths=source_relative --go-grpc_out=./srspb --go-grpc_opt=paths=source_relative srs.proto
-          protoc --go_out=./voicecontrolpb --go_opt=paths=source_relative --go-grpc_out=./voicecontrolpb --go-grpc_opt=paths=source_relative control.proto
-          protoc --go_out=./vcsauthpb --go_opt=paths=source_relative --go-grpc_out=./vcsauthpb --go-grpc_opt=paths=source_relative vcs-auth-plugin.proto
-
-      - name: Generate GraphQL code
-        run: go run github.com/99designs/gqlgen@$(go list -m -f '{{.Version}}' github.com/99designs/gqlgen) generate
+      - name: Generate code
+        uses: ./.github/actions/generate
 
       - name: Run tests
-        run: go test -tags headless -coverprofile=coverage.out ./...
+        run: go test -race -count=1 -tags headless ./...
 
   docker:
     name: Docker
