@@ -39,7 +39,11 @@ if [ "${1:-}" = "--list" ]; then
   exit 0
 fi
 
-mapfile -t mods < <(list)
+# Bash 3.2 compatible (macOS runners run this script's tests): no mapfile.
+mods=()
+while IFS= read -r m; do
+  if [ -n "$m" ]; then mods+=("$m"); fi
+done < <(list)
 if [ "${#mods[@]}" -gt 0 ]; then
   args=()
   for m in "${mods[@]}"; do
