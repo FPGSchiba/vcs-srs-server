@@ -214,3 +214,52 @@ func TestRemoveClientNotRunning(t *testing.T) {
 		t.Fatalf("RemoveClient = (%v, %v), want (false, false)", existed, running)
 	}
 }
+
+// blockingDropper blocks every drop until release is closed.
+type blockingDropper struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (d *blockingDropper) DropVoiceSession(uuid.UUID, string) {
+	d.entered <- struct{}{}
+	<-d.release
+}
+
+// TestRemoveClientDoesNotHoldMuAcrossDrop: the voice drop sends to every
+// voice node and may block on flow control; Stop (s.mu.Lock) must not wait
+// behind it.
+func TestRemoveClientDoesNotHoldMuAcrossDrop(t *testing.T) {
+	s := newInterceptorTestServer(t)
+	bus := events.NewEventBus()
+	t.Cleanup(bus.Stop)
+	d := &blockingDropper{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	srsServer := srs.NewSimpleRadioServer(s.serverState, s.settingsState, slog.New(slog.NewTextHandler(io.Discard, nil)), bus, nil, d)
+	t.Cleanup(srsServer.Stop)
+	s.mu.Lock()
+	s.srsServer = srsServer
+	s.isRunning = true
+	s.mu.Unlock()
+	id := uuid.New()
+	s.serverState.AddClient(id, &state.ClientState{Name: "t"})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.RemoveClient(id, srs.ReasonKicked, nil)
+	}()
+	select {
+	case <-d.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the drop never ran")
+	}
+	locked := s.mu.TryLock()
+	if locked {
+		s.mu.Unlock()
+	}
+	close(d.release)
+	<-done
+	if !locked {
+		t.Fatal("control.Server.mu is held while the voice drop runs")
+	}
+}

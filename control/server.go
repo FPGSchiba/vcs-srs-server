@@ -77,13 +77,17 @@ func NewServer(serverState *state.ServerState, settingsState *state.SettingsStat
 // RemoveClient ends a client's session through the SRS server's removal
 // helper (see srs.SimpleRadioServer.RemoveClient). running is false when the
 // control server is not running, in which case nothing is changed.
+// s.mu is released before the removal: the voice drop sends to every voice
+// node and may block, and Stop must not wait behind it. srs.RemoveClient is
+// safe to call after Stop.
 func (s *Server) RemoveClient(id uuid.UUID, reason srs.RemovalReason, final *srspb.ServerUpdate) (existed, running bool) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if !s.isRunning || s.srsServer == nil {
+	srsServer, isRunning := s.srsServer, s.isRunning
+	s.mu.RUnlock()
+	if !isRunning || srsServer == nil {
 		return false, false
 	}
-	return s.srsServer.RemoveClient(id, reason, final), true
+	return srsServer.RemoveClient(id, reason, final), true
 }
 
 func (s *Server) isControlServer() bool {
