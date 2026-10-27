@@ -255,3 +255,25 @@ func TestListenWaitsForWorkersOnStop(t *testing.T) {
 		t.Fatalf("%d goroutines after Listen returned, want <= %d", n, base+2)
 	}
 }
+
+// Frames still queued on a shard when the server stops are dropped, not
+// written to the closed socket (one ERROR per recipient per frame otherwise).
+func TestStopWithQueuedFramesDoesNotFloodSendErrors(t *testing.T) {
+	f := newFanoutFixture(t, 2)
+	release := make(chan struct{})
+	f.s.shardHook = func(int) { <-release }
+	f.s.startShards(1, 256)
+
+	for i := 0; i < 50; i++ {
+		f.s.dispatch(frame(f.talker, uint32(i)), f.talkAddr)
+	}
+	if err := f.s.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	close(release)
+	f.s.stopShards()
+
+	if n := len(f.h.recordsWithMsg("Failed to send voice packet")); n != 0 {
+		t.Fatalf("%d send-error records after stopping with queued frames, want 0", n)
+	}
+}

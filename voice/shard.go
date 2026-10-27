@@ -60,6 +60,12 @@ func (v *Server) shardWorker(shard int, q <-chan shardJob) {
 		if v.shardHook != nil {
 			v.shardHook(shard)
 		}
+		// Once Stop has run, the socket is closed: a queued frame would only
+		// produce a send error per recipient. Drop it, as the per-packet
+		// goroutines this pool replaced did at handlePacket's running check.
+		if !v.isRunning() {
+			continue
+		}
 		v.handleParsedPacket(job.pkt, job.addr)
 	}
 }
