@@ -84,6 +84,23 @@ func initializePluginClients(settingsState *state.SettingsState, logger *slog.Lo
 	return pluginClients
 }
 
+// peerAddr returns the caller's address and host for logging and per-address
+// checks. A context without a peer (never the case for a real gRPC call, but
+// possible from tests or in-process callers) yields ("unknown", "") instead of
+// a nil-pointer panic.
+func peerAddr(ctx context.Context) (addr, host string) {
+	p, ok := peer.FromContext(ctx)
+	if !ok || p == nil || p.Addr == nil {
+		return "unknown", ""
+	}
+	addr = p.Addr.String()
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr, ""
+	}
+	return addr, host
+}
+
 func (s *AuthServer) GetServerState() healthpb.HealthCheckResponse_ServingStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -102,19 +119,26 @@ func (s *AuthServer) isControlServer() bool {
 }
 
 func (s *AuthServer) InitAuth(ctx context.Context, request *pb.AuthInitRequest) (*pb.AuthInitResponse, error) {
-	p, _ := peer.FromContext(ctx)
-	s.logger.Debug("Initializing Auth", "IP", p.Addr.String(), "Version", request.Capabilities.Version)
+	peerAddress, peerHost := peerAddr(ctx)
+	capabilities := request.GetCapabilities()
+	if capabilities == nil {
+		s.logger.Warn("InitAuth without client capabilities", "IP", peerAddress)
+		return &pb.AuthInitResponse{
+			Success:    false,
+			InitResult: &pb.AuthInitResponse_ErrorMessage{ErrorMessage: "Missing client capabilities"},
+		}, nil
+	}
+	s.logger.Debug("Initializing Auth", "IP", peerAddress, "Version", capabilities.GetVersion())
 
 	s.removeExpiredAuthenticatingClients()
 
-	peerHost, _, _ := net.SplitHostPort(p.Addr.String())
 	s.serverState.RLock()
 	_, banned := utils.FindByFunc(s.serverState.BannedState.BannedClients, func(bc state.BannedClient) bool {
 		return bc.IPAddress == peerHost
 	})
 	s.serverState.RUnlock()
 	if banned {
-		s.logger.Warn("Banned client attempted to initialize", "IP", p.Addr.String())
+		s.logger.Warn("Banned client attempted to initialize", "IP", peerAddress)
 		return &pb.AuthInitResponse{
 			Success:    false,
 			InitResult: &pb.AuthInitResponse_ErrorMessage{ErrorMessage: "You are banned from this server"},
@@ -124,17 +148,17 @@ func (s *AuthServer) InitAuth(ctx context.Context, request *pb.AuthInitRequest) 
 	// Check Version. The message names both the version we got and the floor
 	// we require -- "Unsupported version" alone gives a user nothing to act
 	// on, and this is the first thing a mismatched client ever sees.
-	if !checkVersion(request.Capabilities.Version) {
+	if !checkVersion(capabilities.GetVersion()) {
 		return &pb.AuthInitResponse{
 			Success: false,
 			InitResult: &pb.AuthInitResponse_ErrorMessage{ErrorMessage: fmt.Sprintf(
 				"Unsupported client version %q; this server requires %s or newer",
-				request.Capabilities.Version, MinClientVersion)},
+				capabilities.GetVersion(), MinClientVersion)},
 		}, nil
 	}
 
 	// Check Distribution Capabilities
-	if !s.checkDistributionCapabilities(request.Capabilities.SupportedDistributionModes) {
+	if !s.checkDistributionCapabilities(capabilities.GetSupportedDistributionModes()) {
 		return &pb.AuthInitResponse{
 			Success:    false,
 			InitResult: &pb.AuthInitResponse_ErrorMessage{ErrorMessage: fmt.Sprintf("Unsupported distribution capabilities, currently running: %s", s.GetStringDistributionMode())},
@@ -148,7 +172,7 @@ func (s *AuthServer) InitAuth(ctx context.Context, request *pb.AuthInitRequest) 
 	}
 	s.mu.Unlock()
 
-	s.logger.Info("Client initialized", "ClientGuid", clientGuid, "IP", p.Addr.String(), "Version", request.Capabilities.Version)
+	s.logger.Info("Client initialized", "ClientGuid", clientGuid, "IP", peerAddress, "Version", capabilities.GetVersion())
 
 	return &pb.AuthInitResponse{
 		Success: true,
@@ -164,8 +188,8 @@ func (s *AuthServer) InitAuth(ctx context.Context, request *pb.AuthInitRequest) 
 }
 
 func (s *AuthServer) DiscoverAuthenticationFlows(ctx context.Context, request *pb.FlowDiscoveryRequest) (*pb.FlowDiscoveryResponse, error) {
-	p, _ := peer.FromContext(ctx)
-	s.logger.Debug("Getting Flow Discovery", "IP", p.Addr.String(), "Plugin", request.AuthenticationPlugin)
+	peerAddress, _ := peerAddr(ctx)
+	s.logger.Debug("Getting Flow Discovery", "IP", peerAddress, "Plugin", request.AuthenticationPlugin)
 
 	// Check if This auth type is enabled
 	s.settingsState.RLock()
@@ -258,8 +282,8 @@ func mapFields(in []*authpb.FieldDefinition) []*pb.FieldDefinition {
 }
 
 func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.GuestLoginRequest) (*pb.GuestLoginResponse, error) {
-	p, _ := peer.FromContext(ctx)
-	s.logger.Debug("Getting Guest Login", "IP", p.Addr.String(), "Name", request.Name, "UnitId", request.UnitId)
+	peerAddress, _ := peerAddr(ctx)
+	s.logger.Debug("Getting Guest Login", "IP", peerAddress, "Name", request.Name, "UnitId", request.UnitId)
 
 	// check if This auth type is enabled
 	s.settingsState.RLock()
@@ -281,7 +305,7 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.GuestLoginReque
 		return &pb.GuestLoginResponse{
 			Success:     false,
 			LoginResult: &pb.GuestLoginResponse_ErrorMessage{ErrorMessage: "Invalid ClientGuid"},
-		}, err
+		}, nil
 	}
 	s.mu.RLock()
 	if _, ok := s.authenticatingClients[clientGuid]; !ok {
@@ -357,7 +381,7 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.GuestLoginReque
 		return &pb.GuestLoginResponse{
 			Success:     false,
 			LoginResult: &pb.GuestLoginResponse_ErrorMessage{ErrorMessage: "Failed to generate token"},
-		}, err
+		}, nil
 	}
 
 	s.logger.Info("guest login succeeded for ", "Guest Name", request.Name, "UnitId", request.UnitId, "Coalition", selectedCoalition.Name, "ClientGuid", clientGuid)
@@ -383,8 +407,8 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.GuestLoginReque
 }
 
 func (s *AuthServer) StartAuth(ctx context.Context, request *pb.StartAuthRequest) (*pb.AuthStepResponse, error) {
-	p, _ := peer.FromContext(ctx)
-	s.logger.Debug("Getting 3rd Party Plugin Login", "IP", p.Addr.String(), "plugin-name", request.AuthenticationPlugin)
+	peerAddress, _ := peerAddr(ctx)
+	s.logger.Debug("Getting 3rd Party Plugin Login", "IP", peerAddress, "plugin-name", request.AuthenticationPlugin)
 
 	// Check if This auth type is enabled
 	s.settingsState.RLock()
@@ -408,7 +432,7 @@ func (s *AuthServer) StartAuth(ctx context.Context, request *pb.StartAuthRequest
 			Success:   false,
 			SessionId: "",
 			Result:    &pb.AuthStepResponse_ErrorMessage{ErrorMessage: "Invalid ClientGuid"},
-		}, err
+		}, nil
 	}
 	s.mu.RLock()
 	if _, ok := s.authenticatingClients[clientGuid]; !ok {
@@ -593,8 +617,8 @@ func transformFieldDefinitions(fields []*authpb.FieldDefinition) []*pb.FieldDefi
 }
 
 func (s *AuthServer) ContinueAuth(ctx context.Context, request *pb.ContinueAuthRequest) (*pb.AuthStepResponse, error) {
-	p, _ := peer.FromContext(ctx)
-	s.logger.Debug("Continuing 3rd Party Plugin Login", "IP", p.Addr.String(), "SessionId", request.SessionId)
+	peerAddress, _ := peerAddr(ctx)
+	s.logger.Debug("Continuing 3rd Party Plugin Login", "IP", peerAddress, "SessionId", request.SessionId)
 
 	// Check if This auth type is enabled
 	s.settingsState.RLock()
@@ -617,7 +641,7 @@ func (s *AuthServer) ContinueAuth(ctx context.Context, request *pb.ContinueAuthR
 			Success:   false,
 			SessionId: "",
 			Result:    &pb.AuthStepResponse_ErrorMessage{ErrorMessage: "Invalid ClientGuid"},
-		}, err
+		}, nil
 	}
 	s.mu.RLock()
 	authenticatedClient, ok := s.authenticatingClients[clientGuid]
@@ -691,8 +715,8 @@ func (s *AuthServer) ContinueAuth(ctx context.Context, request *pb.ContinueAuthR
 }
 
 func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.UnitSelectRequest) (*pb.UnitSelectResponse, error) {
-	p, _ := peer.FromContext(ctx)
-	s.logger.Debug("Processing Unit Select", "IP", p.Addr.String(), "ClientGuid", request.ClientGuid, "UnitId", request.UnitId)
+	peerAddress, _ := peerAddr(ctx)
+	s.logger.Debug("Processing Unit Select", "IP", peerAddress, "ClientGuid", request.ClientGuid, "UnitId", request.UnitId)
 
 	// Find the authenticating client
 	clientGuid, err := uuid.Parse(request.ClientGuid)
@@ -701,7 +725,7 @@ func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.UnitSelectReque
 		return &pb.UnitSelectResponse{
 			Success: false,
 			Result:  &pb.UnitSelectResponse_ErrorMessage{ErrorMessage: "Invalid ClientGuid"},
-		}, err
+		}, nil
 	}
 	s.mu.RLock()
 	authClient, ok := s.authenticatingClients[clientGuid]
@@ -785,7 +809,7 @@ func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.UnitSelectReque
 		return &pb.UnitSelectResponse{
 			Success: false,
 			Result:  &pb.UnitSelectResponse_ErrorMessage{ErrorMessage: "Failed to generate token"},
-		}, err
+		}, nil
 	}
 
 	s.serverState.RLock()

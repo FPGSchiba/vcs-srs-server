@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/FPGSchiba/vcs-srs-server/events"
@@ -129,5 +130,75 @@ func TestGuestLoginConsumesAuthenticatingClient(t *testing.T) {
 	}
 	if secondResp.Success {
 		t.Fatal("second GuestLogin with the same ClientGuid succeeded; the authenticatingClients entry was not consumed by the first login")
+	}
+}
+
+func TestInitAuthNilCapabilities(t *testing.T) {
+	s := newGuestLoginTestServer(t)
+	resp, err := s.InitAuth(testPeerContext(), &pb.AuthInitRequest{})
+	if err != nil {
+		t.Fatalf("InitAuth returned error: %v", err)
+	}
+	if resp.GetSuccess() {
+		t.Fatal("InitAuth without capabilities succeeded")
+	}
+	if got := resp.GetErrorMessage(); got != "Missing client capabilities" {
+		t.Fatalf("error message = %q", got)
+	}
+}
+
+func TestInitAuthWithoutPeer(t *testing.T) {
+	s := newGuestLoginTestServer(t)
+	resp, err := s.InitAuth(context.Background(), &pb.AuthInitRequest{})
+	if err != nil {
+		t.Fatalf("InitAuth returned error: %v", err)
+	}
+	if resp.GetSuccess() || resp.GetErrorMessage() != "Missing client capabilities" {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+}
+
+func TestInitAuthNilDistributionModes(t *testing.T) {
+	s := newGuestLoginTestServer(t)
+	resp, err := s.InitAuth(testPeerContext(), &pb.AuthInitRequest{
+		Capabilities: &pb.ClientCapabilities{Version: MinClientVersion},
+	})
+	if err != nil {
+		t.Fatalf("InitAuth returned error: %v", err)
+	}
+	if resp.GetSuccess() {
+		t.Fatal("InitAuth without distribution modes succeeded")
+	}
+	if got := resp.GetErrorMessage(); !strings.HasPrefix(got, "Unsupported distribution capabilities") {
+		t.Fatalf("error message = %q", got)
+	}
+}
+
+// TestInvalidClientGuidReturnsBody pins SRV-07's AuthService rule: a business
+// failure is a Success:false body with a nil error. grpc-go drops the body
+// when the error is non-nil, so returning both left clients with a bodiless
+// codes.Unknown.
+func TestInvalidClientGuidReturnsBody(t *testing.T) {
+	s := newGuestLoginTestServer(t)
+	s.settingsState.Security.EnablePluginAuth = true
+	ctx := testPeerContext()
+	const bad = "not-a-uuid"
+	const want = "Invalid ClientGuid"
+
+	g, err := s.GuestLogin(ctx, &pb.GuestLoginRequest{ClientGuid: bad})
+	if err != nil || g.GetSuccess() || g.GetErrorMessage() != want {
+		t.Fatalf("GuestLogin: resp %+v, err %v", g, err)
+	}
+	st, err := s.StartAuth(ctx, &pb.StartAuthRequest{ClientGuid: bad})
+	if err != nil || st.GetSuccess() || st.GetErrorMessage() != want {
+		t.Fatalf("StartAuth: resp %+v, err %v", st, err)
+	}
+	c, err := s.ContinueAuth(ctx, &pb.ContinueAuthRequest{ClientGuid: bad})
+	if err != nil || c.GetSuccess() || c.GetErrorMessage() != want {
+		t.Fatalf("ContinueAuth: resp %+v, err %v", c, err)
+	}
+	u, err := s.UnitSelect(ctx, &pb.UnitSelectRequest{ClientGuid: bad})
+	if err != nil || u.GetSuccess() || u.GetErrorMessage() != want {
+		t.Fatalf("UnitSelect: resp %+v, err %v", u, err)
 	}
 }
