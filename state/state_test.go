@@ -93,3 +93,49 @@ func TestAddClientOnNilMapsDoesNotPanic(t *testing.T) {
 		t.Fatalf("expected 1 radio client, got %d", len(s.RadioClients))
 	}
 }
+
+func TestIsListeningOnFrequency(t *testing.T) {
+	s := newTestServerState()
+	sender := uuid.New()
+	rb := uuid.New()
+	rr := uuid.New()
+	rn := uuid.New()
+	s.Clients[sender] = &ClientState{Name: "S", Coalition: "Blue"}
+	s.Clients[rb] = &ClientState{Name: "RB", Coalition: "Blue"}
+	s.Clients[rr] = &ClientState{Name: "RR", Coalition: "Red"}
+	s.Clients[rn] = &ClientState{Name: "RN", Coalition: "Blue"}
+	radios := func() *RadioState {
+		return &RadioState{Radios: []Radio{
+			{Frequency: 251, Enabled: true},
+			{Frequency: 252, Enabled: false},
+		}}
+	}
+	s.RadioClients[rb] = radios()
+	s.RadioClients[rr] = radios()
+
+	cases := []struct {
+		name     string
+		receiver uuid.UUID
+		sender   uuid.UUID
+		freq     float32
+		global   bool
+		want     bool
+	}{
+		{"same coalition enabled", rb, sender, 251, false, true},
+		{"cross coalition non-global", rr, sender, 251, false, false},
+		{"cross coalition global", rr, sender, 251, true, true},
+		{"radio disabled", rb, sender, 252, false, false},
+		{"frequency not tuned", rb, sender, 300, false, false},
+		{"unknown sender", rb, uuid.New(), 251, false, false},
+		{"unknown receiver", uuid.New(), sender, 251, false, false},
+		{"receiver without radio state", rn, sender, 251, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := s.IsListeningOnFrequency(tc.receiver, tc.sender, tc.freq, tc.global)
+			if got != tc.want {
+				t.Fatalf("IsListeningOnFrequency(%s) = %v, want %v", tc.name, got, tc.want)
+			}
+		})
+	}
+}
