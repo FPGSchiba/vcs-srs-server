@@ -30,7 +30,33 @@ type AuthServer struct {
 	mu                    sync.RWMutex
 	authenticatingClients map[uuid.UUID]*AuthenticatingClient
 	pluginClients         map[string]*PluginClient
+
+	// Pending-login bookkeeping (SRV-17). All guarded by mu.
+	pendingPerIP    map[string]int
+	now             func() time.Time
+	maxPending      int
+	maxPendingPerIP int
+
+	stopSweep chan struct{}
+	sweepDone chan struct{}
+	stopOnce  sync.Once
 }
+
+// Pending-login limits. A pending login is an InitAuth whose GUID has not yet
+// been redeemed by GuestLogin or UnitSelect. Without a bound, anyone who can
+// reach the port can grow authenticatingClients without limit.
+const (
+	// pendingLoginTTL is how long a pending login lives without activity.
+	// Every login step that finds a live entry re-arms it.
+	pendingLoginTTL = 5 * time.Minute
+	// maxPendingLogins caps the whole map. Over it, a new InitAuth is refused;
+	// existing entries are never evicted.
+	maxPendingLogins = 10000
+	// maxPendingLoginsPerIP caps the entries one peer host may hold.
+	maxPendingLoginsPerIP = 32
+	// pendingSweepInterval is how often expired entries are removed in bulk.
+	pendingSweepInterval = 60 * time.Second
+)
 
 type AuthenticatingClient struct {
 	Name           string
@@ -40,10 +66,13 @@ type AuthenticatingClient struct {
 	AvailableUnits []*pb.UnitSelection
 	SessionId      string
 	PluginUsed     string
+	// IP is the peer host that ran InitAuth; it keys pendingPerIP and must be
+	// preserved across in-place updates or the per-IP count drifts.
+	IP string
 }
 
 func NewAuthServer(serverState *state.ServerState, settingsState *state.SettingsState, logger *slog.Logger, distributionState *state.DistributionState, eventBus *events.EventBus) *AuthServer {
-	return &AuthServer{
+	s := &AuthServer{
 		serverState:           serverState,
 		settingsState:         settingsState,
 		eventBus:              eventBus,
@@ -52,7 +81,124 @@ func NewAuthServer(serverState *state.ServerState, settingsState *state.Settings
 		distributionState:     distributionState,
 		pluginClients:         initializePluginClients(settingsState, logger),
 		authenticatingClients: make(map[uuid.UUID]*AuthenticatingClient),
+		pendingPerIP:          make(map[string]int),
+		now:                   time.Now,
+		maxPending:            maxPendingLogins,
+		maxPendingPerIP:       maxPendingLoginsPerIP,
+		stopSweep:             make(chan struct{}),
+		sweepDone:             make(chan struct{}),
 	}
+	go s.runSweeper()
+	return s
+}
+
+// runSweeper removes expired pending logins every pendingSweepInterval until
+// Stop is called.
+func (s *AuthServer) runSweeper() {
+	ticker := time.NewTicker(pendingSweepInterval)
+	defer func() {
+		ticker.Stop()
+		close(s.sweepDone)
+	}()
+	for {
+		select {
+		case <-ticker.C:
+			s.sweepExpired()
+		case <-s.stopSweep:
+			return
+		}
+	}
+}
+
+// Stop ends the pending-login sweeper and waits for it to exit. It is safe to
+// call more than once.
+func (s *AuthServer) Stop() {
+	s.stopOnce.Do(func() {
+		close(s.stopSweep)
+	})
+	<-s.sweepDone
+}
+
+// sweepExpired deletes every expired pending login in one pass.
+func (s *AuthServer) sweepExpired() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	for guid, c := range s.authenticatingClients {
+		if now.After(c.Expires) {
+			s.deletePendingLocked(guid)
+			s.logger.Info("Removed expired authenticating client", "ClientGuid", guid)
+		}
+	}
+}
+
+// deletePendingLocked removes a pending login and releases its per-IP slot.
+// The caller holds s.mu for writing.
+func (s *AuthServer) deletePendingLocked(guid uuid.UUID) {
+	c, ok := s.authenticatingClients[guid]
+	if !ok {
+		return
+	}
+	delete(s.authenticatingClients, guid)
+	if n := s.pendingPerIP[c.IP] - 1; n > 0 {
+		s.pendingPerIP[c.IP] = n
+	} else {
+		delete(s.pendingPerIP, c.IP)
+	}
+}
+
+// touchPending looks up a pending login for a login step. A missing or expired
+// entry yields false (an expired one is deleted). A live one has its TTL
+// re-armed and is returned as a value copy, so callers never read shared
+// fields outside the lock.
+func (s *AuthServer) touchPending(guid uuid.UUID) (AuthenticatingClient, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, ok := s.authenticatingClients[guid]
+	if !ok {
+		return AuthenticatingClient{}, false
+	}
+	now := s.now()
+	if now.After(c.Expires) {
+		s.deletePendingLocked(guid)
+		s.logger.Info("Removed expired authenticating client", "ClientGuid", guid)
+		return AuthenticatingClient{}, false
+	}
+	c.Expires = now.Add(pendingLoginTTL)
+	return *c, true
+}
+
+// setPluginSession records the plugin flow on a pending login in place. It
+// returns false if the entry is gone (swept or consumed meanwhile).
+func (s *AuthServer) setPluginSession(guid uuid.UUID, plugin, sessionID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, ok := s.authenticatingClients[guid]
+	if !ok {
+		return false
+	}
+	c.PluginUsed = plugin
+	c.SessionId = sessionID
+	c.Expires = s.now().Add(pendingLoginTTL)
+	return true
+}
+
+// completePending stores a completed plugin login on the pending entry in
+// place, keeping IP so the per-IP count stays correct. It returns false if the
+// entry is gone.
+func (s *AuthServer) completePending(guid uuid.UUID, name, secret string, roles []uint8, units []*pb.UnitSelection) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, ok := s.authenticatingClients[guid]
+	if !ok {
+		return false
+	}
+	c.Name = name
+	c.Secret = secret
+	c.AvailableRoles = roles
+	c.AvailableUnits = units
+	c.Expires = s.now().Add(pendingLoginTTL)
+	return true
 }
 
 func initializePluginClients(settingsState *state.SettingsState, logger *slog.Logger) map[string]*PluginClient {
@@ -130,8 +276,6 @@ func (s *AuthServer) InitAuth(ctx context.Context, request *pb.AuthInitRequest) 
 	}
 	s.logger.Debug("Initializing Auth", "IP", peerAddress, "Version", capabilities.GetVersion())
 
-	s.removeExpiredAuthenticatingClients()
-
 	s.serverState.RLock()
 	_, banned := utils.FindByFunc(s.serverState.BannedState.BannedClients, func(bc state.BannedClient) bool {
 		return bc.IPAddress == peerHost
@@ -167,9 +311,27 @@ func (s *AuthServer) InitAuth(ctx context.Context, request *pb.AuthInitRequest) 
 
 	clientGuid := uuid.New()
 	s.mu.Lock()
-	s.authenticatingClients[clientGuid] = &AuthenticatingClient{
-		Expires: time.Now().Add(20 * time.Minute),
+	if len(s.authenticatingClients) >= s.maxPending {
+		s.mu.Unlock()
+		s.logger.Warn("Refusing InitAuth: pending-login limit reached", "IP", peerAddress, "limit", s.maxPending)
+		return &pb.AuthInitResponse{
+			Success:    false,
+			InitResult: &pb.AuthInitResponse_ErrorMessage{ErrorMessage: "Server is busy: too many pending logins, please try again shortly"},
+		}, nil
 	}
+	if s.pendingPerIP[peerHost] >= s.maxPendingPerIP {
+		s.mu.Unlock()
+		s.logger.Warn("Refusing InitAuth: per-address pending-login limit reached", "IP", peerAddress, "limit", s.maxPendingPerIP)
+		return &pb.AuthInitResponse{
+			Success:    false,
+			InitResult: &pb.AuthInitResponse_ErrorMessage{ErrorMessage: "Too many pending logins from your address, please try again shortly"},
+		}, nil
+	}
+	s.authenticatingClients[clientGuid] = &AuthenticatingClient{
+		IP:      peerHost,
+		Expires: s.now().Add(pendingLoginTTL),
+	}
+	s.pendingPerIP[peerHost]++
 	s.mu.Unlock()
 
 	s.logger.Info("Client initialized", "ClientGuid", clientGuid, "IP", peerAddress, "Version", capabilities.GetVersion())
@@ -201,8 +363,6 @@ func (s *AuthServer) DiscoverAuthenticationFlows(ctx context.Context, request *p
 		}, nil
 	}
 	s.settingsState.RUnlock()
-
-	s.removeExpiredAuthenticatingClients()
 
 	// Check if plugin is available
 	s.mu.RLock()
@@ -296,8 +456,6 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.GuestLoginReque
 	}
 	s.settingsState.RUnlock()
 
-	s.removeExpiredAuthenticatingClients()
-
 	// Check if client is initialized
 	clientGuid, err := uuid.Parse(request.ClientGuid)
 	if err != nil {
@@ -307,15 +465,12 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.GuestLoginReque
 			LoginResult: &pb.GuestLoginResponse_ErrorMessage{ErrorMessage: "Invalid ClientGuid"},
 		}, nil
 	}
-	s.mu.RLock()
-	if _, ok := s.authenticatingClients[clientGuid]; !ok {
-		s.mu.RUnlock()
+	if _, ok := s.touchPending(clientGuid); !ok {
 		return &pb.GuestLoginResponse{
 			Success:     false,
 			LoginResult: &pb.GuestLoginResponse_ErrorMessage{ErrorMessage: "ClientGuid not found, please initialize first"},
 		}, nil
 	}
-	s.mu.RUnlock()
 
 	// Check Username
 	if !checkUsername(request.Name) {
@@ -362,7 +517,7 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.GuestLoginReque
 	})
 
 	s.mu.Lock()
-	delete(s.authenticatingClients, clientGuid)
+	s.deletePendingLocked(clientGuid)
 	s.mu.Unlock()
 
 	// Return Response
@@ -422,8 +577,6 @@ func (s *AuthServer) StartAuth(ctx context.Context, request *pb.StartAuthRequest
 	}
 	s.settingsState.RUnlock()
 
-	s.removeExpiredAuthenticatingClients()
-
 	// Check if client is initialized
 	clientGuid, err := uuid.Parse(request.ClientGuid)
 	if err != nil {
@@ -434,16 +587,9 @@ func (s *AuthServer) StartAuth(ctx context.Context, request *pb.StartAuthRequest
 			Result:    &pb.AuthStepResponse_ErrorMessage{ErrorMessage: "Invalid ClientGuid"},
 		}, nil
 	}
-	s.mu.RLock()
-	if _, ok := s.authenticatingClients[clientGuid]; !ok {
-		s.mu.RUnlock()
-		return &pb.AuthStepResponse{
-			Success:   false,
-			SessionId: "",
-			Result:    &pb.AuthStepResponse_ErrorMessage{ErrorMessage: "ClientGuid not found, please initialize first"},
-		}, nil
+	if _, ok := s.touchPending(clientGuid); !ok {
+		return pendingNotFoundStepResponse(), nil
 	}
-	s.mu.RUnlock()
 
 	// Check if the plugin is available
 	s.mu.RLock()
@@ -473,10 +619,11 @@ func (s *AuthServer) StartAuth(ctx context.Context, request *pb.StartAuthRequest
 
 	switch loginResponse.GetStatus() {
 	case authpb.AuthStepStatus_AUTH_CONTINUE:
-		s.mu.Lock()
-		s.authenticatingClients[clientGuid].PluginUsed = request.AuthenticationPlugin
-		s.authenticatingClients[clientGuid].SessionId = loginResponse.SessionId
-		s.mu.Unlock()
+		// The plugin call ran without the lock; the entry may have been swept
+		// or consumed meanwhile.
+		if !s.setPluginSession(clientGuid, request.AuthenticationPlugin, loginResponse.SessionId) {
+			return pendingNotFoundStepResponse(), nil
+		}
 		return handleAuthContinue(loginResponse)
 	case authpb.AuthStepStatus_AUTH_FAILED:
 		errResult, ok := loginResponse.StepResult.(*authpb.AuthStepResponse_ErrorMessage)
@@ -532,15 +679,9 @@ func (s *AuthServer) handleAuthComplete(clientGuid uuid.UUID, response *authpb.A
 			UnitName: unit.UnitName,
 		})
 	}
-	s.mu.Lock()
-	s.authenticatingClients[clientGuid] = &AuthenticatingClient{
-		Name:           result.PlayerName,
-		Secret:         strings.Join(clientSecret, "-"),
-		Expires:        time.Now().Add(5 * time.Minute),
-		AvailableRoles: availableRoles,
-		AvailableUnits: availableUnits,
+	if !s.completePending(clientGuid, result.PlayerName, strings.Join(clientSecret, "-"), availableRoles, availableUnits) {
+		return pendingNotFoundStepResponse(), nil
 	}
-	s.mu.Unlock()
 
 	var availableCoalitions []*pb.CoalitionSelection
 	s.settingsState.RLock()
@@ -574,6 +715,16 @@ func (s *AuthServer) handleAuthComplete(clientGuid uuid.UUID, response *authpb.A
 			},
 		},
 	}, nil
+}
+
+// pendingNotFoundStepResponse is the plugin-flow body for a GUID with no live
+// pending login.
+func pendingNotFoundStepResponse() *pb.AuthStepResponse {
+	return &pb.AuthStepResponse{
+		Success:   false,
+		SessionId: "",
+		Result:    &pb.AuthStepResponse_ErrorMessage{ErrorMessage: "ClientGuid not found, please initialize first"},
+	}
 }
 
 func handleAuthContinue(response *authpb.AuthStepResponse) (*pb.AuthStepResponse, error) {
@@ -632,7 +783,6 @@ func (s *AuthServer) ContinueAuth(ctx context.Context, request *pb.ContinueAuthR
 	}
 	s.settingsState.RUnlock()
 
-	s.removeExpiredAuthenticatingClients()
 	// Check if client is initialized
 	clientGuid, err := uuid.Parse(request.ClientGuid)
 	if err != nil {
@@ -643,17 +793,10 @@ func (s *AuthServer) ContinueAuth(ctx context.Context, request *pb.ContinueAuthR
 			Result:    &pb.AuthStepResponse_ErrorMessage{ErrorMessage: "Invalid ClientGuid"},
 		}, nil
 	}
-	s.mu.RLock()
-	authenticatedClient, ok := s.authenticatingClients[clientGuid]
+	authenticatedClient, ok := s.touchPending(clientGuid)
 	if !ok {
-		s.mu.RUnlock()
-		return &pb.AuthStepResponse{
-			Success:   false,
-			SessionId: "",
-			Result:    &pb.AuthStepResponse_ErrorMessage{ErrorMessage: "ClientGuid not found, please initialize first"},
-		}, nil
+		return pendingNotFoundStepResponse(), nil
 	}
-	s.mu.RUnlock()
 	if authenticatedClient.SessionId != request.SessionId {
 		return &pb.AuthStepResponse{
 			Success:   false,
@@ -727,20 +870,18 @@ func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.UnitSelectReque
 			Result:  &pb.UnitSelectResponse_ErrorMessage{ErrorMessage: "Invalid ClientGuid"},
 		}, nil
 	}
-	s.mu.RLock()
-	authClient, ok := s.authenticatingClients[clientGuid]
+	pending, ok := s.touchPending(clientGuid)
 	if !ok {
-		s.mu.RUnlock()
 		s.logger.Warn("Client not found for Unit Select", "ClientGuid", request.ClientGuid)
 		return &pb.UnitSelectResponse{
 			Success: false,
 			Result:  &pb.UnitSelectResponse_ErrorMessage{ErrorMessage: "ClientGuid not found, please initialize first"},
 		}, nil
 	}
-	s.mu.RUnlock()
+	authClient := &pending
 
 	// Check secret
-	if authClient == nil || authClient.Secret != request.Secret {
+	if authClient.Secret != request.Secret {
 		s.logger.Warn("Authentication failed for Unit Select", "ClientGuid", request.ClientGuid, "UnitId", request.UnitId)
 		return &pb.UnitSelectResponse{
 			Success: false,
@@ -789,7 +930,7 @@ func (s *AuthServer) UnitSelect(ctx context.Context, request *pb.UnitSelectReque
 	})
 
 	s.mu.Lock()
-	delete(s.authenticatingClients, clientGuid)
+	s.deletePendingLocked(clientGuid)
 	s.mu.Unlock()
 
 	// Generate token for the client
@@ -888,15 +1029,4 @@ func (s *AuthServer) isCoalitionAvailable(selectedCoalition string) bool {
 		}
 	}
 	return coalitionAvailable
-}
-
-func (s *AuthServer) removeExpiredAuthenticatingClients() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for clientGuid, authClient := range s.authenticatingClients {
-		if time.Now().After(authClient.Expires) {
-			delete(s.authenticatingClients, clientGuid)
-			s.logger.Info("Removed expired authenticating client", "ClientGuid", clientGuid)
-		}
-	}
 }
