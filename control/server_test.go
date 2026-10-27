@@ -2,8 +2,11 @@ package control
 
 import (
 	"bytes"
+	"context"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -11,8 +14,16 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/FPGSchiba/vcs-srs-server/events"
 	"github.com/FPGSchiba/vcs-srs-server/state"
+	"github.com/FPGSchiba/vcs-srs-server/utils"
+	"github.com/google/uuid"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 func TestClientTransportCredentials(t *testing.T) {
@@ -199,5 +210,342 @@ func TestClientTransportCredentialsLogsFailedHandshake(t *testing.T) {
 	out := buf.String()
 	if !strings.Contains(out, "handshake failed") || !strings.Contains(out, "plaintext") {
 		t.Fatalf("expected a handshake-failure warning naming plaintext, got log output: %s", out)
+	}
+}
+
+// newInterceptorTestServer builds a Server whose token key files live in a
+// temp dir. utils caches the keys process-wide on first use, so every test in
+// this package signs and verifies with the same pair.
+func newInterceptorTestServer(t *testing.T) *Server {
+	t.Helper()
+	dir := t.TempDir()
+	settings := &state.SettingsState{}
+	settings.Security.Token = state.TokenSettings{
+		PrivateKeyFile: filepath.Join(dir, "priv.pem"),
+		PublicKeyFile:  filepath.Join(dir, "pub.pem"),
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	return NewServer(&state.ServerState{}, settings, logger, &state.DistributionState{}, nil)
+}
+
+// mintToken returns a signed token for a fresh GUID, and that GUID.
+func mintToken(t *testing.T, s *Server, role uint8, ttl time.Duration) (string, string) {
+	t.Helper()
+	guid := uuid.NewString()
+	tok, err := utils.GenerateToken(guid, role, "i", "s", ttl,
+		s.settingsState.Security.Token.PrivateKeyFile, s.settingsState.Security.Token.PublicKeyFile)
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+	return tok, guid
+}
+
+type fakeServerStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (f *fakeServerStream) Context() context.Context { return f.ctx }
+
+// runAuth drives either interceptor with ctx and reports whether the handler
+// ran, the client GUID it saw, and the interceptor's error.
+func runAuth(s *Server, stream bool, method string, ctx context.Context) (called bool, gotID interface{}, err error) {
+	if stream {
+		err = s.authStreamInterceptor(nil, &fakeServerStream{ctx: ctx}, &grpc.StreamServerInfo{FullMethod: method},
+			func(srv interface{}, ss grpc.ServerStream) error {
+				called = true
+				gotID = ss.Context().Value(utils.ClientIDKey)
+				return nil
+			})
+		return
+	}
+	_, err = s.authInterceptor(ctx, nil, &grpc.UnaryServerInfo{FullMethod: method},
+		func(ctx context.Context, req interface{}) (interface{}, error) {
+			called = true
+			gotID = ctx.Value(utils.ClientIDKey)
+			return "ok", nil
+		})
+	return
+}
+
+func TestAuthInterceptorCodes(t *testing.T) {
+	s := newInterceptorTestServer(t)
+	expired, _ := mintToken(t, s, utils.GuestRole, -time.Hour)
+	valid, validGUID := mintToken(t, s, utils.GuestRole, time.Hour)
+	withAuth := func(v string) context.Context {
+		return metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", v))
+	}
+
+	for _, kind := range []struct {
+		name   string
+		stream bool
+		method string
+	}{
+		{"unary", false, "/srs.SRSService/SyncClient"},
+		{"stream", true, "/srs.SRSService/SubscribeToUpdates"},
+	} {
+		t.Run(kind.name, func(t *testing.T) {
+			rejects := []struct {
+				name string
+				ctx  context.Context
+			}{
+				{"no metadata", context.Background()},
+				{"no token", metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-other", "1"))},
+				{"garbage token", withAuth("Bearer x.y.z")},
+				{"expired token", withAuth("Bearer " + expired)},
+			}
+			for _, tc := range rejects {
+				t.Run(tc.name, func(t *testing.T) {
+					called, _, err := runAuth(s, kind.stream, kind.method, tc.ctx)
+					if called {
+						t.Fatal("handler must not run")
+					}
+					if got := status.Code(err); got != codes.Unauthenticated {
+						t.Fatalf("code = %v, want Unauthenticated (err %v)", got, err)
+					}
+				})
+			}
+
+			t.Run("valid token", func(t *testing.T) {
+				called, gotID, err := runAuth(s, kind.stream, kind.method, withAuth("Bearer "+valid))
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if !called {
+					t.Fatal("handler not called")
+				}
+				if gotID != validGUID {
+					t.Fatalf("ClientIDKey = %v, want %s", gotID, validGUID)
+				}
+			})
+
+			t.Run("AuthService is exempt", func(t *testing.T) {
+				called, _, err := runAuth(s, kind.stream, "/srs.AuthService/InitAuth", context.Background())
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if !called {
+					t.Fatal("handler not called for an AuthService method")
+				}
+			})
+		})
+	}
+}
+
+func TestAuthErrorMapping(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		code codes.Code
+		msg  string
+	}{
+		{"insufficient role", fmt.Errorf("%w: 0, required: 3", utils.ErrInsufficientRole), codes.PermissionDenied, ""},
+		{"key load failure", fmt.Errorf("%w: boom", utils.ErrTokenKeys), codes.Internal, "token verification unavailable"},
+		{"expired", errors.New("token is expired"), codes.Unauthenticated, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := authError("/m", tc.err)
+			st, ok := status.FromError(err)
+			if !ok {
+				t.Fatalf("not a status error: %v", err)
+			}
+			if st.Code() != tc.code {
+				t.Fatalf("code = %v, want %v", st.Code(), tc.code)
+			}
+			if tc.msg != "" && st.Message() != tc.msg {
+				t.Fatalf("message = %q, want %q", st.Message(), tc.msg)
+			}
+		})
+	}
+}
+
+// --- SRV-05: Start fails cleanly ---
+
+// newStartTestServer builds a Server ready for Start: token keys in a temp
+// dir, the VoiceControl listener on 127.0.0.1:vcPort with its keypair under
+// keyDir, and a real event bus.
+func newStartTestServer(t *testing.T, mode uint8, vcPort int, keyDir string) *Server {
+	t.Helper()
+	tokenDir := t.TempDir()
+	settings := &state.SettingsState{}
+	settings.Security.Token = state.TokenSettings{
+		Expiration:     3600,
+		PrivateKeyFile: filepath.Join(tokenDir, "priv.pem"),
+		PublicKeyFile:  filepath.Join(tokenDir, "pub.pem"),
+	}
+	settings.VoiceControl = state.VoiceControlSettings{
+		ListenHost:      "127.0.0.1",
+		Port:            vcPort,
+		PrivateKeyFile:  filepath.Join(keyDir, "vc-key.pem"),
+		CertificateFile: filepath.Join(keyDir, "vc-cert.pem"),
+		ServerName:      "localhost",
+	}
+	bus := events.NewEventBus()
+	t.Cleanup(bus.Stop)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	return NewServer(&state.ServerState{}, settings, logger, &state.DistributionState{DistributionMode: mode}, bus)
+}
+
+// occupy holds a TCP listener on a free loopback port until the test ends.
+func occupy(t *testing.T) (net.Listener, string, int) {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	return l, l.Addr().String(), l.Addr().(*net.TCPAddr).Port
+}
+
+// freeAddr returns a loopback address that was free a moment ago.
+func freeAddr(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := l.Addr().String()
+	_ = l.Close()
+	return addr
+}
+
+// isRunningWithin fails the test if IsRunning blocks (the SRV-05 deadlock:
+// Start returned with s.mu still locked).
+func isRunningWithin(t *testing.T, s *Server, d time.Duration) bool {
+	t.Helper()
+	got := make(chan bool, 1)
+	go func() { got <- s.IsRunning() }()
+	select {
+	case v := <-got:
+		return v
+	case <-time.After(d):
+		t.Fatal("IsRunning blocked: Start left s.mu locked")
+		return false
+	}
+}
+
+func assertRebindable(t *testing.T, addr string) {
+	t.Helper()
+	l, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatalf("address %s still held after Start/Stop: %v", addr, err)
+	}
+	_ = l.Close()
+}
+
+func TestStartClientPortOccupied(t *testing.T) {
+	_, addr, _ := occupy(t)
+	s := newStartTestServer(t, state.DistributionModeStandalone, 0, t.TempDir())
+	if err := s.Start(addr, make(chan struct{})); err == nil {
+		t.Fatal("Start on an occupied port succeeded")
+	}
+	if isRunningWithin(t, s, time.Second) {
+		t.Fatal("IsRunning true after a failed Start")
+	}
+}
+
+func TestStartControlPortOccupiedReleasesClientPort(t *testing.T) {
+	_, _, vcPort := occupy(t)
+	clientAddr := freeAddr(t)
+	s := newStartTestServer(t, state.DistributionModeControl, vcPort, t.TempDir())
+	if err := s.Start(clientAddr, make(chan struct{})); err == nil {
+		t.Fatal("Start with the VoiceControl port occupied succeeded")
+	}
+	if isRunningWithin(t, s, time.Second) {
+		t.Fatal("IsRunning true after a failed Start")
+	}
+	assertRebindable(t, clientAddr)
+}
+
+func TestStartControlKeypairFailure(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "regular-file")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	keyDir := filepath.Join(file, "sub") // a directory under a regular file cannot exist
+	vcAddr := freeAddr(t)
+	vcPort := 0
+	if _, p, err := net.SplitHostPort(vcAddr); err == nil {
+		_, _ = fmt.Sscanf(p, "%d", &vcPort)
+	}
+	clientAddr := freeAddr(t)
+	s := newStartTestServer(t, state.DistributionModeControl, vcPort, keyDir)
+
+	err := s.Start(clientAddr, make(chan struct{}))
+	if err == nil {
+		t.Fatal("Start with an unloadable VoiceControl keypair succeeded")
+	}
+	if !strings.Contains(err.Error(), "control server TLS") {
+		t.Fatalf("error should name the control server TLS step, got: %v", err)
+	}
+	if isRunningWithin(t, s, time.Second) {
+		t.Fatal("IsRunning true after a failed Start")
+	}
+	assertRebindable(t, clientAddr)
+	assertRebindable(t, vcAddr)
+}
+
+// Review focus: the admin UI retries Start after a port clash; the retry must
+// neither hang nor fail to bind.
+func TestStartRetryAfterFailure(t *testing.T) {
+	occupier, addr, _ := occupy(t)
+	s := newStartTestServer(t, state.DistributionModeStandalone, 0, t.TempDir())
+	if err := s.Start(addr, make(chan struct{})); err == nil {
+		t.Fatal("Start on an occupied port succeeded")
+	}
+	_ = occupier.Close()
+
+	if err := s.Start(addr, make(chan struct{})); err != nil {
+		t.Fatalf("retry Start: %v", err)
+	}
+	if !isRunningWithin(t, s, time.Second) {
+		t.Fatal("IsRunning false after a successful retry")
+	}
+	if err := s.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	assertRebindable(t, addr)
+}
+
+func TestStartStopReleasesPort(t *testing.T) {
+	addr := freeAddr(t)
+	s := newStartTestServer(t, state.DistributionModeStandalone, 0, t.TempDir())
+	if err := s.Start(addr, make(chan struct{})); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !isRunningWithin(t, s, time.Second) {
+		t.Fatal("IsRunning false after Start")
+	}
+	if err := s.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	assertRebindable(t, addr)
+}
+
+// Review follow-up: when Serve fails with a non-ErrServerStopped error, the
+// serve goroutine clears isRunning. A later Stop must still tear everything
+// down (gRPC servers, listeners, the SRS server and the AuthServer's pending-
+// login sweeper) instead of returning early and using up stopOnce.
+func TestStopAfterServeFailureStillTearsDown(t *testing.T) {
+	addr := freeAddr(t)
+	s := newStartTestServer(t, state.DistributionModeStandalone, 0, t.TempDir())
+	if err := s.Start(addr, make(chan struct{})); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	// Simulate the serve goroutine's error path.
+	s.mu.Lock()
+	s.isRunning = false
+	s.mu.Unlock()
+
+	if err := s.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	assertRebindable(t, addr)
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.clientGrpcServer != nil || s.clientListener != nil {
+		t.Fatal("Stop left the client gRPC server or listener in place")
 	}
 }

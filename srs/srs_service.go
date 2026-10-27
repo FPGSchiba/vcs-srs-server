@@ -587,7 +587,6 @@ func (s *SimpleRadioServer) buildServerUpdate(event events.Event) *pb.ServerUpda
 				},
 			}
 		}
-		return nil
 
 	case events.RadioClientsChanged:
 		re, ok := event.Data.(events.RadioChangeEvent)

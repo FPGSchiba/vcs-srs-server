@@ -39,20 +39,21 @@ const (
 )
 
 type Server struct {
-	mu                  sync.RWMutex
-	clientGrpcServer    *grpc.Server
-	controlGrpcServer   *grpc.Server
-	clientListener      net.Listener
-	controlListener     net.Listener
-	logger              *slog.Logger
-	serverState         *state.ServerState
-	settingsState       *state.SettingsState
-	distributionState   *state.DistributionState
-	eventBus            *events.EventBus
-	srsServer           *srs.SimpleRadioServer
-	voiceControlServer  *voiceontrol.VoiceControlServer
-	isRunning           bool
-	stopOnce            sync.Once
+	mu                 sync.RWMutex
+	clientGrpcServer   *grpc.Server
+	controlGrpcServer  *grpc.Server
+	clientListener     net.Listener
+	controlListener    net.Listener
+	logger             *slog.Logger
+	serverState        *state.ServerState
+	settingsState      *state.SettingsState
+	distributionState  *state.DistributionState
+	eventBus           *events.EventBus
+	srsServer          *srs.SimpleRadioServer
+	authServer         *srs.AuthServer
+	voiceControlServer *voiceontrol.VoiceControlServer
+	isRunning          bool
+	stopOnce           sync.Once
 }
 
 func NewServer(serverState *state.ServerState, settingsState *state.SettingsState, logger *slog.Logger, distributionState *state.DistributionState, eventBus *events.EventBus) *Server {
@@ -79,9 +80,40 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 	var err error
 
 	s.mu.Lock()
+	// fail undoes everything Start has done so far and releases the lock.
+	// The caller (StartControlServer) is not fatal on an error: it logs,
+	// records ControlStatus.Error, and lets the process stay up, so the admin
+	// UI can retry. A half-started server must therefore not keep s.mu (every
+	// later IsRunning would block forever) or the port(s) it already bound (a
+	// corrected retry would hit "address already in use"). Every fallible step
+	// runs before anything that starts a goroutine, so there is nothing else
+	// to stop here.
+	fail := func(err error) error {
+		if s.clientListener != nil {
+			_ = s.clientListener.Close()
+			s.clientListener = nil
+		}
+		if s.controlListener != nil {
+			_ = s.controlListener.Close()
+			s.controlListener = nil
+		}
+		// Neither gRPC server has served yet; Stop just releases their
+		// internal resources.
+		if s.clientGrpcServer != nil {
+			s.clientGrpcServer.Stop()
+			s.clientGrpcServer = nil
+		}
+		if s.controlGrpcServer != nil {
+			s.controlGrpcServer.Stop()
+			s.controlGrpcServer = nil
+		}
+		s.mu.Unlock()
+		return err
+	}
+
 	s.clientListener, err = net.Listen("tcp", address)
 	if err != nil {
-		return fmt.Errorf("failed to listen: %v", err)
+		return fail(fmt.Errorf("failed to listen: %v", err))
 	}
 
 	if s.isControlServer() {
@@ -90,7 +122,7 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 		s.settingsState.RUnlock()
 		s.controlListener, err = net.Listen("tcp", voiceControlAddr)
 		if err != nil {
-			return fmt.Errorf("failed to listen on control server address: %v", err)
+			return fail(fmt.Errorf("failed to listen on control server address: %v", err))
 		}
 	}
 
@@ -100,33 +132,19 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 
 	clientCreds, err := clientTransportCredentials(clientTLS, s.logger)
 	if err != nil {
-		// The caller (StartControlServer) is not fatal on this error: it logs,
-		// records ControlStatus.Error, and lets the process stay up. That
-		// means a half-started server must not keep the port(s) it already
-		// bound -- otherwise a corrected retry hits "address already in use"
-		// with nothing in the logs explaining why. Close what we bound and
-		// clear the fields so a later Start rebinds cleanly.
-		if s.clientListener != nil {
-			_ = s.clientListener.Close()
-			s.clientListener = nil
-		}
-		if s.controlListener != nil {
-			_ = s.controlListener.Close()
-			s.controlListener = nil
-		}
-		s.mu.Unlock()
-		return fmt.Errorf("client TLS: %w", err)
+		return fail(fmt.Errorf("client TLS: %w", err))
 	}
 
 	clientOpts := []grpc.ServerOption{
-		grpc.ChainUnaryInterceptor(s.loggingInterceptor, s.authInterceptor),
-		grpc.ChainStreamInterceptor(s.authStreamInterceptor),
+		// Recovery is first so it is outermost and covers every later interceptor.
+		grpc.ChainUnaryInterceptor(s.recoveryUnaryInterceptor, s.loggingInterceptor, s.authInterceptor),
+		grpc.ChainStreamInterceptor(s.recoveryStreamInterceptor, s.authStreamInterceptor),
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
 			MinTime:             60 * time.Second, // allow pings every 60s
 			PermitWithoutStream: true,
 		}),
 		grpc.KeepaliveParams(keepalive.ServerParameters{
-			Time:    60 * time.Second, // server sends pings every 30s if idle
+			Time:    60 * time.Second, // server pings an idle connection every 60s
 			Timeout: 10 * time.Second, // wait 10s for ping ack
 		}),
 	}
@@ -137,17 +155,23 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 	s.clientGrpcServer = grpc.NewServer(clientOpts...)
 
 	controlServer := voiceontrol.NewVoiceControlServer(s.serverState, s.settingsState, s.eventBus, s.logger)
+
+	if s.isControlServer() {
+		if err := s.initControlServer(controlServer); err != nil {
+			return fail(fmt.Errorf("control server TLS: %w", err))
+		}
+	}
+
+	// Nothing below may fail: NewSimpleRadioServer and NewAuthServer start
+	// goroutines that fail() would not stop.
 	s.voiceControlServer = controlServer
 
 	srsServer := srs.NewSimpleRadioServer(s.serverState, s.settingsState, s.logger, s.eventBus, controlServer)
 	s.srsServer = srsServer
 	authServer := srs.NewAuthServer(s.serverState, s.settingsState, s.logger, s.distributionState, s.eventBus)
+	s.authServer = authServer
 	srspb.RegisterSRSServiceServer(s.clientGrpcServer, srsServer)
 	srspb.RegisterAuthServiceServer(s.clientGrpcServer, authServer)
-
-	if s.isControlServer() {
-		s.initControlServer(controlServer)
-	}
 
 	healthServer := NewFullHealthServer()
 	healthpb.RegisterHealthServer(s.clientGrpcServer, healthServer)
@@ -160,11 +184,16 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 	reflection.Register(s.clientGrpcServer)
 
 	s.isRunning = true
+	// Hand the serve goroutines their server and listener while the lock is
+	// held: Stop nils these fields, and a Stop racing a just-returned Start
+	// would otherwise make the goroutine call Serve on nil.
+	clientSrv, clientLis := s.clientGrpcServer, s.clientListener
+	controlSrv, controlLis := s.controlGrpcServer, s.controlListener
 	s.mu.Unlock()
 
-	go s.serveClient(address)
-	if s.isControlServer() {
-		go s.serveControl()
+	go s.serveClient(address, clientSrv, clientLis)
+	if controlSrv != nil {
+		go s.serveControl(controlSrv, controlLis)
 	}
 
 	go s.handleShutdown(stopChan)
@@ -234,7 +263,10 @@ func (c handshakeLoggingCreds) Clone() credentials.TransportCredentials {
 	return handshakeLoggingCreds{c.TransportCredentials.Clone(), c.logger}
 }
 
-func (s *Server) initControlServer(controlServer voicecontrolpb.VoiceControlServiceServer) {
+// initControlServer builds the VoiceControl gRPC server. It returns the
+// keypair load error instead of leaving controlGrpcServer nil, which Start
+// and serveControl would then dereference.
+func (s *Server) initControlServer(controlServer voicecontrolpb.VoiceControlServiceServer) error {
 	s.settingsState.RLock()
 	privateKeyFileName := s.settingsState.VoiceControl.PrivateKeyFile
 	certificateFileName := s.settingsState.VoiceControl.CertificateFile
@@ -242,12 +274,12 @@ func (s *Server) initControlServer(controlServer voicecontrolpb.VoiceControlServ
 	s.settingsState.RUnlock()
 	cert, _, err := voiceontrol.LoadOrGenerateKeyPair(privateKeyFileName, certificateFileName, serverName)
 	if err != nil {
-		s.logger.Error("Failed to load TLS certificate for control server", "error", err)
-		return
+		return err
 	}
 	s.controlGrpcServer = grpc.NewServer(
 		grpc.Creds(credentials.NewServerTLSFromCert(cert)),
-		grpc.UnaryInterceptor(s.loggingInterceptor),
+		grpc.ChainUnaryInterceptor(s.recoveryUnaryInterceptor, s.loggingInterceptor),
+		grpc.ChainStreamInterceptor(s.recoveryStreamInterceptor),
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
 			MinTime:             10 * time.Second, // allow pings every 10s
 			PermitWithoutStream: true,
@@ -259,6 +291,7 @@ func (s *Server) initControlServer(controlServer voicecontrolpb.VoiceControlServ
 	)
 	voicecontrolpb.RegisterVoiceControlServiceServer(s.controlGrpcServer, controlServer)
 	reflection.Register(s.controlGrpcServer)
+	return nil
 }
 
 func (s *Server) monitorHealth(
@@ -290,9 +323,9 @@ func (s *Server) monitorHealth(
 	}
 }
 
-func (s *Server) serveClient(address string) {
+func (s *Server) serveClient(address string, srv *grpc.Server, lis net.Listener) {
 	s.logger.Info("Starting VCS gRPC server", "address", address)
-	if err := s.clientGrpcServer.Serve(s.clientListener); err != nil {
+	if err := srv.Serve(lis); err != nil {
 		if !errors.Is(err, grpc.ErrServerStopped) {
 			s.logger.Error("gRPC server error", "error", err)
 		}
@@ -302,12 +335,12 @@ func (s *Server) serveClient(address string) {
 	}
 }
 
-func (s *Server) serveControl() {
+func (s *Server) serveControl(srv *grpc.Server, lis net.Listener) {
 	s.settingsState.RLock()
 	addr := fmt.Sprintf("%s:%d", s.settingsState.VoiceControl.ListenHost, s.settingsState.VoiceControl.Port)
 	s.settingsState.RUnlock()
 	s.logger.Info("Starting Control gRPC server", "address", addr)
-	if err := s.controlGrpcServer.Serve(s.controlListener); err != nil {
+	if err := srv.Serve(lis); err != nil {
 		if !errors.Is(err, grpc.ErrServerStopped) {
 			s.logger.Error("gRPC server error", "error", err)
 		}
@@ -330,32 +363,50 @@ func (s *Server) Stop() error {
 	var stopErr error
 
 	s.stopOnce.Do(func() {
-		if !s.IsRunning() {
-			return
-		}
+		// No early return on !isRunning: a serve goroutine whose Serve failed
+		// clears isRunning, and the servers, listeners and the AuthServer's
+		// pending-login sweeper still need releasing. Every step is nil-safe.
+		//
+		// Copy the fields out and clear them under s.mu (Start and fail()
+		// write them under the same lock), then do the blocking stops outside
+		// it so a concurrent IsRunning is never held up by GracefulStop.
 		s.mu.Lock()
 		s.isRunning = false
+		srsServer, authServer := s.srsServer, s.authServer
+		clientSrv, controlSrv := s.clientGrpcServer, s.controlGrpcServer
+		clientLis, controlLis := s.clientListener, s.controlListener
+		s.clientGrpcServer, s.controlGrpcServer = nil, nil
+		s.clientListener, s.controlListener = nil, nil
 		s.mu.Unlock()
 
 		s.logger.Info("Stopping gRPC server")
 
-		if s.srsServer != nil {
-			s.srsServer.Stop()
+		if srsServer != nil {
+			srsServer.Stop()
+		}
+		if authServer != nil {
+			authServer.Stop()
 		}
 
 		// GracefulStop will automatically close the clientListener
-		if s.clientGrpcServer != nil {
-			s.clientGrpcServer.GracefulStop()
-			s.clientGrpcServer = nil
+		if clientSrv != nil {
+			clientSrv.GracefulStop()
+		}
+		if controlSrv != nil {
+			controlSrv.GracefulStop()
 		}
 
-		if s.controlGrpcServer != nil {
-			s.controlGrpcServer.GracefulStop()
-			s.controlGrpcServer = nil
+		// GracefulStop only closes a listener that Serve has already
+		// registered. If Stop wins the race against a just-started serve
+		// goroutine, that goroutine's Serve closes the listener only later,
+		// after Stop has returned, so a caller rebinding the port right away
+		// fails. Close them here as well; a second Close is harmless.
+		if clientLis != nil {
+			_ = clientLis.Close()
 		}
-
-		s.clientListener = nil // Just clear the reference, GracefulStop closes it
-		s.controlListener = nil
+		if controlLis != nil {
+			_ = controlLis.Close()
+		}
 	})
 
 	return stopErr
@@ -394,10 +445,15 @@ func (s *Server) loggingInterceptor(ctx context.Context, req interface{}, info *
 	return resp, err
 }
 
-func (s *Server) authInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-	elements := strings.Split(info.FullMethod, "/")
+// authenticate validates the bearer token for fullMethod and returns a context
+// carrying the client GUID, or a gRPC status error. AuthService and
+// VoiceControlService are exempt and get ctx back unchanged. Both the unary and
+// the stream interceptor go through here so they cannot drift apart again.
+// SV1 adds its unknown-GUID check (SRV-06) here.
+func (s *Server) authenticate(ctx context.Context, fullMethod string) (context.Context, error) {
+	elements := strings.Split(fullMethod, "/")
 	if len(elements) < 3 {
-		return nil, status.Errorf(codes.Unauthenticated, "malformed method path: %s", info.FullMethod)
+		return nil, status.Errorf(codes.Unauthenticated, "malformed method path: %s", fullMethod)
 	}
 	fullServiceName := elements[1]
 	pathName := elements[2]
@@ -409,19 +465,19 @@ func (s *Server) authInterceptor(ctx context.Context, req interface{}, info *grp
 	serviceName := parts[len(parts)-1]
 
 	if serviceName == "AuthService" || serviceName == "VoiceControlService" {
-		return handler(ctx, req)
+		return ctx, nil
 	}
 
-	s.logger.Debug("Authentication required for service", "service", serviceName, "method", info.FullMethod)
+	s.logger.Debug("Authentication required for service", "service", serviceName, "method", fullMethod)
 
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
-		return nil, fmt.Errorf("unauthenticated request to %s: missing metadata", info.FullMethod)
+		return nil, status.Errorf(codes.Unauthenticated, "missing metadata for %s", fullMethod)
 	}
 
 	tokens := md.Get("authorization")
 	if len(tokens) == 0 {
-		return nil, fmt.Errorf("unauthenticated request to %s: missing authorization token", info.FullMethod)
+		return nil, status.Errorf(codes.Unauthenticated, "missing authorization token for %s", fullMethod)
 	}
 	token := strings.TrimPrefix(tokens[0], "Bearer ")
 
@@ -431,15 +487,38 @@ func (s *Server) authInterceptor(ctx context.Context, req interface{}, info *grp
 	claims, err := utils.GetTokenClaims(token, minRole, s.settingsState.Security.Token.PrivateKeyFile, s.settingsState.Security.Token.PublicKeyFile)
 	s.settingsState.RUnlock()
 	if err != nil {
-		s.logger.Error("Authentication error", "method", info.FullMethod, "error", err)
-		return nil, fmt.Errorf("authentication error for %s: %v", info.FullMethod, err)
+		s.logger.Error("Authentication error", "method", fullMethod, "error", err)
+		return nil, authError(fullMethod, err)
 	}
-
 	if claims == nil {
-		return nil, fmt.Errorf("unauthenticated request to %s", info.FullMethod)
+		return nil, status.Errorf(codes.Unauthenticated, "authentication error for %s: no claims", fullMethod)
 	}
 
-	ctx = context.WithValue(ctx, utils.ClientIDKey, claims.ClientGuid)
+	return context.WithValue(ctx, utils.ClientIDKey, claims.ClientGuid), nil
+}
+
+// authError maps a utils.GetTokenClaims error to a gRPC status error. This is
+// the contract the VCS client reads: Unauthenticated means the session is gone
+// (bad, malformed or expired token), PermissionDenied means the token is valid
+// but its role is too low, Internal means the server could not verify at all.
+func authError(fullMethod string, err error) error {
+	switch {
+	case errors.Is(err, utils.ErrTokenKeys):
+		// The cause is logged by the caller; it names server file paths, so it
+		// stays out of the client-facing message.
+		return status.Error(codes.Internal, "token verification unavailable")
+	case errors.Is(err, utils.ErrInsufficientRole):
+		return status.Errorf(codes.PermissionDenied, "insufficient role for %s: %v", fullMethod, err)
+	default:
+		return status.Errorf(codes.Unauthenticated, "authentication error for %s: %v", fullMethod, err)
+	}
+}
+
+func (s *Server) authInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	ctx, err := s.authenticate(ctx, info.FullMethod)
+	if err != nil {
+		return nil, err
+	}
 	return handler(ctx, req)
 }
 
@@ -452,50 +531,12 @@ type wrappedStream struct {
 func (w *wrappedStream) Context() context.Context { return w.ctx }
 
 func (s *Server) authStreamInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-	elements := strings.Split(info.FullMethod, "/")
-	if len(elements) < 3 {
-		return status.Errorf(codes.Unauthenticated, "malformed method path: %s", info.FullMethod)
+	ctx, err := s.authenticate(ss.Context(), info.FullMethod)
+	if err != nil {
+		return err
 	}
-	fullServiceName := elements[1]
-	pathName := elements[2]
-
-	parts := strings.Split(fullServiceName, ".")
-	if len(parts) < 2 {
-		return status.Errorf(codes.Unauthenticated, "malformed service name: %s", fullServiceName)
-	}
-	serviceName := parts[len(parts)-1]
-
-	if serviceName == "AuthService" || serviceName == "VoiceControlService" {
+	if ctx == ss.Context() {
 		return handler(srv, ss)
 	}
-
-	s.logger.Debug("Authentication required for streaming", "service", serviceName, "method", info.FullMethod)
-
-	md, ok := metadata.FromIncomingContext(ss.Context())
-	if !ok {
-		return status.Errorf(codes.Unauthenticated, "missing metadata for %s", info.FullMethod)
-	}
-
-	tokens := md.Get("authorization")
-	if len(tokens) == 0 {
-		return status.Errorf(codes.Unauthenticated, "missing authorization token for %s", info.FullMethod)
-	}
-	token := strings.TrimPrefix(tokens[0], "Bearer ")
-
-	minRole, _ := utils.GetMinimumRoleForMethod(pathName)
-
-	s.settingsState.RLock()
-	claims, err := utils.GetTokenClaims(token, minRole, s.settingsState.Security.Token.PrivateKeyFile, s.settingsState.Security.Token.PublicKeyFile)
-	s.settingsState.RUnlock()
-	if err != nil {
-		s.logger.Error("Stream authentication error", "method", info.FullMethod, "error", err)
-		return status.Errorf(codes.Unauthenticated, "authentication error for %s: %v", info.FullMethod, err)
-	}
-
-	if claims == nil {
-		return status.Errorf(codes.Unauthenticated, "unauthenticated streaming request to %s", info.FullMethod)
-	}
-
-	ctx := context.WithValue(ss.Context(), utils.ClientIDKey, claims.ClientGuid)
 	return handler(srv, &wrappedStream{ServerStream: ss, ctx: ctx})
 }
