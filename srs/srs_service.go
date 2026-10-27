@@ -238,62 +238,51 @@ func (s *SimpleRadioServer) UpdateClientInfo(ctx context.Context, req *pb.Client
 		}, nil
 	}
 
-	s.serverState.RLock()
+	// SRV-16: settings are read before serverState is locked, so the two
+	// locks never nest.
+	coalitionExists := s.settingsState.DoesCoalitionExist(req.Coalition)
+
+	// SRV-16: validate every field, then apply all of them, in one critical
+	// section; a failed call changes nothing but LastUpdate (liveness).
+	s.serverState.Lock()
 	client, exists := s.serverState.Clients[clientID]
-	s.serverState.RUnlock()
-	if !exists {
+	if !exists || client == nil {
+		s.serverState.Unlock()
 		s.logger.Error("UpdateClientInfo failed: client not found", "client_id", clientID)
 		return &pb.ServerResponse{
 			Success:      false,
 			ErrorMessage: "Internal error: You may already have been disconnected.",
 		}, nil
 	}
+	client.LastUpdate = s.now() // SRV-01
 
 	var errors []string
-
 	if !checkUsername(req.Name) {
 		s.logger.Warn("UpdateClientInfo failed: invalid client name", "client_id", clientID, "client_name", req.Name)
 		errors = append(errors, "Invalid username. It must be between 1 and 32 characters long.")
-	} else {
-		s.serverState.Lock()
-		client.Name = req.Name
-		s.serverState.Unlock()
 	}
-
 	if !checkUnitId(req.UnitId) {
 		s.logger.Warn("UpdateClientInfo failed: invalid unit ID", "client_id", clientID, "unit_id", req.UnitId)
 		errors = append(errors, "Invalid unit ID. It must be 2 to 4 uppercase alphanumeric characters.")
-	} else {
-		s.serverState.Lock()
-		client.UnitId = req.UnitId
-		s.serverState.Unlock()
 	}
-
-	if !s.settingsState.DoesCoalitionExist(req.Coalition) {
+	switch {
+	case req.Coalition == client.Coalition:
+		// Unchanged: always accepted, even if an admin has since removed it.
+	case client.Role == utils.GuestRole:
+		// A guest's coalition is the one whose password it logged in with.
+		s.logger.Warn("UpdateClientInfo failed: guest cannot change coalition", "client_id", clientID, "coalition", req.Coalition)
+		errors = append(errors, "Guests cannot change coalition here: log in again with that coalition's password.")
+	case !coalitionExists:
 		s.logger.Warn("UpdateClientInfo failed: invalid coalition", "client_id", clientID, "coalition", req.Coalition)
 		errors = append(errors, "Coalition not found, please select an existing coalition.")
-	} else {
-		s.serverState.Lock()
-		client.Coalition = req.Coalition
-		s.serverState.Unlock()
 	}
-
 	if !canSwapRoles(client, uint8(req.RoleId)) {
 		s.logger.Warn("UpdateClientInfo failed: Client cannot swap roles", "client_id", clientID, "role_id", req.RoleId)
 		errors = append(errors, "You cannot swap roles. Please contact an administrator if you need a different role.")
-	} else {
-		s.serverState.Lock()
-		client.Role = uint8(req.RoleId)
-		s.serverState.Unlock()
 	}
 
-	s.serverState.Lock()
-	client.LastUpdate = s.now()
-	s.serverState.Unlock()
-
-	s.logger.Info("Updated client info", "client_id", clientID, "client_name", client.Name)
-
 	if len(errors) > 0 {
+		s.serverState.Unlock()
 		s.logger.Warn("UpdateClientInfo completed with errors", "client_id", clientID, "errors", errors)
 		return &pb.ServerResponse{
 			Success:      false,
@@ -301,12 +290,14 @@ func (s *SimpleRadioServer) UpdateClientInfo(ctx context.Context, req *pb.Client
 		}, nil
 	}
 
-	s.serverState.RLock()
-	clientsSnap := make(map[uuid.UUID]*state.ClientState, len(s.serverState.Clients))
-	for k, v := range s.serverState.Clients {
-		clientsSnap[k] = v
-	}
-	s.serverState.RUnlock()
+	client.Name = req.Name
+	client.UnitId = req.UnitId
+	client.Coalition = req.Coalition
+	client.Role = uint8(req.RoleId)
+	clientsSnap := s.serverState.CloneClientsLocked() // SRV-09
+	s.serverState.Unlock()
+
+	s.logger.Info("Updated client info", "client_id", clientID, "client_name", req.Name)
 	s.eventBus.Publish(events.Event{
 		Name: events.ClientsChanged,
 		Data: events.ClientChangeEvent{Type: events.ClientInfoUpdated, ClientID: clientID, Clients: clientsSnap},

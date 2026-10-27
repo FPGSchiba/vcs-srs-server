@@ -103,24 +103,18 @@ func ptrInt64(v int64) *int64 {
 	return &v
 }
 
+// canSwapRoles reports whether client may set its informational role to
+// roleId: keeping the current role is always allowed (a guest's no-op
+// included), nobody may become a guest, and otherwise only a downgrade is
+// allowed. The JWT's role, not this one, governs authorisation.
 func canSwapRoles(client *state.ClientState, roleId uint8) bool {
-	// Guests cannot swap roles (Maybe this should be configurable in the future, so guests can swap roles)
+	if roleId == client.Role {
+		return true
+	}
 	if roleId == utils.GuestRole {
 		return false
 	}
-
-	// If the client has a higher role than the requested role, they can swap
-	if client.Role > roleId {
-		return true
-	}
-
-	// If the client has the requested role, they can swap
-	if client.Role == roleId {
-		return true
-	}
-
-	// If the client has a lower role than the requested role, they cannot swap
-	return false
+	return client.Role > roleId
 }
 
 func convertRadioInfo(radio *pb.RadioInfo) *state.RadioState {
