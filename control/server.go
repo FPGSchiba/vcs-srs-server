@@ -184,11 +184,16 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 	reflection.Register(s.clientGrpcServer)
 
 	s.isRunning = true
+	// Hand the serve goroutines their server and listener while the lock is
+	// held: Stop nils these fields, and a Stop racing a just-returned Start
+	// would otherwise make the goroutine call Serve on nil.
+	clientSrv, clientLis := s.clientGrpcServer, s.clientListener
+	controlSrv, controlLis := s.controlGrpcServer, s.controlListener
 	s.mu.Unlock()
 
-	go s.serveClient(address)
-	if s.isControlServer() {
-		go s.serveControl()
+	go s.serveClient(address, clientSrv, clientLis)
+	if controlSrv != nil {
+		go s.serveControl(controlSrv, controlLis)
 	}
 
 	go s.handleShutdown(stopChan)
@@ -318,9 +323,9 @@ func (s *Server) monitorHealth(
 	}
 }
 
-func (s *Server) serveClient(address string) {
+func (s *Server) serveClient(address string, srv *grpc.Server, lis net.Listener) {
 	s.logger.Info("Starting VCS gRPC server", "address", address)
-	if err := s.clientGrpcServer.Serve(s.clientListener); err != nil {
+	if err := srv.Serve(lis); err != nil {
 		if !errors.Is(err, grpc.ErrServerStopped) {
 			s.logger.Error("gRPC server error", "error", err)
 		}
@@ -330,12 +335,12 @@ func (s *Server) serveClient(address string) {
 	}
 }
 
-func (s *Server) serveControl() {
+func (s *Server) serveControl(srv *grpc.Server, lis net.Listener) {
 	s.settingsState.RLock()
 	addr := fmt.Sprintf("%s:%d", s.settingsState.VoiceControl.ListenHost, s.settingsState.VoiceControl.Port)
 	s.settingsState.RUnlock()
 	s.logger.Info("Starting Control gRPC server", "address", addr)
-	if err := s.controlGrpcServer.Serve(s.controlListener); err != nil {
+	if err := srv.Serve(lis); err != nil {
 		if !errors.Is(err, grpc.ErrServerStopped) {
 			s.logger.Error("gRPC server error", "error", err)
 		}
@@ -385,8 +390,19 @@ func (s *Server) Stop() error {
 			s.controlGrpcServer = nil
 		}
 
-		s.clientListener = nil // Just clear the reference, GracefulStop closes it
-		s.controlListener = nil
+		// GracefulStop only closes a listener that Serve has already
+		// registered. If Stop wins the race against a just-started serve
+		// goroutine, that goroutine's Serve closes the listener only later,
+		// after Stop has returned, so a caller rebinding the port right away
+		// fails. Close them here as well; a second Close is harmless.
+		if s.clientListener != nil {
+			_ = s.clientListener.Close()
+			s.clientListener = nil
+		}
+		if s.controlListener != nil {
+			_ = s.controlListener.Close()
+			s.controlListener = nil
+		}
 	})
 
 	return stopErr
