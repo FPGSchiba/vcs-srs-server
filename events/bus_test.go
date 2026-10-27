@@ -115,3 +115,219 @@ func TestEventBusConcurrentSubscribePublish(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// waitFor polls cond every 5ms until it holds or d elapses.
+func waitFor(t *testing.T, d time.Duration, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(d)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out after %v waiting for %s", d, what)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// TestSubscribeNamesFilters verifies a filtered subscription receives only its names.
+func TestSubscribeNamesFilters(t *testing.T) {
+	eb := NewEventBus()
+	defer eb.Stop()
+
+	sub := eb.SubscribeNames(8, "a", "b")
+	defer sub.Close()
+	eb.Publish(Event{Name: "a"})
+	eb.Publish(Event{Name: "c"})
+	eb.Publish(Event{Name: "b"})
+
+	for _, want := range []string{"a", "b"} {
+		select {
+		case evt := <-sub.C:
+			if evt.Name != want {
+				t.Fatalf("expected %s, got %s", want, evt.Name)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for %s", want)
+		}
+	}
+	select {
+	case evt := <-sub.C:
+		t.Fatalf("unexpected extra event %q", evt.Name)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// TestSubscribeNamesWildcardNoDuplicates verifies "*" mixed with names never delivers twice.
+func TestSubscribeNamesWildcardNoDuplicates(t *testing.T) {
+	eb := NewEventBus()
+	defer eb.Stop()
+
+	sub := eb.SubscribeNames(8, "*", "a", "a")
+	defer sub.Close()
+	eb.Publish(Event{Name: "a"})
+
+	select {
+	case <-sub.C:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for event")
+	}
+	select {
+	case evt := <-sub.C:
+		t.Fatalf("event delivered twice: %q", evt.Name)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// TestSubscriptionOverflow verifies overflow fires once, counts drops and delivers nothing afterwards.
+func TestSubscriptionOverflow(t *testing.T) {
+	eb := NewEventBus()
+	defer eb.Stop()
+
+	sub := eb.SubscribeNames(2, "a")
+	defer sub.Close()
+	for i := 0; i < 5; i++ {
+		eb.Publish(Event{Name: "a"})
+	}
+	select {
+	case <-sub.Overflow():
+	case <-time.After(time.Second):
+		t.Fatal("Overflow() not closed")
+	}
+	waitFor(t, time.Second, "Dropped()==3", func() bool { return sub.Dropped() == 3 })
+	if n := len(sub.C); n != 2 {
+		t.Fatalf("len(C) = %d, want 2", n)
+	}
+	if got := eb.Stats().Overflows; got != 1 {
+		t.Fatalf("Stats().Overflows = %d, want 1", got)
+	}
+	eb.Publish(Event{Name: "a"})
+	waitFor(t, time.Second, "Dropped()==4", func() bool { return sub.Dropped() == 4 })
+	if n := len(sub.C); n != 2 {
+		t.Fatalf("len(C) after overflow = %d, want 2", n)
+	}
+	if got := eb.Stats().Overflows; got != 1 {
+		t.Fatalf("Stats().Overflows after more drops = %d, want 1", got)
+	}
+}
+
+// TestLegacySubscribeDropsAndCounts verifies legacy subscriptions drop and count.
+func TestLegacySubscribeDropsAndCounts(t *testing.T) {
+	eb := NewEventBus()
+	defer eb.Stop()
+
+	ch := eb.Subscribe("x")
+	for i := 0; i < 70; i++ {
+		eb.Publish(Event{Name: "x"})
+	}
+	waitFor(t, time.Second, "LegacyDropped==6", func() bool { return eb.Stats().LegacyDropped == 6 })
+	if n := len(ch); n != 64 {
+		t.Fatalf("len(ch) = %d, want 64", n)
+	}
+}
+
+// TestPublishWaitsForQueueSpace verifies a state event waits on a full queue, then is delivered.
+func TestPublishWaitsForQueueSpace(t *testing.T) {
+	eb := newEventBus(4)
+	t.Cleanup(eb.Stop)
+
+	ch := eb.Subscribe("last")
+	for i := 0; i < 4; i++ {
+		eb.Publish(Event{Name: "fill"})
+	}
+	done := make(chan struct{})
+	go func() {
+		eb.Publish(Event{Name: "last"})
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("Publish returned on a full queue; want it to wait")
+	case <-time.After(100 * time.Millisecond):
+	}
+	go eb.startPublisher()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Publish still waiting after the dispatcher started")
+	}
+	select {
+	case evt := <-ch:
+		if evt.Name != "last" {
+			t.Fatalf("expected last, got %s", evt.Name)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("waiting event was never delivered")
+	}
+}
+
+// TestPublishLogEntryDropsWhenFull verifies a LogEntry on a full queue is dropped and counted.
+func TestPublishLogEntryDropsWhenFull(t *testing.T) {
+	eb := newEventBus(1)
+	t.Cleanup(eb.Stop)
+
+	eb.Publish(Event{Name: "fill"})
+	done := make(chan struct{})
+	go func() {
+		eb.Publish(Event{Name: LogEntry})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("LogEntry Publish blocked on a full queue")
+	}
+	if got := eb.Stats().LogDropped; got != 1 {
+		t.Fatalf("Stats().LogDropped = %d, want 1", got)
+	}
+}
+
+// TestPublishWaitingReturnsOnStop verifies a publisher waiting for queue space returns on Stop.
+func TestPublishWaitingReturnsOnStop(t *testing.T) {
+	eb := newEventBus(1)
+	eb.Publish(Event{Name: "fill"})
+	done := make(chan struct{})
+	go func() {
+		eb.Publish(Event{Name: "fill"})
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("Publish returned on a full queue; want it to wait")
+	case <-time.After(50 * time.Millisecond):
+	}
+	eb.Stop()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("waiting Publish did not return after Stop")
+	}
+}
+
+// TestSubscriptionCloseIdempotent verifies Close is idempotent, including after Stop.
+func TestSubscriptionCloseIdempotent(t *testing.T) {
+	eb := NewEventBus()
+	defer eb.Stop()
+
+	sub := eb.SubscribeNames(4, "a")
+	sub.Close()
+	sub.Close()
+	select {
+	case _, ok := <-sub.C:
+		if ok {
+			t.Fatal("C delivered an event after Close")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("C not closed after Close")
+	}
+
+	sub2 := eb.SubscribeNames(4, "a")
+	eb.Stop()
+	select {
+	case _, ok := <-sub2.C:
+		if ok {
+			t.Fatal("C delivered an event after Stop")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("C not closed after Stop")
+	}
+	sub2.Close()
+}
