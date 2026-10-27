@@ -172,3 +172,24 @@ func TestStopDuringKickDoesNotDeadlock(t *testing.T) {
 	}
 	waitFor(t, 2*time.Second, func() bool { _, ok := s.GetClientIPFromId(id); return !ok }, "kick applied")
 }
+
+// A LEFT delta can reach the kick handler (DisconnectClient) while Listen is
+// still publishing the control client; the handler must read the client
+// under the server lock. Run with -race.
+func TestEarlyKickDoesNotRaceControlClientPublish(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		f := &recordingControl{}
+		hook := serveRecordingControl(t, f)
+		s := newDistributedServer("127.0.0.1", hook)
+		id := uuid.New()
+		s.clients[id] = &Client{Addr: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 4000}, LastSeen: time.Now()}
+		// Queued before the stream opens, so it is the first thing applied.
+		f.out <- &pb.ControlMessage{Command: &pb.ControlMessage_KickClient{KickClient: &pb.KickClientRequest{ClientId: id.String()}}}
+		stop := make(chan struct{})
+		errc := listenAsync(s, "127.0.0.1:0", stop)
+		waitFor(t, 2*time.Second, func() bool { _, ok := s.GetClientIPFromId(id); return !ok }, "early kick applied")
+		close(stop)
+		_ = s.Stop()
+		<-errc
+	}
+}

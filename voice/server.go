@@ -253,12 +253,19 @@ func (v *Server) connectControl(listenPort int) error {
 	if hook != nil {
 		hook(c)
 	}
-	if err := c.ConnectControlServer(listenPort); err != nil {
-		return err
-	}
+	// Publish the client before ConnectControlServer starts its supervisor:
+	// the kick handler (DisconnectClient) runs on that supervisor and reads
+	// v.controlClient, and starting the goroutine after this write is what
+	// orders the two.
 	v.Lock()
 	v.controlClient = c
 	v.Unlock()
+	if err := c.ConnectControlServer(listenPort); err != nil {
+		v.Lock()
+		v.controlClient = nil
+		v.Unlock()
+		return err
+	}
 	return nil
 }
 
