@@ -36,8 +36,11 @@ type SimpleRadioServer struct {
 	// detachedAt records when a client's stream ended from the client side;
 	// the 120s reconnect grace runs from here. Guarded by mu.
 	detachedAt map[uuid.UUID]time.Time
-	stopChan      chan struct{}
-	stopOnce      sync.Once
+	// dropper drops a removed client's voice binding (local server and
+	// remote voice nodes). May be nil.
+	dropper  VoiceSessionDropper
+	stopChan chan struct{}
+	stopOnce sync.Once
 	// now is the server's clock (time.Now outside tests).
 	now func() time.Time
 }
@@ -50,13 +53,14 @@ func clientIDFromContext(ctx context.Context) (uuid.UUID, error) {
 	return uuid.Parse(rawID)
 }
 
-func NewSimpleRadioServer(serverState *state.ServerState, settingsState *state.SettingsState, logger *slog.Logger, bus *events.EventBus, voiceRegistry VoiceAddressProvider) *SimpleRadioServer {
+func NewSimpleRadioServer(serverState *state.ServerState, settingsState *state.SettingsState, logger *slog.Logger, bus *events.EventBus, voiceRegistry VoiceAddressProvider, dropper VoiceSessionDropper) *SimpleRadioServer {
 	server := SimpleRadioServer{
 		serverState:   serverState,
 		settingsState: settingsState,
 		eventBus:      bus,
 		logger:        logger,
 		voiceRegistry: voiceRegistry,
+		dropper:       dropper,
 		mu:            sync.Mutex{},
 		streams:       make(map[uuid.UUID]*subscription),
 		detachedAt:    make(map[uuid.UUID]time.Time),
@@ -207,32 +211,14 @@ func (s *SimpleRadioServer) Disconnect(ctx context.Context, _ *pb.Empty) (*pb.Se
 			ErrorMessage: "Internal error, please try logging in again.",
 		}, nil
 	}
-	s.serverState.RLock()
-	client, exists := s.serverState.Clients[clientID]
-	_, existsRadio := s.serverState.RadioClients[clientID]
-	s.serverState.RUnlock()
-
-	if !exists || !existsRadio {
+	s.logger.Info("Disconnecting client", "client_id", clientID)
+	if !s.RemoveClient(clientID, ReasonDisconnect, nil) {
 		s.logger.Error("Disconnect failed: client not found", "client_id", clientID)
-		s.cleanupClientState(clientID) // Make sure no single radio or client state is left dangling
 		return &pb.ServerResponse{
 			Success:      false,
 			ErrorMessage: "Internal error: You may already have been disconnected.",
 		}, nil
 	}
-
-	s.logger.Info("Disconnecting client", "client_id", clientID, "client_name", client.Name)
-	s.cleanupClientState(clientID)
-	s.serverState.RLock()
-	clientsSnap := make(map[uuid.UUID]*state.ClientState, len(s.serverState.Clients))
-	for k, v := range s.serverState.Clients {
-		clientsSnap[k] = v
-	}
-	s.serverState.RUnlock()
-	s.eventBus.Publish(events.Event{
-		Name: events.ClientsChanged,
-		Data: events.ClientChangeEvent{Type: events.ClientLeft, ClientID: clientID, Clients: clientsSnap},
-	})
 
 	return &pb.ServerResponse{
 		Success:      true,
@@ -533,21 +519,6 @@ func (s *SimpleRadioServer) buildServerSettings() *pb.ServerSettings {
 	return settings
 }
 
-func (s *SimpleRadioServer) cleanupClientState(clientID uuid.UUID) {
-	s.serverState.Lock()
-	defer s.serverState.Unlock()
-
-	// Remove client from server state
-	if _, exists := s.serverState.Clients[clientID]; exists {
-		delete(s.serverState.Clients, clientID)
-	}
-
-	// Remove radio state if it exists
-	if _, exists := s.serverState.RadioClients[clientID]; exists {
-		delete(s.serverState.RadioClients, clientID)
-	}
-}
-
 // StartCleanupRoutine launches a goroutine that periodically removes stale clients.
 func (s *SimpleRadioServer) StartCleanupRoutine(interval time.Duration, staleAfter time.Duration) {
 	s.wg.Add(1)
@@ -569,13 +540,11 @@ func (s *SimpleRadioServer) StartCleanupRoutine(interval time.Duration, staleAft
 					s.serverState.RUnlock()
 					if !exists || now.Sub(client.LastUpdate) > staleAfter {
 						stale = append(stale, clientID)
-						delete(s.streams, clientID)
 					}
 				}
 				s.mu.Unlock()
 				for _, id := range stale {
-					s.cleanupClientState(id)
-					s.logger.Info("Cleaned up stale client", "client_id", id)
+					s.RemoveClient(id, ReasonStale, nil)
 				}
 			}
 		}

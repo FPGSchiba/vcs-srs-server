@@ -166,7 +166,7 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 	// goroutines that fail() would not stop.
 	s.voiceControlServer = controlServer
 
-	srsServer := srs.NewSimpleRadioServer(s.serverState, s.settingsState, s.logger, s.eventBus, controlServer)
+	srsServer := srs.NewSimpleRadioServer(s.serverState, s.settingsState, s.logger, s.eventBus, controlServer, nil)
 	s.srsServer = srsServer
 	authServer := srs.NewAuthServer(s.serverState, s.settingsState, s.logger, s.distributionState, s.eventBus)
 	s.authServer = authServer
