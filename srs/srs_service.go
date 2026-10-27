@@ -35,6 +35,8 @@ type SimpleRadioServer struct {
 	streams       map[uuid.UUID]grpc.ServerStreamingServer[pb.ServerUpdate]
 	stopChan      chan struct{}
 	stopOnce      sync.Once
+	// now is the server's clock (time.Now outside tests).
+	now func() time.Time
 }
 
 func clientIDFromContext(ctx context.Context) (uuid.UUID, error) {
@@ -55,6 +57,7 @@ func NewSimpleRadioServer(serverState *state.ServerState, settingsState *state.S
 		mu:            sync.Mutex{},
 		streams:       make(map[uuid.UUID]grpc.ServerStreamingServer[pb.ServerUpdate]),
 		stopChan:      make(chan struct{}),
+		now:           time.Now,
 	}
 	server.StartCleanupRoutine(time.Second*15, time.Minute*10)
 	return &server
@@ -150,11 +153,12 @@ func (s *SimpleRadioServer) SyncClient(ctx context.Context, _ *pb.Empty) (*pb.Sy
 	var callerID uuid.UUID
 	if clientID, err := clientIDFromContext(ctx); err == nil {
 		callerID = clientID
-		s.serverState.RLock()
+		s.serverState.Lock()
 		if client, exists := s.serverState.Clients[clientID]; exists {
 			coalition = client.Coalition
+			client.LastUpdate = s.now() // SRV-01: any RPC proves the client alive
 		}
-		s.serverState.RUnlock()
+		s.serverState.Unlock()
 	}
 	coalitionVoiceAddr, globalVoiceAddr := s.getVoiceAddresses(coalition)
 
@@ -183,6 +187,7 @@ func (s *SimpleRadioServer) Ping(ctx context.Context, req *pb.PingRequest) (*pb.
 		s.serverState.Lock()
 		if client, exists := s.serverState.Clients[clientID]; exists {
 			client.LatencyToControlMs = req.LastRttMs
+			client.LastUpdate = s.now() // SRV-01: a pinging client is alive
 		}
 		s.serverState.Unlock()
 	}
@@ -291,7 +296,7 @@ func (s *SimpleRadioServer) UpdateClientInfo(ctx context.Context, req *pb.Client
 	}
 
 	s.serverState.Lock()
-	client.LastUpdate = time.Now()
+	client.LastUpdate = s.now()
 	s.serverState.Unlock()
 
 	s.logger.Info("Updated client info", "client_id", clientID, "client_name", client.Name)
@@ -351,6 +356,9 @@ func (s *SimpleRadioServer) UpdateRadioInfo(ctx context.Context, req *pb.RadioIn
 	newState := convertRadioInfo(req)
 	newState.Muted = existingMuted
 	s.serverState.RadioClients[clientID] = newState
+	if client, ok := s.serverState.Clients[clientID]; ok {
+		client.LastUpdate = s.now() // SRV-01
+	}
 	s.serverState.Unlock()
 
 	s.serverState.RLock()

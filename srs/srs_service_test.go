@@ -1,24 +1,85 @@
 package srs
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/FPGSchiba/vcs-srs-server/events"
 	pb "github.com/FPGSchiba/vcs-srs-server/srspb"
 	"github.com/FPGSchiba/vcs-srs-server/state"
+	"github.com/FPGSchiba/vcs-srs-server/utils"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 )
 
 func newTestServer() *SimpleRadioServer {
 	return &SimpleRadioServer{
-		serverState:   &state.ServerState{},
+		serverState: &state.ServerState{
+			Clients:      make(map[uuid.UUID]*state.ClientState),
+			RadioClients: make(map[uuid.UUID]*state.RadioState),
+		},
 		settingsState: &state.SettingsState{},
 		logger:        slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		eventBus:      events.NewEventBus(),
+		now:           time.Now,
 		streams:       make(map[uuid.UUID]grpc.ServerStreamingServer[pb.ServerUpdate]),
 		stopChan:      make(chan struct{}),
+	}
+}
+
+// withSRSClock swaps the server's clock for a fake one and returns it.
+func withSRSClock(s *SimpleRadioServer) *fakeClock {
+	c := &fakeClock{t: time.Now()}
+	s.mu.Lock()
+	s.now = c.Now
+	s.mu.Unlock()
+	return c
+}
+
+func clientCtx(id uuid.UUID) context.Context {
+	return context.WithValue(context.Background(), utils.ClientIDKey, id.String())
+}
+
+// SRV-01: every unary RPC a live client makes refreshes its LastUpdate, so
+// a client that only pings is never mistaken for a stale one.
+func TestRPCsRefreshLastUpdate(t *testing.T) {
+	calls := map[string]func(s *SimpleRadioServer, ctx context.Context){
+		"Ping": func(s *SimpleRadioServer, ctx context.Context) {
+			_, _ = s.Ping(ctx, &pb.PingRequest{})
+		},
+		"SyncClient": func(s *SimpleRadioServer, ctx context.Context) {
+			_, _ = s.SyncClient(ctx, &pb.Empty{})
+		},
+		"UpdateRadioInfo": func(s *SimpleRadioServer, ctx context.Context) {
+			_, _ = s.UpdateRadioInfo(ctx, &pb.RadioInfo{})
+		},
+		"UpdateClientInfo": func(s *SimpleRadioServer, ctx context.Context) {
+			_, _ = s.UpdateClientInfo(ctx, &pb.ClientInfo{Name: "Alice", UnitId: "AB"})
+		},
+	}
+	for name, call := range calls {
+		t.Run(name, func(t *testing.T) {
+			s := newTestServer()
+			clock := withSRSClock(s)
+			id := uuid.New()
+			s.serverState.AddClient(id, &state.ClientState{Name: "Alice"})
+			s.serverState.Lock()
+			s.serverState.Clients[id].LastUpdate = clock.Now().Add(-time.Hour)
+			s.serverState.Unlock()
+			clock.Advance(time.Minute)
+
+			call(s, clientCtx(id))
+
+			s.serverState.RLock()
+			got := s.serverState.Clients[id].LastUpdate
+			s.serverState.RUnlock()
+			if !got.Equal(clock.Now()) {
+				t.Fatalf("LastUpdate = %v, want %v", got, clock.Now())
+			}
+		})
 	}
 }
 
