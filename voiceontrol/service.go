@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -158,7 +160,8 @@ func (s *VoiceControlServer) GetDistributionStatus() DistributionView {
 func (s *VoiceControlServer) RegisterVoiceServer(ctx context.Context, req *pb.RegisterVoiceServerRequest) (*pb.RegisterVoiceServerResponse, error) {
 	s.mu.Lock()
 
-	udpAddr := fmt.Sprintf("%s:%d", req.ServerAddress, req.UdpPort)
+	// JoinHostPort brackets an IPv6 host: [2001:db8::1]:5002.
+	udpAddr := net.JoinHostPort(req.ServerAddress, strconv.Itoa(int(req.UdpPort)))
 	node := &registeredNode{
 		serverID: req.ServerId,
 		address:  udpAddr,
@@ -525,7 +528,7 @@ func (s *VoiceControlServer) EstablishStream(stream pb.VoiceControlService_Estab
 	for {
 		select {
 		case <-stream.Context().Done():
-			s.deregisterNode(serverID)
+			s.deregisterNodeIf(serverID, node)
 			return nil
 		case event, ok := <-ch:
 			if !ok {
@@ -557,7 +560,7 @@ func (s *VoiceControlServer) EstablishStream(stream pb.VoiceControlService_Estab
 			sendErr := stream.Send(msg)
 			node.sendMu.Unlock()
 			if sendErr != nil {
-				s.deregisterNode(serverID)
+				s.deregisterNodeIf(serverID, node)
 				return sendErr
 			}
 		}
@@ -689,18 +692,22 @@ func (s *VoiceControlServer) buildClientDelta(node *registeredNode, event events
 	return nil
 }
 
-func (s *VoiceControlServer) deregisterNode(serverID string) {
+// deregisterNodeIf removes serverID's registration only if it is still node,
+// the record the caller's stream attached to (R-2). A node that re-registered
+// under the same ID has a new record, which an old stream's end must not
+// delete. It reports whether anything was removed.
+func (s *VoiceControlServer) deregisterNodeIf(serverID string, node *registeredNode) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	node, exists := s.nodes[serverID]
-	if !exists {
-		return
+	if current, exists := s.nodes[serverID]; !exists || current != node {
+		return false
 	}
-	if node.isGlobal {
+	if node.isGlobal && s.globalNodeAddr == node.address {
 		s.globalNodeAddr = ""
 	}
 	delete(s.nodes, serverID)
 	s.logger.Info("Voice node deregistered", "serverId", serverID)
+	return true
 }
 
 func containsStr(slice []string, s string) bool {
