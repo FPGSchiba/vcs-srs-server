@@ -225,7 +225,7 @@ func newInterceptorTestServer(t *testing.T) *Server {
 		PublicKeyFile:  filepath.Join(dir, "pub.pem"),
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return NewServer(&state.ServerState{}, settings, logger, &state.DistributionState{}, nil)
+	return NewServer(&state.ServerState{}, settings, logger, &state.DistributionState{}, nil, nil)
 }
 
 // mintToken returns a signed token for a fresh GUID, and that GUID.
@@ -272,6 +272,13 @@ func TestAuthInterceptorCodes(t *testing.T) {
 	s := newInterceptorTestServer(t)
 	expired, _ := mintToken(t, s, utils.GuestRole, -time.Hour)
 	valid, validGUID := mintToken(t, s, utils.GuestRole, time.Hour)
+	s.serverState.AddClient(uuid.MustParse(validGUID), &state.ClientState{Name: "t"})
+	unknown, _ := mintToken(t, s, utils.GuestRole, time.Hour) // GUID never added
+	malformed, err := utils.GenerateToken("not-a-uuid", utils.GuestRole, "i", "s", time.Hour,
+		s.settingsState.Security.Token.PrivateKeyFile, s.settingsState.Security.Token.PublicKeyFile)
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
 	withAuth := func(v string) context.Context {
 		return metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", v))
 	}
@@ -288,11 +295,15 @@ func TestAuthInterceptorCodes(t *testing.T) {
 			rejects := []struct {
 				name string
 				ctx  context.Context
+				msg  string // substring the status message must contain, if set
 			}{
-				{"no metadata", context.Background()},
-				{"no token", metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-other", "1"))},
-				{"garbage token", withAuth("Bearer x.y.z")},
-				{"expired token", withAuth("Bearer " + expired)},
+				{"no metadata", context.Background(), ""},
+				{"no token", metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-other", "1")), ""},
+				{"garbage token", withAuth("Bearer x.y.z"), ""},
+				{"expired token", withAuth("Bearer " + expired), ""},
+				// SRV-06: a valid token whose session is gone.
+				{"unknown GUID", withAuth("Bearer " + unknown), "session not found for " + kind.method},
+				{"malformed GUID claim", withAuth("Bearer " + malformed), "session not found for " + kind.method},
 			}
 			for _, tc := range rejects {
 				t.Run(tc.name, func(t *testing.T) {
@@ -302,6 +313,9 @@ func TestAuthInterceptorCodes(t *testing.T) {
 					}
 					if got := status.Code(err); got != codes.Unauthenticated {
 						t.Fatalf("code = %v, want Unauthenticated (err %v)", got, err)
+					}
+					if tc.msg != "" && !strings.Contains(status.Convert(err).Message(), tc.msg) {
+						t.Fatalf("message = %q, want it to contain %q", status.Convert(err).Message(), tc.msg)
 					}
 				})
 			}
@@ -384,7 +398,7 @@ func newStartTestServer(t *testing.T, mode uint8, vcPort int, keyDir string) *Se
 	bus := events.NewEventBus()
 	t.Cleanup(bus.Stop)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return NewServer(&state.ServerState{}, settings, logger, &state.DistributionState{DistributionMode: mode}, bus)
+	return NewServer(&state.ServerState{}, settings, logger, &state.DistributionState{DistributionMode: mode}, bus, nil)
 }
 
 // occupy holds a TCP listener on a free loopback port until the test ends.

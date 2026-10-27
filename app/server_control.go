@@ -259,7 +259,7 @@ func (a *VCSApplication) startGrpcServer() {
 	a.StopSignals["control"] = stopChan
 	a.AdminState.Unlock()
 
-	controlServer := control.NewServer(a.ServerState, a.SettingsState, a.Logger, a.DistributionState, a.eventBus)
+	controlServer := control.NewServer(a.ServerState, a.SettingsState, a.Logger, a.DistributionState, a.eventBus, nil)
 	a.controlServer = controlServer
 
 	a.SettingsState.Lock()

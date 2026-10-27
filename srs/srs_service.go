@@ -85,11 +85,11 @@ func (s *SimpleRadioServer) getVoiceAddresses(coalition string) (coalitionAddr, 
 // unknown. The secret is delivered alongside the voice address so the client
 // has everything it needs to send a HELLO.
 //
-// An empty return should be unreachable in practice -- the auth interceptor
-// guarantees callerID names a valid, already-authenticated client -- but a
-// caller that received "" would silently get an unusable secret with
-// Success: true and nothing logged, so warn here to keep that failure mode
-// diagnosable rather than silent.
+// The auth interceptor rejects any token whose GUID is not in
+// serverState.Clients (control.Server.authenticate, SRV-06), so an empty
+// return is only reachable when the session is removed between that check
+// and this call. A caller that received "" would silently get an unusable
+// secret with Success: true, so warn here to keep that race diagnosable.
 func (s *SimpleRadioServer) voiceSecretFor(clientID uuid.UUID) string {
 	secret, ok := s.serverState.GetVoiceSecret(clientID)
 	if secret == "" {
