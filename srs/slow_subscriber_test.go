@@ -244,3 +244,62 @@ func TestOverflowThenKickDeliversFinal(t *testing.T) {
 		t.Fatalf("last sent update is %v, not the final one", sent[len(sent)-1])
 	}
 }
+
+// SRV-08 x SV1 (D10): the overflow is observed after a remover has
+// unregistered the subscription but before it has ended it. The handler must
+// not claim the ending itself; it waits for the remover's end and returns the
+// remover's status, delivering its final update last.
+func TestOverflowAfterUnregisterWaitsForRemover(t *testing.T) {
+	s := newTestServer(t)
+	id := addTestClient(s)
+	st, result := startStalledSubscriber(t, s, id)
+
+	publishRadio(s, id)
+	waitEntered(t, st)
+	for i := 0; i < 300; i++ {
+		publishRadio(s, id)
+	}
+	waitOverflows(t, s.eventBus, 1)
+
+	// First half of removeClientIf: unregister under s.mu, do not end yet.
+	s.mu.Lock()
+	sub := s.streams[id]
+	delete(s.streams, id)
+	delete(s.detachedAt, id)
+	s.mu.Unlock()
+	if sub == nil {
+		t.Fatal("no registered subscription to unregister")
+	}
+	close(st.release)
+
+	select {
+	case err := <-result:
+		t.Fatalf("handler returned %v before the remover ended the subscription", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if _, ok := s.detachedSince(id); ok {
+		t.Fatal("handler set detachedAt for a subscription it no longer owns")
+	}
+
+	// Second half of removeClientIf: end with the final update.
+	final := ServerActionUpdate(events.ActionKick, id, "bye")
+	sub.end(final, SessionEndedError(ReasonKicked))
+
+	assertSessionEnded(t, waitResult(t, result), "kicked")
+	sent := st.sentCopy()
+	if len(sent) == 0 || sent[len(sent)-1] != final {
+		t.Fatal("final update was not the last update sent")
+	}
+	n := 0
+	for _, u := range sent {
+		if u == final {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("final update sent %d times, want 1", n)
+	}
+	if _, ok := s.detachedSince(id); ok {
+		t.Fatal("detachedAt set after a remover ended the subscription")
+	}
+}
