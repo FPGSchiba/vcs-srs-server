@@ -119,8 +119,9 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 	}
 
 	clientOpts := []grpc.ServerOption{
-		grpc.ChainUnaryInterceptor(s.loggingInterceptor, s.authInterceptor),
-		grpc.ChainStreamInterceptor(s.authStreamInterceptor),
+		// Recovery is first so it is outermost and covers every later interceptor.
+		grpc.ChainUnaryInterceptor(s.recoveryUnaryInterceptor, s.loggingInterceptor, s.authInterceptor),
+		grpc.ChainStreamInterceptor(s.recoveryStreamInterceptor, s.authStreamInterceptor),
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
 			MinTime:             60 * time.Second, // allow pings every 60s
 			PermitWithoutStream: true,
@@ -247,7 +248,8 @@ func (s *Server) initControlServer(controlServer voicecontrolpb.VoiceControlServ
 	}
 	s.controlGrpcServer = grpc.NewServer(
 		grpc.Creds(credentials.NewServerTLSFromCert(cert)),
-		grpc.UnaryInterceptor(s.loggingInterceptor),
+		grpc.ChainUnaryInterceptor(s.recoveryUnaryInterceptor, s.loggingInterceptor),
+		grpc.ChainStreamInterceptor(s.recoveryStreamInterceptor),
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
 			MinTime:             10 * time.Second, // allow pings every 10s
 			PermitWithoutStream: true,
