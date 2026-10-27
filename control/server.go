@@ -126,7 +126,7 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 			PermitWithoutStream: true,
 		}),
 		grpc.KeepaliveParams(keepalive.ServerParameters{
-			Time:    60 * time.Second, // server sends pings every 30s if idle
+			Time:    60 * time.Second, // server pings an idle connection every 60s
 			Timeout: 10 * time.Second, // wait 10s for ping ack
 		}),
 	}
