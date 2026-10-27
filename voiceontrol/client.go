@@ -6,6 +6,8 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -151,6 +153,46 @@ func (v *VoiceControlClient) establishConnection() error {
 		return err
 	}
 	return v.establishStream()
+}
+
+// resolveAdvertisedAddr turns voiceControl.publicAddr into the host and UDP
+// port this node advertises to the control node. publicAddr is either
+// "host:port" (the port wins, e.g. a NAT or container port mapping) or a bare
+// host (the port is listenPort, the port the voice socket is bound to). A bare
+// IPv6 address counts as a bare host; a bracketed "[v6]:port" as host:port.
+//
+// It refuses an empty value, an unspecified address (0.0.0.0 / ::), a missing
+// host and any port outside 1-65535: a node advertising any of those is
+// unreachable by clients, so it must not register at all.
+func resolveAdvertisedAddr(publicAddr string, listenPort int) (string, int, error) {
+	s := strings.TrimSpace(publicAddr)
+	if s == "" {
+		return "", 0, fmt.Errorf("voiceControl.publicAddr is not set: a distributed voice node must advertise an address clients can reach")
+	}
+
+	host, port := s, listenPort
+	if net.ParseIP(s) == nil && strings.Contains(s, ":") {
+		h, p, err := net.SplitHostPort(s)
+		if err != nil {
+			return "", 0, fmt.Errorf("voiceControl.publicAddr %q: %w", publicAddr, err)
+		}
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return "", 0, fmt.Errorf("voiceControl.publicAddr %q: invalid port", publicAddr)
+		}
+		host, port = h, n
+	}
+
+	if host == "" {
+		return "", 0, fmt.Errorf("voiceControl.publicAddr %q: missing host", publicAddr)
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
+		return "", 0, fmt.Errorf("voiceControl.publicAddr %q: unspecified address (0.0.0.0 / ::) is not reachable by clients", publicAddr)
+	}
+	if port < 1 || port > 65535 {
+		return "", 0, fmt.Errorf("voiceControl.publicAddr %q: invalid port", publicAddr)
+	}
+	return host, port, nil
 }
 
 func (v *VoiceControlClient) registerSelf() error {
