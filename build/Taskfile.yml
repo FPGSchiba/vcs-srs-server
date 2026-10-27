@@ -95,9 +95,9 @@ tasks:
       - sh: protoc --version
         msg: "Looks like protoc isn't installed. Please install it from https://grpc.io/docs/protoc-installation/"
       - sh: which protoc-gen-go || where protoc-gen-go
-        msg: "Looks like protoc-gen-go isn't installed. Please install it with 'go install google.golang.org/protobuf/cmd/protoc-gen-go@latest'"
+        msg: "Looks like protoc-gen-go isn't installed. Please install it with 'go install google.golang.org/protobuf/cmd/protoc-gen-go@<version of google.golang.org/protobuf in go.mod>'"
       - sh: which protoc-gen-go-grpc || where protoc-gen-go-grpc
-        msg: "Looks like protoc-gen-go-grpc isn't installed. Please install it with 'go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest'"
+        msg: "Looks like protoc-gen-go-grpc isn't installed. Please install it with 'go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2'"
     cmds:
       - cmd: powershell New-Item -ItemType Directory -Force -Path srspb,voicecontrolpb,vcsauthpb
         platforms: [ windows ]
@@ -118,9 +118,8 @@ tasks:
     generates:
       - "graphql/generated/generated.go"
       - "graphql/generated/models_gen.go"
-    vars:
-      # Use the gqlgen version pinned in go.mod so no global install is needed
-      GQLGEN_VERSION:
-        sh: go list -m -f '{{"{{"}}.Version{{"}}"}}' github.com/99designs/gqlgen
     cmds:
-      - go run github.com/99designs/gqlgen@{{.GQLGEN_VERSION}} generate
+      # In-module run (gqlgen is a `tool` in go.mod): no global install, and
+      # gqlgen builds against this go.mod's x/tools, which Go 1.27 needs.
+      # See .github/actions/generate/action.yml.
+      - go run github.com/99designs/gqlgen generate

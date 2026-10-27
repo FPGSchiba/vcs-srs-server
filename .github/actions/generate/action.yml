@@ -1,0 +1,76 @@
+# Generates every gitignored code package the server needs to build:
+# srspb/, voicecontrolpb/, vcsauthpb/ (protoc) and graphql/generated/ (gqlgen).
+#
+# Second copy: Dockerfile. Keep pins in step.
+#
+# Precondition: the repository is checked out and actions/setup-go has run.
+#
+# PINNING CONVENTION: never let CI resolve "whatever is current" (an unpinned
+# "latest" version query, or an OS package manager's rolling channel). A floating tool
+# version means CI can go red on an unrelated upstream release, with a failure
+# that looks like our own code broke.
+#   1. Derive the version from go.mod when the tool IS one of its module
+#      requirements (protoc-gen-go rides in google.golang.org/protobuf; gqlgen
+#      is github.com/99designs/gqlgen, declared as a `tool` in go.mod).
+#   gqlgen runs IN-MODULE (`go run github.com/99designs/gqlgen`, no @version)
+#   so it builds against THIS go.mod's dependency graph. `go run pkg@version`
+#   would use gqlgen's own go.mod instead, and gqlgen v0.17.89 pins
+#   golang.org/x/tools v0.42.0, which fails under Go 1.27 with
+#   `internal error: package ".../gqlparser/v2/ast" without types was imported`.
+#   Our go.mod raises x/tools to v0.46.0 (the lowest that works); the `tool`
+#   directive keeps gqlgen's own deps in go.sum across `go mod tidy`.
+#   2. Pin an explicit version otherwise, with a comment saying why it could
+#      not be derived (protoc-gen-go-grpc, protoc).
+name: Generate code
+description: Install pinned protoc + plugins and generate protobuf and GraphQL code.
+runs:
+  using: composite
+  steps:
+    - name: Check runner
+      shell: bash
+      run: |
+        if [ "$RUNNER_OS" != "Linux" ] || [ "$RUNNER_ARCH" != "X64" ]; then
+          echo "::error::generate action supports Linux X64 runners only"
+          exit 1
+        fi
+
+    # protoc v36.2 straight from the upstream release, not apt (apt carries
+    # whatever it currently carries -- the same drift by another route).
+    # --proto '=https' matters: -L follows redirects, and without it a redirect
+    # could downgrade the transfer to plain HTTP. The sha256 check is the part
+    # that actually matters -- a pinned version alone still trusts whatever
+    # bytes the release URL serves.
+    - name: Install protoc
+      shell: bash
+      run: |
+        curl -fsSL --proto '=https' --tlsv1.2 -o protoc.zip \
+          https://github.com/protocolbuffers/protobuf/releases/download/v36.2/protoc-36.2-linux-x86_64.zip
+        echo "121f6c7afe1d4d0e3ea6aab9432038599250134cbf4474cb1167d2c7decd4278  protoc.zip" | sha256sum -c -
+        sudo unzip -o protoc.zip -d /usr/local bin/protoc 'include/*'
+        rm protoc.zip
+        v="$(protoc --version)"
+        echo "$v"
+        if ! echo "$v" | grep -Eq ' 36\.2(\.0)?$'; then
+          echo "::error::expected protoc 36.2, got: $v"
+          exit 1
+        fi
+
+    - name: Install protoc plugins
+      shell: bash
+      run: |
+        go install google.golang.org/protobuf/cmd/protoc-gen-go@$(go list -m -f '{{.Version}}' google.golang.org/protobuf)
+        # protoc-gen-go-grpc is NOT part of the google.golang.org/grpc module
+        # go.mod requires -- it ships from its own nested go.mod in the grpc-go
+        # repo and is tagged independently (cmd/protoc-gen-go-grpc/vX.Y.Z), so
+        # there is no go.mod entry to derive it from. Pinned explicitly here
+        # (and in the Dockerfile) and bumped by hand.
+        go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
+
+    - name: Generate protobuf and GraphQL code
+      shell: bash
+      run: |
+        mkdir -p srspb voicecontrolpb vcsauthpb
+        protoc --go_out=./srspb --go_opt=paths=source_relative --go-grpc_out=./srspb --go-grpc_opt=paths=source_relative srs.proto
+        protoc --go_out=./voicecontrolpb --go_opt=paths=source_relative --go-grpc_out=./voicecontrolpb --go-grpc_opt=paths=source_relative control.proto
+        protoc --go_out=./vcsauthpb --go_opt=paths=source_relative --go-grpc_out=./vcsauthpb --go-grpc_opt=paths=source_relative vcs-auth-plugin.proto
+        go run github.com/99designs/gqlgen generate
