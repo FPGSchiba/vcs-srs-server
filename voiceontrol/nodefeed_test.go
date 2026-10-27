@@ -77,6 +77,22 @@ func TestNodeFeedIgnoresLogFlood(t *testing.T) {
 // dropping deltas; the registration and its coalitions survive.
 func TestNodeFeedOverflowEndsStreamKeepsRegistration(t *testing.T) {
 	s, st, errc, id, logs := feedNode(t)
+	// Give n1 a coalition set a fresh registration would not produce (as in
+	// threeNodes), so the final assertion can tell carry-over from reassignment.
+	s.settingsState.Lock()
+	for _, c := range []string{"Red", "Green", "Gold"} {
+		s.settingsState.Coalitions = append(s.settingsState.Coalitions, state.Coalition{Name: c})
+	}
+	s.settingsState.Unlock()
+	for _, n := range []string{"a", "b"} {
+		register(t, s, &pb.RegisterVoiceServerRequest{ServerId: n, ServerAddress: "10.0.0.2", UdpPort: 5002})
+	}
+	s.mu.Lock()
+	s.nodes["a"].coalitions = []string{"Red"}
+	s.nodes["b"].coalitions = []string{"Gold"}
+	s.nodes["n1"].coalitions = []string{"Blue", "Green"}
+	s.mu.Unlock()
+
 	release := st.block()
 	for i := 0; i < 300; i++ {
 		s.eventBus.Publish(radioEvent(id))
@@ -105,8 +121,12 @@ func TestNodeFeedOverflowEndsStreamKeepsRegistration(t *testing.T) {
 		t.Fatal("the lagging node's dead stream is still attached")
 	}
 	resp := register(t, s, &pb.RegisterVoiceServerRequest{ServerId: "n1", ServerAddress: "10.0.0.1", UdpPort: 5002})
-	if !slices.Equal(resp.AssignedCoalitions, []string{"Blue"}) {
-		t.Fatalf("re-registration after the overflow assigned %v, want [Blue]", resp.AssignedCoalitions)
+	want := []string{"Blue", "Green"}
+	if got := sortedCopy(resp.AssignedCoalitions); !slices.Equal(got, want) {
+		t.Fatalf("re-registration after the overflow assigned %v, want %v", got, want)
+	}
+	if got := nodeCoalitions(s, "n1"); !slices.Equal(got, want) {
+		t.Fatalf("n1 owns %v after re-registering, want %v", got, want)
 	}
 }
 
