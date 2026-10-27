@@ -66,6 +66,21 @@ type VoiceControlServer struct {
 	globalNodeAddr string
 	pendingMoves   map[string]pendingMove // coalition name → queued move (sticky rebalance)
 	clientNodes    map[uuid.UUID]string   // clientID → nodeServerID (from ReportClientConnected)
+	// recentlyGone remembers the coalitions of non-global nodes deregistered
+	// within nodeGrace, keyed by server ID, so a node that comes back after a
+	// blip gets them back (Q5). Expired lazily on registration.
+	recentlyGone map[string]goneNode
+	// now is the clock for recentlyGone; time.Now outside tests.
+	now func() time.Time
+}
+
+// nodeGrace is how long a deregistered node's coalitions are held for it.
+// It matches the client session grace (SV1).
+const nodeGrace = 120 * time.Second
+
+type goneNode struct {
+	coalitions []string
+	at         time.Time
 }
 
 func NewVoiceControlServer(serverState *state.ServerState, settingsState *state.SettingsState, eventBus *events.EventBus, logger *slog.Logger) *VoiceControlServer {
@@ -77,6 +92,8 @@ func NewVoiceControlServer(serverState *state.ServerState, settingsState *state.
 		nodes:         make(map[string]*registeredNode),
 		pendingMoves:  make(map[string]pendingMove),
 		clientNodes:   make(map[uuid.UUID]string),
+		recentlyGone:  make(map[string]goneNode),
+		now:           time.Now,
 	}
 }
 
@@ -176,9 +193,14 @@ func (s *VoiceControlServer) RegisterVoiceServer(ctx context.Context, req *pb.Re
 		// here: it keeps its coalitions (R-3). Its old record is replaced,
 		// not counted as another node's, so nothing moves under its clients.
 		node.coalitions = append([]string(nil), prev.coalitions...)
+	} else if back := s.reclaimGoneCoalitions(req.ServerId); len(back) > 0 {
+		// Same node returning within nodeGrace of its deregistration: it gets
+		// back whichever of its coalitions nobody else took meanwhile (Q5).
+		node.coalitions = back
 	} else {
 		node.coalitions = s.assignCoalitions(req.PreferredCoalitions)
 	}
+	delete(s.recentlyGone, req.ServerId)
 	s.nodes[req.ServerId] = node
 
 	if !req.IsGlobal {
@@ -204,6 +226,37 @@ func (s *VoiceControlServer) RegisterVoiceServer(ctx context.Context, req *pb.Re
 		AssignedCoalitions: assignedCoalitions,
 		GlobalVoiceAddress: globalAddr,
 	}, nil
+}
+
+// reclaimGoneCoalitions expires tombstones older than nodeGrace and returns
+// the coalitions serverID's tombstone holds that no live non-global node owns
+// now. Must be called with s.mu write-locked.
+func (s *VoiceControlServer) reclaimGoneCoalitions(serverID string) []string {
+	now := s.now()
+	for id, g := range s.recentlyGone {
+		if now.Sub(g.at) > nodeGrace {
+			delete(s.recentlyGone, id)
+		}
+	}
+	gone, ok := s.recentlyGone[serverID]
+	if !ok {
+		return nil
+	}
+	owned := make(map[string]bool)
+	for _, n := range s.nodes {
+		if !n.isGlobal {
+			for _, c := range n.coalitions {
+				owned[c] = true
+			}
+		}
+	}
+	var back []string
+	for _, c := range gone.coalitions {
+		if !owned[c] {
+			back = append(back, c)
+		}
+	}
+	return back
 }
 
 // assignCoalitions must be called with s.mu write-locked.
@@ -709,6 +762,9 @@ func (s *VoiceControlServer) deregisterNodeIf(serverID string, node *registeredN
 	}
 	if node.isGlobal && s.globalNodeAddr == node.address {
 		s.globalNodeAddr = ""
+	}
+	if !node.isGlobal {
+		s.recentlyGone[serverID] = goneNode{coalitions: append([]string(nil), node.coalitions...), at: s.now()}
 	}
 	delete(s.nodes, serverID)
 	s.logger.Info("Voice node deregistered", "serverId", serverID)
