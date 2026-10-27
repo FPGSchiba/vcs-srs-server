@@ -497,3 +497,56 @@ func TestAuthServerStopEndsSweeper(t *testing.T) {
 	}
 	s.Stop() // idempotent; t.Cleanup calls it once more
 }
+
+// SRV-09: the ClientJoined snapshot never shares memory with live state.
+func TestJoinSnapshotIndependent(t *testing.T) {
+	authServer := newGuestLoginTestServer(t)
+	ctx := testPeerContext()
+	ch := authServer.eventBus.Subscribe(events.ClientsChanged)
+
+	initResp, err := authServer.InitAuth(ctx, &pb.AuthInitRequest{
+		Capabilities: &pb.ClientCapabilities{
+			Version:                    "0.1.0",
+			SupportedDistributionModes: []pb.DistributionMode{pb.DistributionMode_STANDALONE},
+		},
+	})
+	if err != nil || !initResp.Success {
+		t.Fatalf("InitAuth: %v %+v", err, initResp)
+	}
+	clientGuid := initResp.GetResult().ClientGuid
+	hashed, err := bcrypt.GenerateFromPassword([]byte(guestTestCoalitionPassword), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("bcrypt: %v", err)
+	}
+	resp, err := authServer.GuestLogin(ctx, &pb.GuestLoginRequest{
+		Name: "Joiner", Password: string(hashed), UnitId: "AB1", ClientGuid: clientGuid,
+	})
+	if err != nil || !resp.Success {
+		t.Fatalf("GuestLogin: %v %+v", err, resp)
+	}
+	id := uuid.MustParse(clientGuid)
+
+	var ev events.ClientChangeEvent
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case e := <-ch:
+			ce := e.Data.(events.ClientChangeEvent)
+			if ce.Type != events.ClientJoined || ce.ClientID != id {
+				continue
+			}
+			ev = ce
+		case <-deadline:
+			t.Fatal("no ClientJoined event")
+		}
+		break
+	}
+
+	authServer.serverState.Lock()
+	authServer.serverState.Clients[id].Name = "mutated"
+	authServer.serverState.Unlock()
+
+	if got := ev.Clients[id].Name; got != "Joiner" {
+		t.Fatalf("event snapshot Name = %q, want Joiner", got)
+	}
+}

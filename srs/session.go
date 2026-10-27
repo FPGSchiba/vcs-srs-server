@@ -55,7 +55,25 @@ func (sub *subscription) ended() bool {
 var (
 	errSuperseded = status.Error(codes.Aborted, "superseded by a newer subscription")
 	errNoSession  = status.Error(codes.Unauthenticated, "session not found: log in again")
+	// errFellBehind ends a live update stream whose subscription overflowed
+	// (SRV-08). It is not a session loss: the client resubscribes with the
+	// same token and calls SyncClient.
+	errFellBehind = status.Error(codes.ResourceExhausted, "update stream fell behind: resubscribe and call SyncClient")
 )
+
+// updateStreamBuffer is the slot count of one SRS update stream's subscription.
+const updateStreamBuffer = 256
+
+// streamEvents are the bus events SubscribeToUpdates forwards: exactly those
+// buildServerUpdate and the CoalitionReassigned branch use.
+var streamEvents = []string{
+	events.ClientsChanged,
+	events.RadioClientsChanged,
+	events.SettingsChanged,
+	events.CoalitionsChanged,
+	events.ServerAction,
+	events.CoalitionReassigned,
+}
 
 // RemovalReason says why a session was removed. It is part of the status
 // message a live update stream ends with ("session ended: <reason>").
@@ -121,14 +139,7 @@ func (s *SimpleRadioServer) removeClientIf(id uuid.UUID, reason RemovalReason, f
 	delete(s.serverState.RadioClients, id)
 	var snap map[uuid.UUID]*state.ClientState
 	if existed {
-		snap = make(map[uuid.UUID]*state.ClientState, len(s.serverState.Clients))
-		for k, v := range s.serverState.Clients {
-			if v == nil {
-				continue
-			}
-			c := *v
-			snap[k] = &c
-		}
+		snap = s.serverState.CloneClientsLocked() // SRV-09
 	}
 	s.serverState.Unlock()
 	sub := s.streams[id]

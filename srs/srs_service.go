@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/metadata"
 )
 
 // VoiceAddressProvider resolves UDP addresses for a given coalition.
@@ -110,55 +111,45 @@ func (s *SimpleRadioServer) GetServerState() healthpb.HealthCheckResponse_Servin
 }
 
 func (s *SimpleRadioServer) SyncClient(ctx context.Context, _ *pb.Empty) (*pb.SyncResponse, error) {
-	clients := s.serverState.GetAllClients()
-	radioClients := s.serverState.GetAllRadios()
-
+	// SRV-15: the whole roster and radio set are built under one read lock,
+	// and the roster carries UnitId/RoleId as buildServerUpdate's do.
 	var srsClients map[string]*pb.ClientInfo
 	var srsRadios map[string]*pb.RadioInfo
-	for _, client := range clients {
-		if client.State == nil {
+	s.serverState.RLock()
+	for id, client := range s.serverState.Clients {
+		if client == nil {
 			continue
 		}
 		if srsClients == nil {
 			srsClients = make(map[string]*pb.ClientInfo)
 		}
-		srsClients[client.ID.String()] = &pb.ClientInfo{
-			Name:       client.State.Name,
-			Coalition:  client.State.Coalition,
-			LastUpdate: ptrInt64(client.State.LastUpdate.Unix()),
+		srsClients[id.String()] = &pb.ClientInfo{
+			Name:       client.Name,
+			Coalition:  client.Coalition,
+			UnitId:     client.UnitId,
+			RoleId:     uint32(client.Role),
+			LastUpdate: ptrInt64(client.LastUpdate.Unix()),
 		}
 	}
-
-	for _, radio := range radioClients {
-		if radio.State == nil {
+	for id, radio := range s.serverState.RadioClients {
+		if radio == nil {
 			continue
 		}
-		s.serverState.RLock()
-		clientEntry, clientExists := s.serverState.Clients[radio.ID]
-		s.serverState.RUnlock()
+		clientEntry, clientExists := s.serverState.Clients[id]
 		if !clientExists || clientEntry == nil {
 			continue
 		}
 		if srsRadios == nil {
 			srsRadios = make(map[string]*pb.RadioInfo)
 		}
-		srsRadios[radio.ID.String()] = &pb.RadioInfo{
-			Radios:     convertRadios(radio.State.Radios),
-			Muted:      radio.State.Muted,
+		srsRadios[id.String()] = &pb.RadioInfo{
+			Radios:     convertRadios(radio.Radios),
+			Muted:      radio.Muted,
 			LastUpdate: ptrInt64(clientEntry.LastUpdate.Unix()),
 		}
 	}
-
-	s.serverState.RLock()
-	clientsSnap := make(map[uuid.UUID]*state.ClientState, len(s.serverState.Clients))
-	for k, v := range s.serverState.Clients {
-		clientsSnap[k] = v
-	}
 	s.serverState.RUnlock()
-	s.eventBus.Publish(events.Event{
-		Name: events.ClientsChanged,
-		Data: events.ClientChangeEvent{Type: events.ClientInfoUpdated, Clients: clientsSnap},
-	})
+	// SRV-15: no ClientsChanged publish; SyncClient changes no roster field.
 
 	var coalition string
 	var callerID uuid.UUID
@@ -248,62 +239,51 @@ func (s *SimpleRadioServer) UpdateClientInfo(ctx context.Context, req *pb.Client
 		}, nil
 	}
 
-	s.serverState.RLock()
+	// SRV-16: settings are read before serverState is locked, so the two
+	// locks never nest.
+	coalitionExists := s.settingsState.DoesCoalitionExist(req.Coalition)
+
+	// SRV-16: validate every field, then apply all of them, in one critical
+	// section; a failed call changes nothing but LastUpdate (liveness).
+	s.serverState.Lock()
 	client, exists := s.serverState.Clients[clientID]
-	s.serverState.RUnlock()
-	if !exists {
+	if !exists || client == nil {
+		s.serverState.Unlock()
 		s.logger.Error("UpdateClientInfo failed: client not found", "client_id", clientID)
 		return &pb.ServerResponse{
 			Success:      false,
 			ErrorMessage: "Internal error: You may already have been disconnected.",
 		}, nil
 	}
+	client.LastUpdate = s.now() // SRV-01
 
 	var errors []string
-
 	if !checkUsername(req.Name) {
 		s.logger.Warn("UpdateClientInfo failed: invalid client name", "client_id", clientID, "client_name", req.Name)
 		errors = append(errors, "Invalid username. It must be between 1 and 32 characters long.")
-	} else {
-		s.serverState.Lock()
-		client.Name = req.Name
-		s.serverState.Unlock()
 	}
-
 	if !checkUnitId(req.UnitId) {
 		s.logger.Warn("UpdateClientInfo failed: invalid unit ID", "client_id", clientID, "unit_id", req.UnitId)
 		errors = append(errors, "Invalid unit ID. It must be 2 to 4 uppercase alphanumeric characters.")
-	} else {
-		s.serverState.Lock()
-		client.UnitId = req.UnitId
-		s.serverState.Unlock()
 	}
-
-	if !s.settingsState.DoesCoalitionExist(req.Coalition) {
+	switch {
+	case req.Coalition == client.Coalition:
+		// Unchanged: always accepted, even if an admin has since removed it.
+	case client.Role == utils.GuestRole:
+		// A guest's coalition is the one whose password it logged in with.
+		s.logger.Warn("UpdateClientInfo failed: guest cannot change coalition", "client_id", clientID, "coalition", req.Coalition)
+		errors = append(errors, "Guests cannot change coalition here: log in again with that coalition's password.")
+	case !coalitionExists:
 		s.logger.Warn("UpdateClientInfo failed: invalid coalition", "client_id", clientID, "coalition", req.Coalition)
 		errors = append(errors, "Coalition not found, please select an existing coalition.")
-	} else {
-		s.serverState.Lock()
-		client.Coalition = req.Coalition
-		s.serverState.Unlock()
 	}
-
 	if !canSwapRoles(client, uint8(req.RoleId)) {
 		s.logger.Warn("UpdateClientInfo failed: Client cannot swap roles", "client_id", clientID, "role_id", req.RoleId)
 		errors = append(errors, "You cannot swap roles. Please contact an administrator if you need a different role.")
-	} else {
-		s.serverState.Lock()
-		client.Role = uint8(req.RoleId)
-		s.serverState.Unlock()
 	}
 
-	s.serverState.Lock()
-	client.LastUpdate = s.now()
-	s.serverState.Unlock()
-
-	s.logger.Info("Updated client info", "client_id", clientID, "client_name", client.Name)
-
 	if len(errors) > 0 {
+		s.serverState.Unlock()
 		s.logger.Warn("UpdateClientInfo completed with errors", "client_id", clientID, "errors", errors)
 		return &pb.ServerResponse{
 			Success:      false,
@@ -311,12 +291,14 @@ func (s *SimpleRadioServer) UpdateClientInfo(ctx context.Context, req *pb.Client
 		}, nil
 	}
 
-	s.serverState.RLock()
-	clientsSnap := make(map[uuid.UUID]*state.ClientState, len(s.serverState.Clients))
-	for k, v := range s.serverState.Clients {
-		clientsSnap[k] = v
-	}
-	s.serverState.RUnlock()
+	client.Name = req.Name
+	client.UnitId = req.UnitId
+	client.Coalition = req.Coalition
+	client.Role = uint8(req.RoleId)
+	clientsSnap := s.serverState.CloneClientsLocked() // SRV-09
+	s.serverState.Unlock()
+
+	s.logger.Info("Updated client info", "client_id", clientID, "client_name", req.Name)
 	s.eventBus.Publish(events.Event{
 		Name: events.ClientsChanged,
 		Data: events.ClientChangeEvent{Type: events.ClientInfoUpdated, ClientID: clientID, Clients: clientsSnap},
@@ -361,14 +343,8 @@ func (s *SimpleRadioServer) UpdateRadioInfo(ctx context.Context, req *pb.RadioIn
 	if client, ok := s.serverState.Clients[clientID]; ok {
 		client.LastUpdate = s.now() // SRV-01
 	}
+	radioSnap := s.serverState.CloneRadiosLocked() // SRV-09
 	s.serverState.Unlock()
-
-	s.serverState.RLock()
-	radioSnap := make(map[uuid.UUID]*state.RadioState, len(s.serverState.RadioClients))
-	for k, v := range s.serverState.RadioClients {
-		radioSnap[k] = v
-	}
-	s.serverState.RUnlock()
 	s.eventBus.Publish(events.Event{
 		Name: events.RadioClientsChanged,
 		Data: events.RadioChangeEvent{Type: events.RadioUpdated, ClientID: clientID, Radios: radioSnap},
@@ -397,8 +373,10 @@ func (s *SimpleRadioServer) SubscribeToUpdates(_ *pb.Empty, stream grpc.ServerSt
 		return errNoSession
 	}
 
-	ch := s.eventBus.Subscribe("*")
-	defer s.eventBus.Unsubscribe(ch)
+	// SRV-08: only stream-relevant events, and a subscription that reports
+	// overflow instead of silently dropping (see fellBehind below).
+	evs := s.eventBus.SubscribeNames(updateStreamBuffer, streamEvents...)
+	defer evs.Close()
 
 	// CON-05: the last subscriber wins. A reconnecting client whose old
 	// transport the server has not yet noticed as dead must not be refused.
@@ -437,6 +415,15 @@ func (s *SimpleRadioServer) SubscribeToUpdates(_ *pb.Empty, stream grpc.ServerSt
 		s.mu.Unlock()
 	}()
 
+	// C17: the response headers mean "this subscription is live". evs and
+	// sub are both registered and any older subscriber is superseded, so an
+	// event published after the client observes the headers is delivered
+	// here. A client that resubscribes waits for them before SyncClient.
+	if err := stream.SendHeader(metadata.MD{}); err != nil {
+		s.logger.Warn("Failed to send update stream headers", "client_id", clientID, "error", err)
+		return err
+	}
+
 	s.logger.Info("Client subscribed to updates", "client_id", clientID)
 
 	finish := func() error {
@@ -449,6 +436,33 @@ func (s *SimpleRadioServer) SubscribeToUpdates(_ *pb.Empty, stream grpc.ServerSt
 		return sub.err
 	}
 
+	// fellBehind ends this stream with ResourceExhausted after its
+	// subscription overflowed (SRV-08). The session is kept: the
+	// subscription is unregistered by identity and the SV1 grace starts.
+	// It never calls RemoveClient.
+	fellBehind := func() error {
+		if sub.ended() {
+			return finish()
+		}
+		s.mu.Lock()
+		mine := s.streams[clientID] == sub
+		if mine {
+			delete(s.streams, clientID)
+			s.detachedAt[clientID] = s.now()
+		}
+		s.mu.Unlock()
+		if !mine {
+			// A removal or a newer subscriber owns the ending; it ends sub
+			// after unregistering it, so a KICK/BAN final is still delivered.
+			<-sub.done
+			return finish()
+		}
+		sub.end(nil, errFellBehind)
+		s.logger.Warn("Update stream fell behind; ending it so the client resyncs",
+			"client_id", clientID, "dropped", evs.Dropped())
+		return finish()
+	}
+
 	for {
 		select {
 		case <-sub.done:
@@ -456,12 +470,20 @@ func (s *SimpleRadioServer) SubscribeToUpdates(_ *pb.Empty, stream grpc.ServerSt
 		case <-stream.Context().Done():
 			s.logger.Info("Client unsubscribed from updates", "client_id", clientID)
 			return nil
-		case event, ok := <-ch:
+		case <-evs.Overflow():
+			return fellBehind()
+		case event, ok := <-evs.C:
 			if !ok {
 				return nil
 			}
 			if sub.ended() {
 				return finish()
+			}
+			// Do not drain a buffer to a client that has already fallen behind.
+			select {
+			case <-evs.Overflow():
+				return fellBehind()
+			default:
 			}
 
 			// Per-client voice address redirect after coalition rebalancing.

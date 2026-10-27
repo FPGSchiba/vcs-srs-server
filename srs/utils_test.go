@@ -6,6 +6,7 @@ import (
 	"github.com/FPGSchiba/vcs-srs-server/events"
 	pb "github.com/FPGSchiba/vcs-srs-server/srspb"
 	"github.com/FPGSchiba/vcs-srs-server/state"
+	"github.com/FPGSchiba/vcs-srs-server/utils"
 )
 
 func TestConvertSingleRadio_PreservesIsIntercom(t *testing.T) {
@@ -74,5 +75,29 @@ func TestCheckVersionAcceptsNewerClients(t *testing.T) {
 		if got := checkVersion(tc.version); got != tc.want {
 			t.Errorf("checkVersion(%q) = %v, want %v -- %s", tc.version, got, tc.want, tc.why)
 		}
+	}
+}
+
+// SRV-16: a role may stay the same (guests included) or go down, never up,
+// and nobody but a guest may be a guest.
+func TestCanSwapRoles(t *testing.T) {
+	cases := []struct {
+		name               string
+		current, requested uint8
+		want               bool
+	}{
+		{"guest keeps guest", utils.GuestRole, utils.GuestRole, true},
+		{"member keeps member", utils.MemberRole, utils.MemberRole, true},
+		{"admin to member", utils.AdminRole, utils.MemberRole, true},
+		{"member to officer", utils.MemberRole, utils.OfficerRole, false},
+		{"member to guest", utils.MemberRole, utils.GuestRole, false},
+		{"admin to guest", utils.AdminRole, utils.GuestRole, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := canSwapRoles(&state.ClientState{Role: tc.current}, tc.requested); got != tc.want {
+				t.Fatalf("canSwapRoles(%d -> %d) = %v, want %v", tc.current, tc.requested, got, tc.want)
+			}
+		})
 	}
 }

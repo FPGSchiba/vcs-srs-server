@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -267,5 +269,219 @@ func TestVoiceSecretForUnknownClientIsEmpty(t *testing.T) {
 	s := newTestServer(t)
 	if got := s.voiceSecretFor(uuid.New()); got != "" {
 		t.Fatalf("expected an empty secret for an unknown client, got %q", got)
+	}
+}
+
+// SRV-09: the RadioClientsChanged snapshot never shares memory with live state.
+func TestUpdateRadioInfoSnapshotIndependent(t *testing.T) {
+	s := newTestServer(t)
+	id := uuid.New()
+	s.serverState.AddClient(id, &state.ClientState{Name: "Alice"})
+	ch := s.eventBus.Subscribe(events.RadioClientsChanged)
+
+	if _, err := s.UpdateRadioInfo(clientCtx(id), &pb.RadioInfo{Radios: []*pb.Radio{{Id: 1, Frequency: 251}}}); err != nil {
+		t.Fatalf("UpdateRadioInfo: %v", err)
+	}
+	var ev events.RadioChangeEvent
+	select {
+	case e := <-ch:
+		ev = e.Data.(events.RadioChangeEvent)
+	case <-time.After(time.Second):
+		t.Fatal("no RadioClientsChanged event")
+	}
+
+	s.serverState.Lock()
+	s.serverState.RadioClients[id].Muted = true
+	s.serverState.RadioClients[id].Radios[0].Frequency = 1
+	s.serverState.Unlock()
+
+	got := ev.Radios[id]
+	if got.Muted || got.Radios[0].Frequency != 251 {
+		t.Fatalf("event snapshot changed with live state: muted=%v freq=%v", got.Muted, got.Radios[0].Frequency)
+	}
+}
+
+// SRV-15: the SyncClient roster carries UnitId and RoleId.
+func TestSyncClientRosterHasUnitAndRole(t *testing.T) {
+	s := newTestServer(t)
+	id := uuid.New()
+	s.serverState.AddClient(id, &state.ClientState{Name: "A", UnitId: "AB", Coalition: "Blue", Role: utils.MemberRole})
+
+	resp, err := s.SyncClient(clientCtx(id), &pb.Empty{})
+	if err != nil {
+		t.Fatalf("SyncClient: %v", err)
+	}
+	data := resp.GetData()
+	c, ok := data.GetClients()[id.String()]
+	if !ok {
+		t.Fatal("caller missing from the roster")
+	}
+	if c.GetUnitId() != "AB" || c.GetRoleId() != uint32(utils.MemberRole) {
+		t.Fatalf("roster entry UnitId=%q RoleId=%d, want AB/%d", c.GetUnitId(), c.GetRoleId(), utils.MemberRole)
+	}
+	if _, ok := data.GetRadios()[id.String()]; !ok {
+		t.Fatal("caller's radios missing from the sync result")
+	}
+}
+
+// SRV-15: SyncClient changes no roster field, so it publishes nothing.
+func TestSyncClientPublishesNothing(t *testing.T) {
+	s := newTestServer(t)
+	id := addTestClient(s)
+	ch := s.eventBus.Subscribe(events.ClientsChanged)
+
+	if _, err := s.SyncClient(clientCtx(id), &pb.Empty{}); err != nil {
+		t.Fatalf("SyncClient: %v", err)
+	}
+	select {
+	case e := <-ch:
+		t.Fatalf("SyncClient published %+v", e)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// SRV-09/SRV-15: SyncClient reads state under the lock, so it is race-free
+// against Ping and UpdateClientInfo writes.
+func TestSyncClientConcurrentWithPing(t *testing.T) {
+	s := newTestServer(t)
+	id := uuid.New()
+	s.serverState.AddClient(id, &state.ClientState{Name: "Alice", UnitId: "AB", Coalition: "Blue", Role: utils.MemberRole})
+	ctx := clientCtx(id)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = s.SyncClient(ctx, &pb.Empty{})
+			_, _ = s.Ping(ctx, &pb.PingRequest{})
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 20; i++ {
+			_, _ = s.UpdateClientInfo(ctx, &pb.ClientInfo{Name: "Alice", UnitId: "AB", Coalition: "Blue", RoleId: uint32(utils.MemberRole)})
+		}
+	}()
+	wg.Wait()
+}
+
+const guestCoalitionMsg = "Guests cannot change coalition here: log in again with that coalition's password."
+
+// countInfoUpdates counts ClientInfoUpdated events for id arriving on ch
+// within wait, checking each carries the caller's GUID and wantName.
+func countInfoUpdates(t *testing.T, ch chan events.Event, id uuid.UUID, wantName string, wait time.Duration) int {
+	t.Helper()
+	n := 0
+	timeout := time.After(wait)
+	for {
+		select {
+		case e := <-ch:
+			ce, ok := e.Data.(events.ClientChangeEvent)
+			if !ok || ce.Type != events.ClientInfoUpdated {
+				continue
+			}
+			if ce.ClientID != id {
+				t.Fatalf("ClientInfoUpdated for %s, want caller %s", ce.ClientID, id)
+			}
+			if c := ce.Clients[id]; c == nil || c.Name != wantName {
+				t.Fatalf("ClientInfoUpdated snapshot entry %+v, want Name %q", c, wantName)
+			}
+			n++
+		case <-timeout:
+			return n
+		}
+	}
+}
+
+// SRV-16: UpdateClientInfo validates every field, then applies all of them
+// atomically; a guest may not change coalition.
+func TestUpdateClientInfo(t *testing.T) {
+	type fields struct {
+		name, unit, coalition string
+		role                  uint8
+	}
+	unchanged := func(role uint8) fields { return fields{"Old", "AB", "Blue", role} }
+	cases := []struct {
+		name     string
+		role     uint8
+		req      fields
+		success  bool
+		contains []string
+		after    fields
+		events   int
+	}{
+		{"guest no-op rename", utils.GuestRole, fields{"New", "CD", "Blue", utils.GuestRole}, true, nil,
+			fields{"New", "CD", "Blue", utils.GuestRole}, 1},
+		{"guest other coalition", utils.GuestRole, fields{"New", "CD", "Red", utils.GuestRole}, false,
+			[]string{"log in again with that coalition's password"}, unchanged(utils.GuestRole), 0},
+		{"guest other coalition + bad unit", utils.GuestRole, fields{"New", "x", "Red", utils.GuestRole}, false,
+			[]string{"Invalid unit ID. It must be 2 to 4 uppercase alphanumeric characters.", guestCoalitionMsg},
+			unchanged(utils.GuestRole), 0},
+		{"guest unknown coalition", utils.GuestRole, fields{"New", "CD", "Nope", utils.GuestRole}, false,
+			[]string{guestCoalitionMsg}, unchanged(utils.GuestRole), 0},
+		{"member to Red", utils.MemberRole, fields{"New", "CD", "Red", utils.MemberRole}, true, nil,
+			fields{"New", "CD", "Red", utils.MemberRole}, 1},
+		{"member unknown coalition", utils.MemberRole, fields{"New", "CD", "Nope", utils.MemberRole}, false,
+			[]string{"Coalition not found, please select an existing coalition."}, unchanged(utils.MemberRole), 0},
+		{"member upgrade", utils.MemberRole, fields{"New", "CD", "Blue", utils.OfficerRole}, false,
+			[]string{"You cannot swap roles."}, unchanged(utils.MemberRole), 0},
+		{"admin downgrade", utils.AdminRole, fields{"New", "CD", "Blue", utils.MemberRole}, true, nil,
+			fields{"New", "CD", "Blue", utils.MemberRole}, 1},
+		{"bad name only", utils.MemberRole, fields{"", "CD", "Blue", utils.MemberRole}, false,
+			[]string{"Invalid username."}, unchanged(utils.MemberRole), 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestServer(t)
+			s.settingsState = &state.SettingsState{Coalitions: []state.Coalition{{Name: "Blue"}, {Name: "Red"}}}
+			id := uuid.New()
+			s.serverState.AddClient(id, &state.ClientState{Name: "Old", UnitId: "AB", Coalition: "Blue", Role: tc.role})
+			ch := s.eventBus.Subscribe(events.ClientsChanged)
+
+			resp, err := s.UpdateClientInfo(clientCtx(id), &pb.ClientInfo{
+				Name: tc.req.name, UnitId: tc.req.unit, Coalition: tc.req.coalition, RoleId: uint32(tc.req.role),
+			})
+			if err != nil {
+				t.Fatalf("UpdateClientInfo: %v", err)
+			}
+			if resp.GetSuccess() != tc.success {
+				t.Fatalf("Success = %v (%q), want %v", resp.GetSuccess(), resp.GetErrorMessage(), tc.success)
+			}
+			for _, sub := range tc.contains {
+				if !strings.Contains(resp.GetErrorMessage(), sub) {
+					t.Fatalf("message %q does not contain %q", resp.GetErrorMessage(), sub)
+				}
+			}
+
+			s.serverState.RLock()
+			c := *s.serverState.Clients[id]
+			s.serverState.RUnlock()
+			got := fields{c.Name, c.UnitId, c.Coalition, c.Role}
+			if got != tc.after {
+				t.Fatalf("fields after = %+v, want %+v", got, tc.after)
+			}
+			if n := countInfoUpdates(t, ch, id, tc.after.name, 300*time.Millisecond); n != tc.events {
+				t.Fatalf("%d ClientInfoUpdated events, want %d", n, tc.events)
+			}
+		})
+	}
+}
+
+// SRV-16 (D7): an unchanged coalition is accepted even after an admin
+// removed it from the settings.
+func TestUpdateClientInfoKeepsRemovedCoalition(t *testing.T) {
+	s := newTestServer(t)
+	s.settingsState = &state.SettingsState{Coalitions: []state.Coalition{{Name: "Blue"}}}
+	id := uuid.New()
+	s.serverState.AddClient(id, &state.ClientState{Name: "Old", UnitId: "AB", Coalition: "Gone", Role: utils.GuestRole})
+
+	resp, err := s.UpdateClientInfo(clientCtx(id), &pb.ClientInfo{Name: "New", UnitId: "CD", Coalition: "Gone", RoleId: uint32(utils.GuestRole)})
+	if err != nil {
+		t.Fatalf("UpdateClientInfo: %v", err)
+	}
+	if !resp.GetSuccess() {
+		t.Fatalf("UpdateClientInfo failed: %q", resp.GetErrorMessage())
 	}
 }
