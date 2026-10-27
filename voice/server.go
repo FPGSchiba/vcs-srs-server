@@ -117,6 +117,16 @@ type Server struct {
 	// is built and before it connects. Tests use it to point the client at a
 	// fake control node; it is nil in production.
 	controlClientHook func(*voiceontrol.VoiceControlClient)
+	// shardHook, when set, is called by a shard worker before each job. Tests
+	// use it to block workers; it is nil in production.
+	shardHook func(int)
+
+	// shardQueues/shardWG are the fan-out workers (shard.go). They are set up
+	// and torn down by Listen's goroutine only.
+	shardQueues []chan shardJob
+	shardWG     sync.WaitGroup
+	// queueFullRejects rate-limits the shard-queue-full drop log.
+	queueFullRejects rejectLimiter
 }
 
 func NewServer(state *state.ServerState, logger *slog.Logger, distributionState *state.DistributionState, settingsState *state.SettingsState) *Server {
@@ -177,6 +187,9 @@ func (v *Server) Listen(address string, stopChan chan struct{}) error {
 	// Start the cleanup routine
 	go v.cleanupRoutine()
 
+	v.startShards(shardCount(), shardQueueDepth)
+	defer v.stopShards()
+
 	// Main receive loop
 	buffer := make([]byte, BufferSize)
 	for {
@@ -204,10 +217,10 @@ func (v *Server) Listen(address string, stopChan chan struct{}) error {
 				continue
 			}
 
-			// Handle the received packet
+			// Hand the packet to its sender's shard.
 			pkt := make([]byte, n)
 			copy(pkt, buffer[:n])
-			go v.handlePacket(pkt, remoteAddr)
+			v.dispatch(pkt, remoteAddr)
 		}
 	}
 }
@@ -288,14 +301,23 @@ func (v *Server) handlePacket(data []byte, addr *net.UDPAddr) {
 
 	packet, err := ParsePacket(data)
 	if err != nil {
-		// Anyone can spray garbage at a UDP port, so this is rate-limited and
-		// WARN rather than one ERROR per datagram.
-		if ok, n := v.parseRejects.shouldLog(time.Now()); ok {
-			v.logger.Warn("Failed to parse voice packet", "IP", addr.IP.String(), "error", err, "suppressed_since_last", n)
-		}
+		v.logParseFailure(addr, err)
 		return
 	}
+	v.handleParsedPacket(packet, addr)
+}
 
+// logParseFailure logs an unparseable datagram. Anyone can spray garbage at a
+// UDP port, so this is rate-limited and WARN rather than one ERROR per
+// datagram.
+func (v *Server) logParseFailure(addr *net.UDPAddr, err error) {
+	if ok, n := v.parseRejects.shouldLog(time.Now()); ok {
+		v.logger.Warn("Failed to parse voice packet", "IP", addr.IP.String(), "error", err, "suppressed_since_last", n)
+	}
+}
+
+// handleParsedPacket routes one parsed packet by type. Shard workers call it.
+func (v *Server) handleParsedPacket(packet *VCSPacket, addr *net.UDPAddr) {
 	switch packet.Type {
 	case PacketTypeHello:
 		v.handleHelloPacket(packet, addr)
@@ -519,17 +541,24 @@ func (v *Server) handleGoodbyePacket(packet *VCSPacket, addr *net.UDPAddr) {
 	v.DisconnectClient(packet.SenderID)
 }
 
+// broadcastVoice forwards a voice frame to every listening client. It runs
+// on the sender's shard: the frame is serialised once and written inline, so
+// frames from one sender go out in the order they arrived (SRV-13).
 func (v *Server) broadcastVoice(packet *VCSPacket, senderID uuid.UUID) {
-	for _, client := range v.GetListeningClients(packet, senderID) { // Already a lot of logic is done in GetListeningClients
-		go func(addr *net.UDPAddr) {
-			_, err := v.conn.WriteToUDP(packet.SerializePacket(), addr)
-			v.logger.Debug("Sent packet to client", "sender_id", packet.SenderID, "receiver_addr", addr.String())
-			if err != nil {
-				v.logger.Error("Failed to send voice packet",
-					"to", addr.String(),
-					"error", err)
-			}
-		}(client.Addr)
+	listeners := v.GetListeningClients(packet, senderID) // Already a lot of logic is done in GetListeningClients
+	if len(listeners) == 0 {
+		return
+	}
+	data := packet.SerializePacket()
+	for _, client := range listeners {
+		addr := client.Addr
+		_, err := v.conn.WriteToUDP(data, addr)
+		v.logger.Debug("Sent packet to client", "sender_id", packet.SenderID, "receiver_addr", addr.String())
+		if err != nil {
+			v.logger.Error("Failed to send voice packet",
+				"to", addr.String(),
+				"error", err)
+		}
 	}
 }
 
