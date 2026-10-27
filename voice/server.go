@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"log/slog"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -142,12 +143,21 @@ func (v *Server) Listen(address string, stopChan chan struct{}) error {
 			v.settingsState,
 			v.serverState,
 			isGlobal,
+			"",
 			v.logger,
 		)
 		// The control node drops this node's binding for a removed session
 		// (kick_client, and a LEFT delta).
 		v.controlClient.SetKickHandler(v.DisconnectClient)
-		if err := v.controlClient.ConnectControlServer(); err != nil {
+		_, portStr, err := net.SplitHostPort(address)
+		if err != nil {
+			return err
+		}
+		listenPort, err := strconv.Atoi(portStr)
+		if err != nil {
+			return err
+		}
+		if err := v.controlClient.ConnectControlServer(listenPort); err != nil {
 			v.logger.Error("Failed to connect to control server", "error", err)
 			return err
 		}
