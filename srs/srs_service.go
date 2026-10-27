@@ -214,7 +214,16 @@ func (s *SimpleRadioServer) Disconnect(ctx context.Context, _ *pb.Empty) (*pb.Se
 			ErrorMessage: "Internal error, please try logging in again.",
 		}, nil
 	}
-	s.logger.Info("Disconnecting client", "client_id", clientID)
+	s.serverState.RLock()
+	client, known := s.serverState.Clients[clientID]
+	var clientName string
+	if known {
+		clientName = client.Name
+	}
+	s.serverState.RUnlock()
+	if known {
+		s.logger.Info("Disconnecting client", "client_id", clientID, "client_name", clientName)
+	}
 	if !s.RemoveClient(clientID, ReasonDisconnect, nil) {
 		s.logger.Error("Disconnect failed: client not found", "client_id", clientID)
 		return &pb.ServerResponse{
