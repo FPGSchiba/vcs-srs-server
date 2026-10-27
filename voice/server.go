@@ -4,7 +4,6 @@ import (
 	"crypto/subtle"
 	"log/slog"
 	"net"
-	"strconv"
 	"sync"
 	"time"
 
@@ -111,6 +110,13 @@ type Server struct {
 	// other.
 	parseRejects  rejectLimiter
 	bannedRejects rejectLimiter
+
+	// version is reported to the control node when registering (SetVersion).
+	version string
+	// controlClientHook, when set, is called with the control client after it
+	// is built and before it connects. Tests use it to point the client at a
+	// fake control node; it is nil in production.
+	controlClientHook func(*voiceontrol.VoiceControlClient)
 }
 
 func NewServer(state *state.ServerState, logger *slog.Logger, distributionState *state.DistributionState, settingsState *state.SettingsState) *Server {
@@ -125,6 +131,13 @@ func NewServer(state *state.ServerState, logger *slog.Logger, distributionState 
 	}
 }
 
+// SetVersion sets the server version this node reports to the control node.
+func (v *Server) SetVersion(version string) {
+	v.Lock()
+	v.version = version
+	v.Unlock()
+}
+
 func (v *Server) isDistributedServer() bool {
 	v.distributionState.RLock()
 	defer v.distributionState.RUnlock()
@@ -132,45 +145,26 @@ func (v *Server) isDistributedServer() bool {
 }
 
 func (v *Server) Listen(address string, stopChan chan struct{}) error {
-	if v.isDistributedServer() {
-		// Initialize control client if this is a distributed server
-		v.distributionState.RLock()
-		isGlobal := v.distributionState.IsGlobal
-		v.distributionState.RUnlock()
-
-		v.controlClient = voiceontrol.NewVoiceControlClient(
-			v.serverId,
-			v.settingsState,
-			v.serverState,
-			isGlobal,
-			"",
-			v.logger,
-		)
-		// The control node drops this node's binding for a removed session
-		// (kick_client, and a LEFT delta).
-		v.controlClient.SetKickHandler(v.DisconnectClient)
-		_, portStr, err := net.SplitHostPort(address)
-		if err != nil {
-			return err
-		}
-		listenPort, err := strconv.Atoi(portStr)
-		if err != nil {
-			return err
-		}
-		if err := v.controlClient.ConnectControlServer(listenPort); err != nil {
-			v.logger.Error("Failed to connect to control server", "error", err)
-			return err
-		}
-	}
-
 	addr, err := net.ResolveUDPAddr("udp", address)
 	if err != nil {
 		return err
 	}
 
+	// Bind first: a distributed node must never advertise a port it failed
+	// to bind (SRV-11).
 	conn, err := net.ListenUDP("udp", addr)
 	if err != nil {
 		return err
+	}
+
+	if v.isDistributedServer() {
+		if err := v.connectControl(conn.LocalAddr().(*net.UDPAddr).Port); err != nil {
+			v.logger.Error("Failed to connect to control server", "error", err)
+			_ = conn.Close()
+			return err
+		}
+		// However the read loop ends, the control registration ends with it.
+		defer v.closeControlClient()
 	}
 
 	v.Lock()
@@ -215,6 +209,55 @@ func (v *Server) Listen(address string, stopChan chan struct{}) error {
 			copy(pkt, buffer[:n])
 			go v.handlePacket(pkt, remoteAddr)
 		}
+	}
+}
+
+// connectControl builds this node's control client and starts it. listenPort
+// is the bound UDP port, advertised when publicAddr carries no port. It
+// returns an error only for a configuration problem (see
+// VoiceControlClient.ConnectControlServer).
+func (v *Server) connectControl(listenPort int) error {
+	v.distributionState.RLock()
+	isGlobal := v.distributionState.IsGlobal
+	v.distributionState.RUnlock()
+
+	v.RLock()
+	version := v.version
+	hook := v.controlClientHook
+	v.RUnlock()
+
+	c := voiceontrol.NewVoiceControlClient(
+		v.serverId,
+		v.settingsState,
+		v.serverState,
+		isGlobal,
+		version,
+		v.logger,
+	)
+	// The control node drops this node's binding for a removed session
+	// (kick_client, and a LEFT delta).
+	c.SetKickHandler(v.DisconnectClient)
+	if hook != nil {
+		hook(c)
+	}
+	if err := c.ConnectControlServer(listenPort); err != nil {
+		return err
+	}
+	v.Lock()
+	v.controlClient = c
+	v.Unlock()
+	return nil
+}
+
+// closeControlClient closes the control client, if any. It must be called
+// without v's lock held: Close waits for the control supervisor, which may be
+// inside the kick handler (DisconnectClient), which takes that lock.
+func (v *Server) closeControlClient() {
+	v.RLock()
+	c := v.controlClient
+	v.RUnlock()
+	if c != nil {
+		_ = c.Close()
 	}
 }
 
@@ -522,22 +565,26 @@ func (v *Server) cleanup() {
 
 func (v *Server) Stop() error {
 	v.Lock()
-	defer v.Unlock()
-
 	if !v.running {
+		v.Unlock()
 		return nil
 	}
 
 	v.stopOnce.Do(func() { close(v.stopChan) })
 
+	var connErr error
 	if v.conn != nil {
-		err := v.conn.Close()
-		if err != nil {
-			return err
-		}
+		connErr = v.conn.Close()
 	}
-
 	v.running = false
+	v.Unlock()
+
+	// Outside the lock (see closeControlClient). Ending the control stream
+	// lets the control node deregister this node (R-4).
+	v.closeControlClient()
+	if connErr != nil {
+		return connErr
+	}
 	v.logger.Info("Voice server stopped")
 	return nil
 }
