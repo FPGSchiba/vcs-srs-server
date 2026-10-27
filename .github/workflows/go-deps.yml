@@ -37,6 +37,7 @@ jobs:
   preflight:
     name: Preflight
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
     steps:
@@ -54,6 +55,7 @@ jobs:
     name: Update and test
     needs: preflight
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # No secrets in this job: it runs third-party code.
     permissions:
       contents: read
@@ -136,6 +138,7 @@ jobs:
     needs: update
     if: needs.update.outputs.changed == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     # This job holds DEPS_BOT_TOKEN, so it deliberately runs no `go` command
     # and no code from the updated dependencies: it only applies the
     # artifact's go.mod/go.sum, commits, pushes and opens the PR.
