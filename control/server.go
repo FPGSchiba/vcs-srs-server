@@ -39,20 +39,21 @@ const (
 )
 
 type Server struct {
-	mu                  sync.RWMutex
-	clientGrpcServer    *grpc.Server
-	controlGrpcServer   *grpc.Server
-	clientListener      net.Listener
-	controlListener     net.Listener
-	logger              *slog.Logger
-	serverState         *state.ServerState
-	settingsState       *state.SettingsState
-	distributionState   *state.DistributionState
-	eventBus            *events.EventBus
-	srsServer           *srs.SimpleRadioServer
-	voiceControlServer  *voiceontrol.VoiceControlServer
-	isRunning           bool
-	stopOnce            sync.Once
+	mu                 sync.RWMutex
+	clientGrpcServer   *grpc.Server
+	controlGrpcServer  *grpc.Server
+	clientListener     net.Listener
+	controlListener    net.Listener
+	logger             *slog.Logger
+	serverState        *state.ServerState
+	settingsState      *state.SettingsState
+	distributionState  *state.DistributionState
+	eventBus           *events.EventBus
+	srsServer          *srs.SimpleRadioServer
+	authServer         *srs.AuthServer
+	voiceControlServer *voiceontrol.VoiceControlServer
+	isRunning          bool
+	stopOnce           sync.Once
 }
 
 func NewServer(serverState *state.ServerState, settingsState *state.SettingsState, logger *slog.Logger, distributionState *state.DistributionState, eventBus *events.EventBus) *Server {
@@ -79,9 +80,40 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 	var err error
 
 	s.mu.Lock()
+	// fail undoes everything Start has done so far and releases the lock.
+	// The caller (StartControlServer) is not fatal on an error: it logs,
+	// records ControlStatus.Error, and lets the process stay up, so the admin
+	// UI can retry. A half-started server must therefore not keep s.mu (every
+	// later IsRunning would block forever) or the port(s) it already bound (a
+	// corrected retry would hit "address already in use"). Every fallible step
+	// runs before anything that starts a goroutine, so there is nothing else
+	// to stop here.
+	fail := func(err error) error {
+		if s.clientListener != nil {
+			_ = s.clientListener.Close()
+			s.clientListener = nil
+		}
+		if s.controlListener != nil {
+			_ = s.controlListener.Close()
+			s.controlListener = nil
+		}
+		// Neither gRPC server has served yet; Stop just releases their
+		// internal resources.
+		if s.clientGrpcServer != nil {
+			s.clientGrpcServer.Stop()
+			s.clientGrpcServer = nil
+		}
+		if s.controlGrpcServer != nil {
+			s.controlGrpcServer.Stop()
+			s.controlGrpcServer = nil
+		}
+		s.mu.Unlock()
+		return err
+	}
+
 	s.clientListener, err = net.Listen("tcp", address)
 	if err != nil {
-		return fmt.Errorf("failed to listen: %v", err)
+		return fail(fmt.Errorf("failed to listen: %v", err))
 	}
 
 	if s.isControlServer() {
@@ -90,7 +122,7 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 		s.settingsState.RUnlock()
 		s.controlListener, err = net.Listen("tcp", voiceControlAddr)
 		if err != nil {
-			return fmt.Errorf("failed to listen on control server address: %v", err)
+			return fail(fmt.Errorf("failed to listen on control server address: %v", err))
 		}
 	}
 
@@ -100,22 +132,7 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 
 	clientCreds, err := clientTransportCredentials(clientTLS, s.logger)
 	if err != nil {
-		// The caller (StartControlServer) is not fatal on this error: it logs,
-		// records ControlStatus.Error, and lets the process stay up. That
-		// means a half-started server must not keep the port(s) it already
-		// bound -- otherwise a corrected retry hits "address already in use"
-		// with nothing in the logs explaining why. Close what we bound and
-		// clear the fields so a later Start rebinds cleanly.
-		if s.clientListener != nil {
-			_ = s.clientListener.Close()
-			s.clientListener = nil
-		}
-		if s.controlListener != nil {
-			_ = s.controlListener.Close()
-			s.controlListener = nil
-		}
-		s.mu.Unlock()
-		return fmt.Errorf("client TLS: %w", err)
+		return fail(fmt.Errorf("client TLS: %w", err))
 	}
 
 	clientOpts := []grpc.ServerOption{
@@ -138,17 +155,23 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 	s.clientGrpcServer = grpc.NewServer(clientOpts...)
 
 	controlServer := voiceontrol.NewVoiceControlServer(s.serverState, s.settingsState, s.eventBus, s.logger)
+
+	if s.isControlServer() {
+		if err := s.initControlServer(controlServer); err != nil {
+			return fail(fmt.Errorf("control server TLS: %w", err))
+		}
+	}
+
+	// Nothing below may fail: NewSimpleRadioServer and NewAuthServer start
+	// goroutines that fail() would not stop.
 	s.voiceControlServer = controlServer
 
 	srsServer := srs.NewSimpleRadioServer(s.serverState, s.settingsState, s.logger, s.eventBus, controlServer)
 	s.srsServer = srsServer
 	authServer := srs.NewAuthServer(s.serverState, s.settingsState, s.logger, s.distributionState, s.eventBus)
+	s.authServer = authServer
 	srspb.RegisterSRSServiceServer(s.clientGrpcServer, srsServer)
 	srspb.RegisterAuthServiceServer(s.clientGrpcServer, authServer)
-
-	if s.isControlServer() {
-		s.initControlServer(controlServer)
-	}
 
 	healthServer := NewFullHealthServer()
 	healthpb.RegisterHealthServer(s.clientGrpcServer, healthServer)
@@ -235,7 +258,10 @@ func (c handshakeLoggingCreds) Clone() credentials.TransportCredentials {
 	return handshakeLoggingCreds{c.TransportCredentials.Clone(), c.logger}
 }
 
-func (s *Server) initControlServer(controlServer voicecontrolpb.VoiceControlServiceServer) {
+// initControlServer builds the VoiceControl gRPC server. It returns the
+// keypair load error instead of leaving controlGrpcServer nil, which Start
+// and serveControl would then dereference.
+func (s *Server) initControlServer(controlServer voicecontrolpb.VoiceControlServiceServer) error {
 	s.settingsState.RLock()
 	privateKeyFileName := s.settingsState.VoiceControl.PrivateKeyFile
 	certificateFileName := s.settingsState.VoiceControl.CertificateFile
@@ -243,8 +269,7 @@ func (s *Server) initControlServer(controlServer voicecontrolpb.VoiceControlServ
 	s.settingsState.RUnlock()
 	cert, _, err := voiceontrol.LoadOrGenerateKeyPair(privateKeyFileName, certificateFileName, serverName)
 	if err != nil {
-		s.logger.Error("Failed to load TLS certificate for control server", "error", err)
-		return
+		return err
 	}
 	s.controlGrpcServer = grpc.NewServer(
 		grpc.Creds(credentials.NewServerTLSFromCert(cert)),
@@ -261,6 +286,7 @@ func (s *Server) initControlServer(controlServer voicecontrolpb.VoiceControlServ
 	)
 	voicecontrolpb.RegisterVoiceControlServiceServer(s.controlGrpcServer, controlServer)
 	reflection.Register(s.controlGrpcServer)
+	return nil
 }
 
 func (s *Server) monitorHealth(
@@ -343,6 +369,9 @@ func (s *Server) Stop() error {
 
 		if s.srsServer != nil {
 			s.srsServer.Stop()
+		}
+		if s.authServer != nil {
+			s.authServer.Stop()
 		}
 
 		// GracefulStop will automatically close the clientListener

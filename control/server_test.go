@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/FPGSchiba/vcs-srs-server/events"
 	"github.com/FPGSchiba/vcs-srs-server/state"
 	"github.com/FPGSchiba/vcs-srs-server/utils"
 	"github.com/google/uuid"
@@ -357,4 +358,167 @@ func TestAuthErrorMapping(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- SRV-05: Start fails cleanly ---
+
+// newStartTestServer builds a Server ready for Start: token keys in a temp
+// dir, the VoiceControl listener on 127.0.0.1:vcPort with its keypair under
+// keyDir, and a real event bus.
+func newStartTestServer(t *testing.T, mode uint8, vcPort int, keyDir string) *Server {
+	t.Helper()
+	tokenDir := t.TempDir()
+	settings := &state.SettingsState{}
+	settings.Security.Token = state.TokenSettings{
+		Expiration:     3600,
+		PrivateKeyFile: filepath.Join(tokenDir, "priv.pem"),
+		PublicKeyFile:  filepath.Join(tokenDir, "pub.pem"),
+	}
+	settings.VoiceControl = state.VoiceControlSettings{
+		ListenHost:      "127.0.0.1",
+		Port:            vcPort,
+		PrivateKeyFile:  filepath.Join(keyDir, "vc-key.pem"),
+		CertificateFile: filepath.Join(keyDir, "vc-cert.pem"),
+		ServerName:      "localhost",
+	}
+	bus := events.NewEventBus()
+	t.Cleanup(bus.Stop)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	return NewServer(&state.ServerState{}, settings, logger, &state.DistributionState{DistributionMode: mode}, bus)
+}
+
+// occupy holds a TCP listener on a free loopback port until the test ends.
+func occupy(t *testing.T) (net.Listener, string, int) {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	return l, l.Addr().String(), l.Addr().(*net.TCPAddr).Port
+}
+
+// freeAddr returns a loopback address that was free a moment ago.
+func freeAddr(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := l.Addr().String()
+	_ = l.Close()
+	return addr
+}
+
+// isRunningWithin fails the test if IsRunning blocks (the SRV-05 deadlock:
+// Start returned with s.mu still locked).
+func isRunningWithin(t *testing.T, s *Server, d time.Duration) bool {
+	t.Helper()
+	got := make(chan bool, 1)
+	go func() { got <- s.IsRunning() }()
+	select {
+	case v := <-got:
+		return v
+	case <-time.After(d):
+		t.Fatal("IsRunning blocked: Start left s.mu locked")
+		return false
+	}
+}
+
+func assertRebindable(t *testing.T, addr string) {
+	t.Helper()
+	l, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatalf("address %s still held after Start/Stop: %v", addr, err)
+	}
+	_ = l.Close()
+}
+
+func TestStartClientPortOccupied(t *testing.T) {
+	_, addr, _ := occupy(t)
+	s := newStartTestServer(t, state.DistributionModeStandalone, 0, t.TempDir())
+	if err := s.Start(addr, make(chan struct{})); err == nil {
+		t.Fatal("Start on an occupied port succeeded")
+	}
+	if isRunningWithin(t, s, time.Second) {
+		t.Fatal("IsRunning true after a failed Start")
+	}
+}
+
+func TestStartControlPortOccupiedReleasesClientPort(t *testing.T) {
+	_, _, vcPort := occupy(t)
+	clientAddr := freeAddr(t)
+	s := newStartTestServer(t, state.DistributionModeControl, vcPort, t.TempDir())
+	if err := s.Start(clientAddr, make(chan struct{})); err == nil {
+		t.Fatal("Start with the VoiceControl port occupied succeeded")
+	}
+	if isRunningWithin(t, s, time.Second) {
+		t.Fatal("IsRunning true after a failed Start")
+	}
+	assertRebindable(t, clientAddr)
+}
+
+func TestStartControlKeypairFailure(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "regular-file")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	keyDir := filepath.Join(file, "sub") // a directory under a regular file cannot exist
+	vcAddr := freeAddr(t)
+	vcPort := 0
+	if _, p, err := net.SplitHostPort(vcAddr); err == nil {
+		_, _ = fmt.Sscanf(p, "%d", &vcPort)
+	}
+	clientAddr := freeAddr(t)
+	s := newStartTestServer(t, state.DistributionModeControl, vcPort, keyDir)
+
+	err := s.Start(clientAddr, make(chan struct{}))
+	if err == nil {
+		t.Fatal("Start with an unloadable VoiceControl keypair succeeded")
+	}
+	if !strings.Contains(err.Error(), "control server TLS") {
+		t.Fatalf("error should name the control server TLS step, got: %v", err)
+	}
+	if isRunningWithin(t, s, time.Second) {
+		t.Fatal("IsRunning true after a failed Start")
+	}
+	assertRebindable(t, clientAddr)
+	assertRebindable(t, vcAddr)
+}
+
+// Review focus: the admin UI retries Start after a port clash; the retry must
+// neither hang nor fail to bind.
+func TestStartRetryAfterFailure(t *testing.T) {
+	occupier, addr, _ := occupy(t)
+	s := newStartTestServer(t, state.DistributionModeStandalone, 0, t.TempDir())
+	if err := s.Start(addr, make(chan struct{})); err == nil {
+		t.Fatal("Start on an occupied port succeeded")
+	}
+	_ = occupier.Close()
+
+	if err := s.Start(addr, make(chan struct{})); err != nil {
+		t.Fatalf("retry Start: %v", err)
+	}
+	if !isRunningWithin(t, s, time.Second) {
+		t.Fatal("IsRunning false after a successful retry")
+	}
+	if err := s.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	assertRebindable(t, addr)
+}
+
+func TestStartStopReleasesPort(t *testing.T) {
+	addr := freeAddr(t)
+	s := newStartTestServer(t, state.DistributionModeStandalone, 0, t.TempDir())
+	if err := s.Start(addr, make(chan struct{})); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !isRunningWithin(t, s, time.Second) {
+		t.Fatal("IsRunning false after Start")
+	}
+	if err := s.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	assertRebindable(t, addr)
 }
