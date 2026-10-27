@@ -118,9 +118,8 @@ tasks:
     generates:
       - "graphql/generated/generated.go"
       - "graphql/generated/models_gen.go"
-    vars:
-      # Use the gqlgen version pinned in go.mod so no global install is needed
-      GQLGEN_VERSION:
-        sh: go list -m -f '{{"{{"}}.Version{{"}}"}}' github.com/99designs/gqlgen
     cmds:
-      - go run github.com/99designs/gqlgen@{{.GQLGEN_VERSION}} generate
+      # In-module run (gqlgen is a `tool` in go.mod): no global install, and
+      # gqlgen builds against this go.mod's x/tools, which Go 1.27 needs.
+      # See .github/actions/generate/action.yml.
+      - go run github.com/99designs/gqlgen generate

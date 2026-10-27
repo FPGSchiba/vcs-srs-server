@@ -39,7 +39,9 @@ RUN mkdir -p srspb voicecontrolpb vcsauthpb \
               --go-grpc_out=./vcsauthpb --go-grpc_opt=paths=source_relative \
               vcs-auth-plugin.proto
 
-RUN go run github.com/99designs/gqlgen@$(go list -m -f '{{.Version}}' github.com/99designs/gqlgen) generate
+# In-module run: builds gqlgen against this go.mod (x/tools new enough for
+# Go 1.27), not gqlgen's own go.mod. See .github/actions/generate/action.yml.
+RUN go run github.com/99designs/gqlgen generate
 
 RUN CGO_ENABLED=0 go build \
     -tags production,headless \
