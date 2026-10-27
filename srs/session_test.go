@@ -325,6 +325,9 @@ func TestRemoveClientFinalLastUnderBusTraffic(t *testing.T) {
 		stop := make(chan struct{})
 		var wg sync.WaitGroup
 		wg.Add(1)
+		// Paced (SRV-08): one event in flight at a time, so the handler's
+		// subscription can never overflow and end the stream with
+		// ResourceExhausted instead of the kick under test.
 		go func() {
 			defer wg.Done()
 			for {
@@ -341,13 +344,21 @@ func TestRemoveClientFinalLastUnderBusTraffic(t *testing.T) {
 						Radios:   map[uuid.UUID]*state.RadioState{id: {}},
 					},
 				})
+				select {
+				case <-stream.sentCh:
+				case <-stop:
+					return
+				}
 			}
 		}()
-		// Let the handler pick up radio updates before the removal.
-		select {
-		case <-stream.sentCh:
-		case <-time.After(2 * time.Second):
-			t.Fatal("subscriber never received bus traffic")
+		// Let the handler pick up radio updates before the removal. The
+		// publisher owns stream.sentCh, so wait on the recorded sends.
+		deadline := time.Now().Add(2 * time.Second)
+		for len(stream.sentCopy()) == 0 {
+			if time.Now().After(deadline) {
+				t.Fatal("subscriber never received bus traffic")
+			}
+			time.Sleep(time.Millisecond)
 		}
 
 		final := ServerActionUpdate(events.ActionKick, id, "bye")

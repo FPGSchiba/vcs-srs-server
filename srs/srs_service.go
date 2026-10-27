@@ -391,8 +391,10 @@ func (s *SimpleRadioServer) SubscribeToUpdates(_ *pb.Empty, stream grpc.ServerSt
 		return errNoSession
 	}
 
-	ch := s.eventBus.Subscribe("*")
-	defer s.eventBus.Unsubscribe(ch)
+	// SRV-08: only stream-relevant events, and a subscription that reports
+	// overflow instead of silently dropping (see fellBehind below).
+	evs := s.eventBus.SubscribeNames(updateStreamBuffer, streamEvents...)
+	defer evs.Close()
 
 	// CON-05: the last subscriber wins. A reconnecting client whose old
 	// transport the server has not yet noticed as dead must not be refused.
@@ -443,6 +445,33 @@ func (s *SimpleRadioServer) SubscribeToUpdates(_ *pb.Empty, stream grpc.ServerSt
 		return sub.err
 	}
 
+	// fellBehind ends this stream with ResourceExhausted after its
+	// subscription overflowed (SRV-08). The session is kept: the
+	// subscription is unregistered by identity and the SV1 grace starts.
+	// It never calls RemoveClient.
+	fellBehind := func() error {
+		if sub.ended() {
+			return finish()
+		}
+		s.mu.Lock()
+		mine := s.streams[clientID] == sub
+		if mine {
+			delete(s.streams, clientID)
+			s.detachedAt[clientID] = s.now()
+		}
+		s.mu.Unlock()
+		if !mine {
+			// A removal or a newer subscriber owns the ending; it ends sub
+			// after unregistering it, so a KICK/BAN final is still delivered.
+			<-sub.done
+			return finish()
+		}
+		sub.end(nil, errFellBehind)
+		s.logger.Warn("Update stream fell behind; ending it so the client resyncs",
+			"client_id", clientID, "dropped", evs.Dropped())
+		return finish()
+	}
+
 	for {
 		select {
 		case <-sub.done:
@@ -450,12 +479,20 @@ func (s *SimpleRadioServer) SubscribeToUpdates(_ *pb.Empty, stream grpc.ServerSt
 		case <-stream.Context().Done():
 			s.logger.Info("Client unsubscribed from updates", "client_id", clientID)
 			return nil
-		case event, ok := <-ch:
+		case <-evs.Overflow():
+			return fellBehind()
+		case event, ok := <-evs.C:
 			if !ok {
 				return nil
 			}
 			if sub.ended() {
 				return finish()
+			}
+			// Do not drain a buffer to a client that has already fallen behind.
+			select {
+			case <-evs.Overflow():
+				return fellBehind()
+			default:
 			}
 
 			// Per-client voice address redirect after coalition rebalancing.
