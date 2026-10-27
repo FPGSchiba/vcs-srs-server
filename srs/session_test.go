@@ -301,12 +301,7 @@ func TestRemoveClientDeliversFinalLast(t *testing.T) {
 	id := addTestClient(s)
 	_, result, stream := startSubscriber(t, s, id)
 
-	final := &pb.ServerUpdate{
-		Type: pb.ServerUpdate_SERVER_ACTION,
-		Update: &pb.ServerUpdate_ServerAction{ServerAction: &pb.ServerAction{
-			Type: pb.ServerAction_KICK, TargetClientGuid: id.String(), Reason: "bye",
-		}},
-	}
+	final := ServerActionUpdate(events.ActionKick, id, "bye")
 	s.RemoveClient(id, ReasonKicked, final)
 	assertSessionEnded(t, waitResult(t, result), "kicked")
 	sent := stream.sentCopy()
@@ -528,5 +523,58 @@ func TestReapRevalidatesUnderLock(t *testing.T) {
 	case err := <-result:
 		t.Fatalf("new stream ended: %v", err)
 	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// --- SERVER_ACTION target-only (D6, D16) ---
+
+func TestForwardServerActionTargetOnly(t *testing.T) {
+	x, y := uuid.New(), uuid.New()
+	action := func(a events.ActionType) events.Event {
+		return events.Event{Name: events.ServerAction, Data: events.ServerActionEvent{ActionType: a, TargetClientID: x}}
+	}
+	cases := []struct {
+		name  string
+		event events.Event
+		to    uuid.UUID
+		want  bool
+	}{
+		{"mute target", action(events.ActionMute), x, true},
+		{"mute other", action(events.ActionMute), y, false},
+		{"unmute target", action(events.ActionUnmute), x, true},
+		{"unmute other", action(events.ActionUnmute), y, false},
+		{"kick target", action(events.ActionKick), x, false},
+		{"kick other", action(events.ActionKick), y, false},
+		{"ban target", action(events.ActionBan), x, false},
+		{"ban other", action(events.ActionBan), y, false},
+		{"not a server action", events.Event{Name: events.SettingsChanged}, y, true},
+	}
+	for _, c := range cases {
+		if got := forwardServerAction(c.event, c.to); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestMuteReachesOnlyTarget(t *testing.T) {
+	s := newTestServer()
+	x, y := addTestClient(s), addTestClient(s)
+	_, _, streamX := startSubscriber(t, s, x)
+	_, _, streamY := startSubscriber(t, s, y)
+
+	s.eventBus.Publish(events.Event{Name: events.ServerAction, Data: events.ServerActionEvent{ActionType: events.ActionMute, TargetClientID: x}})
+
+	select {
+	case u := <-streamX.sentCh:
+		if u.GetType() != pb.ServerUpdate_SERVER_ACTION || u.GetServerAction().GetType() != pb.ServerAction_MUTE {
+			t.Fatalf("X got %v", u)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("X never received its MUTE")
+	}
+	select {
+	case u := <-streamY.sentCh:
+		t.Fatalf("Y received %v", u)
+	case <-time.After(200 * time.Millisecond):
 	}
 }

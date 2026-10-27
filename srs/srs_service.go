@@ -485,6 +485,9 @@ func (s *SimpleRadioServer) SubscribeToUpdates(_ *pb.Empty, stream grpc.ServerSt
 				continue
 			}
 
+			if !forwardServerAction(event, clientID) {
+				continue
+			}
 			update := s.buildServerUpdate(event)
 			if update == nil {
 				continue
@@ -644,31 +647,59 @@ func (s *SimpleRadioServer) buildServerUpdate(event events.Event) *pb.ServerUpda
 		if !ok {
 			return nil
 		}
-		var actionType pb.ServerAction_ActionType
-		switch ae.ActionType {
-		case events.ActionKick:
-			actionType = pb.ServerAction_KICK
-		case events.ActionBan:
-			actionType = pb.ServerAction_BAN
-		case events.ActionMute:
-			actionType = pb.ServerAction_MUTE
-		case events.ActionUnmute:
-			actionType = pb.ServerAction_UNMUTE
-		default:
-			return nil
-		}
-		return &pb.ServerUpdate{
-			Type: pb.ServerUpdate_SERVER_ACTION,
-			Update: &pb.ServerUpdate_ServerAction{
-				ServerAction: &pb.ServerAction{
-					Type:             actionType,
-					TargetClientGuid: ae.TargetClientID.String(),
-					Reason:           ae.Reason,
-				},
-			},
-		}
+		return ServerActionUpdate(ae.ActionType, ae.TargetClientID, ae.Reason)
 
 	default:
 		return nil
+	}
+}
+
+// ServerActionUpdate builds the SERVER_ACTION update for action against
+// target, or nil for an unknown action.
+func ServerActionUpdate(action events.ActionType, target uuid.UUID, reason string) *pb.ServerUpdate {
+	var actionType pb.ServerAction_ActionType
+	switch action {
+	case events.ActionKick:
+		actionType = pb.ServerAction_KICK
+	case events.ActionBan:
+		actionType = pb.ServerAction_BAN
+	case events.ActionMute:
+		actionType = pb.ServerAction_MUTE
+	case events.ActionUnmute:
+		actionType = pb.ServerAction_UNMUTE
+	default:
+		return nil
+	}
+	return &pb.ServerUpdate{
+		Type: pb.ServerUpdate_SERVER_ACTION,
+		Update: &pb.ServerUpdate_ServerAction{
+			ServerAction: &pb.ServerAction{
+				Type:             actionType,
+				TargetClientGuid: target.String(),
+				Reason:           reason,
+			},
+		},
+	}
+}
+
+// forwardServerAction reports whether a bus event may be forwarded on
+// clientID's update stream. SERVER_ACTION is delivered only to its target:
+// MUTE/UNMUTE from the bus, and KICK/BAN never from the bus -- they reach
+// the target only as its subscription's final update (see RemoveClient), so
+// they arrive exactly once and immediately before the stream ends. Every
+// other event is forwarded.
+func forwardServerAction(event events.Event, clientID uuid.UUID) bool {
+	if event.Name != events.ServerAction {
+		return true
+	}
+	ae, ok := event.Data.(events.ServerActionEvent)
+	if !ok {
+		return false
+	}
+	switch ae.ActionType {
+	case events.ActionMute, events.ActionUnmute:
+		return ae.TargetClientID == clientID
+	default:
+		return false
 	}
 }
