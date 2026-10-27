@@ -202,7 +202,36 @@ func clientTransportCredentials(cfg state.ClientTLSSettings, logger *slog.Logger
 		return nil, fmt.Errorf("load or generate client TLS keypair: %w", err)
 	}
 	logger.Info("client-facing gRPC port is TLS", "certificateFile", cfg.CertificateFile, "serverName", cfg.ServerName)
-	return credentials.NewServerTLSFromCert(cert), nil
+	return handshakeLoggingCreds{credentials.NewServerTLSFromCert(cert), logger}, nil
+}
+
+// handshakeLoggingCreds logs failed server-side TLS handshakes on the
+// client-facing port. grpc-go reports them only through grpclog, which is
+// silent by default, so a client dialing plaintext against this TLS-only
+// port -- its HTTP/2 preface is not a ClientHello -- otherwise leaves no
+// trace here while the client sees only "error reading server preface".
+//
+// Logged at WARN because the server's log level is fixed at INFO; on a
+// public port this also surfaces scanners, which is acceptable noise.
+type handshakeLoggingCreds struct {
+	credentials.TransportCredentials
+	logger *slog.Logger
+}
+
+func (c handshakeLoggingCreds) ServerHandshake(conn net.Conn) (net.Conn, credentials.AuthInfo, error) {
+	out, info, err := c.TransportCredentials.ServerHandshake(conn)
+	if err != nil {
+		hint := ""
+		if strings.Contains(err.Error(), "first record does not look like a TLS handshake") {
+			hint = "the client connected in plaintext; it must dial with TLS (VCS client: set tls_ca_file to this server's clientTLS certificate)"
+		}
+		c.logger.Warn("client TLS handshake failed", "remote", conn.RemoteAddr(), "error", err, "hint", hint)
+	}
+	return out, info, err
+}
+
+func (c handshakeLoggingCreds) Clone() credentials.TransportCredentials {
+	return handshakeLoggingCreds{c.TransportCredentials.Clone(), c.logger}
 }
 
 func (s *Server) initControlServer(controlServer voicecontrolpb.VoiceControlServiceServer) {
