@@ -95,9 +95,9 @@ tasks:
       - sh: protoc --version
         msg: "Looks like protoc isn't installed. Please install it from https://grpc.io/docs/protoc-installation/"
       - sh: which protoc-gen-go || where protoc-gen-go
-        msg: "Looks like protoc-gen-go isn't installed. Please install it with 'go install google.golang.org/protobuf/cmd/protoc-gen-go@latest'"
+        msg: "Looks like protoc-gen-go isn't installed. Please install it with 'go install google.golang.org/protobuf/cmd/protoc-gen-go@<version of google.golang.org/protobuf in go.mod>'"
       - sh: which protoc-gen-go-grpc || where protoc-gen-go-grpc
-        msg: "Looks like protoc-gen-go-grpc isn't installed. Please install it with 'go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest'"
+        msg: "Looks like protoc-gen-go-grpc isn't installed. Please install it with 'go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2'"
     cmds:
       - cmd: powershell New-Item -ItemType Directory -Force -Path srspb,voicecontrolpb,vcsauthpb
         platforms: [ windows ]
