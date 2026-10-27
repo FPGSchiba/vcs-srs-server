@@ -57,6 +57,15 @@ func GetMinimumRoleForMethod(methodName string) (uint8, bool) {
 	return role, ok
 }
 
+// ErrInsufficientRole is wrapped by GetTokenClaims when the token is valid but
+// its role is below the method's minimum. Callers match it with errors.Is to
+// tell "not allowed" (PermissionDenied) apart from "not authenticated".
+var ErrInsufficientRole = errors.New("insufficient role")
+
+// ErrTokenKeys is wrapped by token verification when the server's signing keys
+// could not be loaded. It is a server fault, not a client one.
+var ErrTokenKeys = errors.New("token signing keys unavailable")
+
 type TokenClaims struct {
 	ClientGuid string `json:"client_guid"`
 	RoleId     uint8  `json:"role_id"`
@@ -197,7 +206,7 @@ func GenerateToken(clientGuid string, roleId uint8, issuer, subject string, expi
 func getJWTClaims(tokenString, privateKeyFile, publicKeyFile string) (*TokenClaims, error) {
 	_, publicKey, err := getKeys(privateKeyFile, publicKeyFile)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrTokenKeys, err)
 	}
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodECDSA); !ok {
@@ -233,7 +242,7 @@ func GetTokenClaims(tokenString string, minRole uint8, privateKeyFile, publicKey
 		return nil, err
 	}
 	if claims.RoleId < minRole {
-		return nil, fmt.Errorf("insufficient role: %d, required: %d", claims.RoleId, minRole)
+		return nil, fmt.Errorf("%w: %d, required: %d", ErrInsufficientRole, claims.RoleId, minRole)
 	}
 	return claims, nil
 }

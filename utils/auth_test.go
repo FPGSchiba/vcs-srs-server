@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 )
 
 var (
@@ -110,5 +111,33 @@ func TestGenerateKeyUnwritablePathNamesTheCause(t *testing.T) {
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("error %q does not wrap the underlying os.ErrNotExist", err)
+	}
+}
+
+func TestGetTokenClaimsInsufficientRoleIsSentinel(t *testing.T) {
+	tok, err := GenerateToken(uuid.NewString(), GuestRole, "i", "s", time.Hour, testPrivKeyFile, testPubKeyFile)
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+	_, err = GetTokenClaims(tok, AdminRole, testPrivKeyFile, testPubKeyFile)
+	if !errors.Is(err, ErrInsufficientRole) {
+		t.Fatalf("expected errors.Is(err, ErrInsufficientRole), got %v", err)
+	}
+}
+
+func TestGetTokenClaimsExpiredIsNotRoleError(t *testing.T) {
+	tok, err := GenerateToken(uuid.NewString(), GuestRole, "i", "s", -time.Hour, testPrivKeyFile, testPubKeyFile)
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+	_, err = GetTokenClaims(tok, GuestRole, testPrivKeyFile, testPubKeyFile)
+	if err == nil {
+		t.Fatal("expected an error for an expired token")
+	}
+	if errors.Is(err, ErrInsufficientRole) {
+		t.Fatalf("expired token must not be reported as insufficient role: %v", err)
+	}
+	if errors.Is(err, ErrTokenKeys) {
+		t.Fatalf("expired token must not be reported as a key failure: %v", err)
 	}
 }
