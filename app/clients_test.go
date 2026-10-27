@@ -258,3 +258,52 @@ func TestLocalVoiceDropperNilSafe(t *testing.T) {
 	a := newClientsTestApp(t)
 	localVoiceDropper{a}.DropVoiceSession(uuid.New(), "x") // must not panic
 }
+
+// TestRemoverAccessSynchronised: startGrpcServer sets the remover while the
+// Kick/Ban bindings may read it from other goroutines.
+func TestRemoverAccessSynchronised(t *testing.T) {
+	a := newClientsTestApp(t)
+	id := addClient(a)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 20; i++ {
+			a.setRemover(&fakeRemover{existed: false, running: true})
+		}
+	}()
+	for i := 0; i < 20; i++ {
+		a.KickClient(id.String(), "x")
+		a.BanClient(id.String(), "x")
+	}
+	wg.Wait()
+}
+
+// The order of Ban's checks is unchanged from before the removal helper:
+// an unknown or already-banned client is reported as such even when it is
+// not bound to a voice server.
+func TestBanClientUnknownUnbound(t *testing.T) {
+	a := newClientsTestApp(t)
+	a.remover = &fakeRemover{existed: false, running: true}
+	log := collectEvents(t, a)
+
+	a.BanClient(uuid.NewString(), "x")
+
+	assertNotification(t, log.drain(300*time.Millisecond), "Ban failed", "Client not found")
+}
+
+func TestBanClientAlreadyBannedUnbound(t *testing.T) {
+	a := newClientsTestApp(t)
+	r := &fakeRemover{existed: true, running: true}
+	a.remover = r
+	id := addClient(a)
+	a.ServerState.BannedState.BannedClients = append(a.ServerState.BannedState.BannedClients, state.BannedClient{ID: id, Name: "target"})
+	log := collectEvents(t, a)
+
+	a.BanClient(id.String(), "x")
+
+	assertNotification(t, log.drain(300*time.Millisecond), "Ban failed", "Client is already banned")
+	if len(r.callsCopy()) != 0 {
+		t.Fatal("nothing may be removed")
+	}
+}

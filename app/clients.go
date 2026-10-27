@@ -63,10 +63,36 @@ func (a *VCSApplication) voiceIP(id uuid.UUID) (net.IP, bool) {
 	return v.GetClientIPFromId(id)
 }
 
-// controlRunning reports whether there is a running control server to end
-// sessions through.
-func (a *VCSApplication) controlRunning() bool {
-	return a.remover != nil && a.remover.IsRunning()
+// runningRemover returns the session remover if there is a running control
+// server to end sessions through, else nil.
+func (a *VCSApplication) runningRemover() sessionRemover {
+	r := a.currentRemover()
+	if r == nil || !r.IsRunning() {
+		return nil
+	}
+	return r
+}
+
+// banPrecheck reports, under a read lock, whether clientGuid is a known
+// client that is not banned yet; otherwise it notifies and returns false.
+func (a *VCSApplication) banPrecheck(clientGuid uuid.UUID, clientId, reason string) bool {
+	a.ServerState.RLock()
+	_, known := a.ServerState.Clients[clientGuid]
+	_, alreadyBanned := utils.FindByFunc(a.ServerState.BannedState.BannedClients, func(bc state.BannedClient) bool {
+		return bc.ID == clientGuid
+	})
+	a.ServerState.RUnlock()
+	if !known {
+		a.Notify(events.NewNotification("Ban failed", "Client not found", "error"))
+		a.Logger.Error("Failed to ban client", "clientId", clientId, "reason", reason)
+		return false
+	}
+	if alreadyBanned {
+		a.Notify(events.NewNotification("Ban failed", "Client is already banned", "error"))
+		a.Logger.Error("Failed to ban client: already banned", "clientId", clientId)
+		return false
+	}
+	return true
 }
 
 func (a *VCSApplication) BanClient(clientId string, reason string) {
@@ -76,9 +102,16 @@ func (a *VCSApplication) BanClient(clientId string, reason string) {
 		a.Logger.Error("Failed to parse client ID", "clientId", clientId, "error", err)
 		return
 	}
-	if !a.controlRunning() {
+	remover := a.runningRemover()
+	if remover == nil {
 		a.Notify(events.NewNotification("Ban failed", "Control server is not running", "error"))
 		a.Logger.Error("Failed to ban client: control server is not running", "clientId", clientId)
+		return
+	}
+	// Same check order as before the removal helper: unknown, then already
+	// banned, then not bound to voice. Both checks are repeated under the
+	// write lock below, since the voice lookup must run without ServerState.
+	if !a.banPrecheck(clientGuid, clientId, reason) {
 		return
 	}
 	// Read the voice IP before taking ServerState (lock order, and no
@@ -126,7 +159,7 @@ func (a *VCSApplication) BanClient(clientId string, reason string) {
 
 	// The removal helper ends the stream (BAN as its last update), drops the
 	// voice binding everywhere and publishes ClientLeft.
-	if _, running := a.remover.RemoveClient(clientGuid, srs.ReasonBanned, srs.ServerActionUpdate(events.ActionBan, clientGuid, reason)); !running {
+	if _, running := remover.RemoveClient(clientGuid, srs.ReasonBanned, srs.ServerActionUpdate(events.ActionBan, clientGuid, reason)); !running {
 		// The control server stopped between the check and here; the ban is
 		// recorded, so a re-login is refused anyway.
 		a.Logger.Warn("Ban recorded but the session could not be ended: control server stopped", "clientId", clientId)
@@ -187,14 +220,15 @@ func (a *VCSApplication) KickClient(clientId string, reason string) {
 		a.Logger.Error("Failed to parse client ID", "clientId", clientId, "error", err)
 		return
 	}
-	if a.remover == nil {
+	remover := a.currentRemover()
+	if remover == nil {
 		a.Notify(events.NewNotification("Kick failed", "Control server is not running", "error"))
 		a.Logger.Error("Failed to kick client: control server is not running", "clientId", clientId)
 		return
 	}
 	// The removal helper ends the stream (KICK as its last update), drops
 	// the voice binding everywhere and publishes ClientLeft.
-	existed, running := a.remover.RemoveClient(clientGuid, srs.ReasonKicked, srs.ServerActionUpdate(events.ActionKick, clientGuid, reason))
+	existed, running := remover.RemoveClient(clientGuid, srs.ReasonKicked, srs.ServerActionUpdate(events.ActionKick, clientGuid, reason))
 	if !running {
 		a.Notify(events.NewNotification("Kick failed", "Control server is not running", "error"))
 		a.Logger.Error("Failed to kick client: control server is not running", "clientId", clientId)

@@ -31,8 +31,10 @@ type VCSApplication struct {
 	voiceServer       *voice.Server // read through currentVoiceServer
 	controlServer     *control.Server
 	// remover ends a client's session (control.Server once started; nil
-	// while the control server has never been started).
-	remover sessionRemover
+	// while the control server has never been started). Read through
+	// currentRemover; removerMu guards it.
+	removerMu sync.RWMutex
+	remover   sessionRemover
 	// voiceIPLookup is a test seam; nil means the local voice server's
 	// GetClientIPFromId (and "not bound" when there is no voice server).
 	voiceIPLookup func(uuid.UUID) (net.IP, bool)
@@ -54,6 +56,20 @@ func (a *VCSApplication) currentVoiceServer() *voice.Server {
 	a.voiceMu.RLock()
 	defer a.voiceMu.RUnlock()
 	return a.voiceServer
+}
+
+// currentRemover returns the session remover, or nil if the control
+// server was never started.
+func (a *VCSApplication) currentRemover() sessionRemover {
+	a.removerMu.RLock()
+	defer a.removerMu.RUnlock()
+	return a.remover
+}
+
+func (a *VCSApplication) setRemover(r sessionRemover) {
+	a.removerMu.Lock()
+	a.remover = r
+	a.removerMu.Unlock()
 }
 
 func (a *VCSApplication) setVoiceServer(v *voice.Server) {

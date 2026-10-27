@@ -262,7 +262,7 @@ func (a *VCSApplication) startGrpcServer() {
 
 	controlServer := control.NewServer(a.ServerState, a.SettingsState, a.Logger, a.DistributionState, a.eventBus, localVoiceDropper{a})
 	a.controlServer = controlServer
-	a.remover = controlServer
+	a.setRemover(controlServer)
 
 	a.SettingsState.Lock()
 	serverHost := fmt.Sprintf("%s:%d", a.SettingsState.Servers.Control.Host, a.SettingsState.Servers.Control.Port)
