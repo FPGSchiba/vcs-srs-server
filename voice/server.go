@@ -104,6 +104,12 @@ type Server struct {
 	controlClient     *voiceontrol.VoiceControlClient
 	serverId          string
 	helloRejects      [numRejectReasons]rejectLimiter
+	// parseRejects and bannedRejects rate-limit the two per-packet failure
+	// logs. Like helloRejects they are keyed by a fixed reason, never by
+	// source address, and each is separate so a flood of one cannot hide the
+	// other.
+	parseRejects  rejectLimiter
+	bannedRejects rejectLimiter
 }
 
 func NewServer(state *state.ServerState, logger *slog.Logger, distributionState *state.DistributionState, settingsState *state.SettingsState) *Server {
@@ -187,13 +193,7 @@ func (v *Server) Listen(address string, stopChan chan struct{}) error {
 				continue
 			}
 
-			v.serverState.RLock()
-			_, banned := utils.FindByFunc(v.serverState.BannedState.BannedClients, func(bc state.BannedClient) bool {
-				return bc.IPAddress == remoteAddr.IP.String()
-			})
-			v.serverState.RUnlock()
-			if banned {
-				v.logger.Warn("Banned client attempted to connect", "IP", remoteAddr.IP.String())
+			if v.dropIfBanned(remoteAddr) {
 				continue
 			}
 
@@ -205,6 +205,25 @@ func (v *Server) Listen(address string, stopChan chan struct{}) error {
 	}
 }
 
+// dropIfBanned reports whether a packet from addr must be dropped because the
+// address is banned. The log line is rate-limited through bannedRejects so a
+// banned host cannot flood the log by sending packets.
+func (v *Server) dropIfBanned(addr *net.UDPAddr) bool {
+	ip := addr.IP.String()
+	v.serverState.RLock()
+	_, banned := utils.FindByFunc(v.serverState.BannedState.BannedClients, func(bc state.BannedClient) bool {
+		return bc.IPAddress == ip
+	})
+	v.serverState.RUnlock()
+	if !banned {
+		return false
+	}
+	if ok, n := v.bannedRejects.shouldLog(time.Now()); ok {
+		v.logger.Warn("Banned client attempted to connect", "IP", ip, "suppressed_since_last", n)
+	}
+	return true
+}
+
 func (v *Server) handlePacket(data []byte, addr *net.UDPAddr) {
 	if !v.isRunning() {
 		v.logger.Warn("Voice server is not running, ignoring packet")
@@ -213,8 +232,11 @@ func (v *Server) handlePacket(data []byte, addr *net.UDPAddr) {
 
 	packet, err := ParsePacket(data)
 	if err != nil {
-		v.logger.Error("Failed to parse voice packet", "error", err)
-		// Optionally send an error response back to the client
+		// Anyone can spray garbage at a UDP port, so this is rate-limited and
+		// WARN rather than one ERROR per datagram.
+		if ok, n := v.parseRejects.shouldLog(time.Now()); ok {
+			v.logger.Warn("Failed to parse voice packet", "IP", addr.IP.String(), "error", err, "suppressed_since_last", n)
+		}
 		return
 	}
 

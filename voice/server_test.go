@@ -107,6 +107,14 @@ func newBoundTestServer(t *testing.T, ss *state.ServerState) *Server {
 type capturingHandler struct {
 	mu      sync.Mutex
 	reasons []string
+	records []capturedRecord
+}
+
+// capturedRecord is one log record as the handler saw it.
+type capturedRecord struct {
+	level slog.Level
+	msg   string
+	attrs map[string]slog.Value
 }
 
 func (h *capturingHandler) Enabled(context.Context, slog.Level) bool { return true }
@@ -114,7 +122,9 @@ func (h *capturingHandler) WithAttrs([]slog.Attr) slog.Handler       { return h 
 func (h *capturingHandler) WithGroup(string) slog.Handler            { return h }
 
 func (h *capturingHandler) Handle(_ context.Context, r slog.Record) error {
+	rec := capturedRecord{level: r.Level, msg: r.Message, attrs: make(map[string]slog.Value)}
 	r.Attrs(func(a slog.Attr) bool {
+		rec.attrs[a.Key] = a.Value
 		if a.Key == "reason" {
 			h.mu.Lock()
 			h.reasons = append(h.reasons, a.Value.String())
@@ -122,7 +132,36 @@ func (h *capturingHandler) Handle(_ context.Context, r slog.Record) error {
 		}
 		return true
 	})
+	h.mu.Lock()
+	h.records = append(h.records, rec)
+	h.mu.Unlock()
 	return nil
+}
+
+// recordsWithMsg returns every captured record whose message is msg.
+func (h *capturingHandler) recordsWithMsg(msg string) []capturedRecord {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var out []capturedRecord
+	for _, r := range h.records {
+		if r.msg == msg {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// recordsAtLevel returns every captured record at exactly level.
+func (h *capturingHandler) recordsAtLevel(level slog.Level) []capturedRecord {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var out []capturedRecord
+	for _, r := range h.records {
+		if r.level == level {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func (h *capturingHandler) snapshot() []string {
@@ -750,4 +789,108 @@ func TestKeepaliveAckGoesToBoundAddress(t *testing.T) {
 
 	s.handleKeepalivePacket(NewVCSKeepalivePacket(id), addr)
 	expectAck(t, peer, PacketTypeKeepalive)
+}
+
+// --- SRV-14: rate-limited parse-failure and banned-IP logs ---
+
+const (
+	msgParseFailed = "Failed to parse voice packet"
+	msgBanned      = "Banned client attempted to connect"
+)
+
+func loopbackUDPAddr() *net.UDPAddr {
+	return &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 40000}
+}
+
+func bannedLoopbackState() *state.ServerState {
+	ss := &state.ServerState{}
+	ss.BannedState.BannedClients = []state.BannedClient{{ID: uuid.New(), Name: "x", IPAddress: "127.0.0.1"}}
+	return ss
+}
+
+func TestParseFailureLogRateLimited(t *testing.T) {
+	s, h := newCapturingTestServer(t, &state.ServerState{})
+	addr := loopbackUDPAddr()
+	for i := 0; i < 50; i++ {
+		s.handlePacket([]byte{0xFF}, addr)
+	}
+	recs := h.recordsWithMsg(msgParseFailed)
+	if len(recs) != 1 {
+		t.Fatalf("got %d %q records for 50 malformed packets, want 1", len(recs), msgParseFailed)
+	}
+	if recs[0].level != slog.LevelWarn {
+		t.Fatalf("level = %v, want WARN", recs[0].level)
+	}
+	if errs := h.recordsAtLevel(slog.LevelError); len(errs) != 0 {
+		t.Fatalf("got %d ERROR records, want none (first: %q)", len(errs), errs[0].msg)
+	}
+
+	s.parseRejects.mu.Lock()
+	s.parseRejects.lastLogged = time.Now().Add(-rejectLogWindow)
+	s.parseRejects.mu.Unlock()
+	s.handlePacket([]byte{0xFF}, addr)
+
+	recs = h.recordsWithMsg(msgParseFailed)
+	if len(recs) != 2 {
+		t.Fatalf("got %d records after the window, want 2", len(recs))
+	}
+	if got := recs[1].attrs["suppressed_since_last"].Int64(); got != 49 {
+		t.Fatalf("suppressed_since_last = %d, want 49", got)
+	}
+}
+
+func TestBannedLogRateLimited(t *testing.T) {
+	s, h := newCapturingTestServer(t, bannedLoopbackState())
+	addr := loopbackUDPAddr()
+	for i := 0; i < 50; i++ {
+		if !s.dropIfBanned(addr) {
+			t.Fatal("dropIfBanned returned false for a banned address")
+		}
+	}
+	recs := h.recordsWithMsg(msgBanned)
+	if len(recs) != 1 {
+		t.Fatalf("got %d %q records for 50 packets, want 1", len(recs), msgBanned)
+	}
+	if recs[0].level != slog.LevelWarn {
+		t.Fatalf("level = %v, want WARN", recs[0].level)
+	}
+
+	s.bannedRejects.mu.Lock()
+	s.bannedRejects.lastLogged = time.Now().Add(-rejectLogWindow)
+	s.bannedRejects.mu.Unlock()
+	s.dropIfBanned(addr)
+
+	recs = h.recordsWithMsg(msgBanned)
+	if len(recs) != 2 {
+		t.Fatalf("got %d records after the window, want 2", len(recs))
+	}
+	if got := recs[1].attrs["suppressed_since_last"].Int64(); got != 49 {
+		t.Fatalf("suppressed_since_last = %d, want 49", got)
+	}
+
+	other := &net.UDPAddr{IP: net.ParseIP("10.9.9.9"), Port: 40000}
+	before := len(h.recordsWithMsg(msgBanned))
+	if s.dropIfBanned(other) {
+		t.Fatal("dropIfBanned returned true for a non-banned address")
+	}
+	if after := len(h.recordsWithMsg(msgBanned)); after != before {
+		t.Fatal("a non-banned address produced a banned-client log")
+	}
+}
+
+// Review focus: a malformed-packet flood must not arm the banned limiter (or
+// vice versa) and hide the other, different failure.
+func TestParseAndBannedLimitersIndependent(t *testing.T) {
+	s, h := newCapturingTestServer(t, bannedLoopbackState())
+	addr := loopbackUDPAddr()
+	for i := 0; i < 10; i++ {
+		s.handlePacket([]byte{0xFF}, addr)
+	}
+	s.dropIfBanned(addr)
+	if n := len(h.recordsWithMsg(msgParseFailed)); n != 1 {
+		t.Fatalf("parse-failure records = %d, want 1", n)
+	}
+	if n := len(h.recordsWithMsg(msgBanned)); n != 1 {
+		t.Fatalf("banned records = %d, want 1", n)
+	}
 }
