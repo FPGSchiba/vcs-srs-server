@@ -171,6 +171,11 @@ func (s *VoiceControlServer) RegisterVoiceServer(ctx context.Context, req *pb.Re
 
 	if req.IsGlobal {
 		s.globalNodeAddr = udpAddr
+	} else if prev, ok := s.nodes[req.ServerId]; ok && !prev.isGlobal {
+		// Same node re-registering (a reconnect) while its record is still
+		// here: it keeps its coalitions (R-3). Its old record is replaced,
+		// not counted as another node's, so nothing moves under its clients.
+		node.coalitions = append([]string(nil), prev.coalitions...)
 	} else {
 		node.coalitions = s.assignCoalitions(req.PreferredCoalitions)
 	}
@@ -181,7 +186,7 @@ func (s *VoiceControlServer) RegisterVoiceServer(ctx context.Context, req *pb.Re
 		s.rebalance(true)
 	}
 
-	assignedCoalitions := node.coalitions
+	assignedCoalitions := append([]string(nil), node.coalitions...)
 	globalAddr := s.globalNodeAddr
 	s.mu.Unlock()
 
