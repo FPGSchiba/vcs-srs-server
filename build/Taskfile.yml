@@ -5,6 +5,7 @@ tasks:
     summary: Runs `go mod tidy`
     deps:
       - task: generate:proto
+      - task: generate:graphql
     internal: true
     cmds:
       - go mod tidy
@@ -80,15 +81,16 @@ tasks:
 
   generate:proto:
     summary: Builds the SRS protobuf files
+    run: once
     sources:
       - "*.proto"
     generates:
       - "./srspb/srs.pb.go"
       - "./srspb/srs_grpc.pb.go"
-      - "./voicecontrolpb/voicecontrol.pb.go"
-      - "./voicecontrolpb/voicecontrol_grpc.pb.go"
-      - "./vcsauthpb/vcsauth.pb.go"
-      - "./vcsauthpb/vcsauth_grpc.pb.go"
+      - "./voicecontrolpb/control.pb.go"
+      - "./voicecontrolpb/control_grpc.pb.go"
+      - "./vcsauthpb/vcs-auth-plugin.pb.go"
+      - "./vcsauthpb/vcs-auth-plugin_grpc.pb.go"
     preconditions:
       - sh: protoc --version
         msg: "Looks like protoc isn't installed. Please install it from https://grpc.io/docs/protoc-installation/"
@@ -107,14 +109,18 @@ tasks:
 
   generate:graphql:
     summary: Generates GraphQL server code via gqlgen
+    run: once
+    deps:
+      - task: generate:proto
     sources:
       - "graphql/schema.graphql"
       - "gqlgen.yml"
     generates:
       - "graphql/generated/generated.go"
       - "graphql/generated/models_gen.go"
-    preconditions:
-      - sh: which gqlgen
-        msg: "Install gqlgen: go install github.com/99designs/gqlgen@latest"
+    vars:
+      # Use the gqlgen version pinned in go.mod so no global install is needed
+      GQLGEN_VERSION:
+        sh: go list -m -f '{{"{{"}}.Version{{"}}"}}' github.com/99designs/gqlgen
     cmds:
-      - gqlgen generate
+      - go run github.com/99designs/gqlgen@{{.GQLGEN_VERSION}} generate
