@@ -32,6 +32,9 @@ var (
 	sleep = time.Second * 5
 )
 
+// The control node's VoiceControlServer drops bindings on remote voice nodes.
+var _ srs.VoiceSessionDropper = (*voiceontrol.VoiceControlServer)(nil)
+
 const (
 	healthServiceSystem  = ""        // empty string represents the health of the healthServiceSystem
 	healthServiceSRS     = "srs"     // service name for SRS
@@ -183,7 +186,7 @@ func (s *Server) Start(address string, stopChan chan struct{}) error {
 	// goroutines that fail() would not stop.
 	s.voiceControlServer = controlServer
 
-	srsServer := srs.NewSimpleRadioServer(s.serverState, s.settingsState, s.logger, s.eventBus, controlServer, srs.VoiceSessionDroppers{s.localVoice})
+	srsServer := srs.NewSimpleRadioServer(s.serverState, s.settingsState, s.logger, s.eventBus, controlServer, srs.VoiceSessionDroppers{s.localVoice, controlServer})
 	s.srsServer = srsServer
 	authServer := srs.NewAuthServer(s.serverState, s.settingsState, s.logger, s.distributionState, s.eventBus)
 	s.authServer = authServer

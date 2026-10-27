@@ -724,3 +724,42 @@ func convertRadioStateToProto(r *state.RadioState) *pb.VoiceRadioInfo {
 	}
 	return &pb.VoiceRadioInfo{Radios: radios, Muted: r.Muted}
 }
+
+// DropVoiceSession tells every voice node with an open control stream to
+// drop clientID's binding (kick_client). It is sent to every node, not only
+// the one clientNodes records, because a client can be bound on its
+// coalition node and on the global node at once. Fire-and-forget: a send
+// error is logged; a node that is not connected has nothing to drop.
+// Satisfies srs.VoiceSessionDropper.
+func (s *VoiceControlServer) DropVoiceSession(clientID uuid.UUID, reason string) {
+	type target struct {
+		node   *registeredNode
+		stream pb.VoiceControlService_EstablishStreamServer
+	}
+	s.mu.RLock()
+	targets := make([]target, 0, len(s.nodes))
+	for _, node := range s.nodes {
+		if node.stream != nil {
+			targets = append(targets, target{node, node.stream})
+		}
+	}
+	s.mu.RUnlock()
+
+	for _, t := range targets {
+		msg := &pb.ControlMessage{
+			ServerId: t.node.serverID,
+			EventId:  uuid.NewString(),
+			Command: &pb.ControlMessage_KickClient{KickClient: &pb.KickClientRequest{
+				ServerId: t.node.serverID,
+				ClientId: clientID.String(),
+				Reason:   reason,
+			}},
+		}
+		t.node.sendMu.Lock()
+		err := t.stream.Send(msg)
+		t.node.sendMu.Unlock()
+		if err != nil {
+			s.logger.Warn("Failed to send kick_client", "node", t.node.serverID, "client_id", clientID, "error", err)
+		}
+	}
+}

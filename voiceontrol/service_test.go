@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/FPGSchiba/vcs-srs-server/events"
@@ -126,4 +127,64 @@ func TestGetVoiceAddressForCoalition(t *testing.T) {
 	if globalAddr != "10.0.0.10:5002" {
 		t.Fatalf("expected global addr 10.0.0.10:5002, got %q", globalAddr)
 	}
+}
+
+// --- SV1: control sends kick_client to every voice node ---
+
+type fakeNodeStream struct {
+	pb.VoiceControlService_EstablishStreamServer
+	mu   sync.Mutex
+	sent []*pb.ControlMessage
+}
+
+func (f *fakeNodeStream) Send(m *pb.ControlMessage) error {
+	f.mu.Lock()
+	f.sent = append(f.sent, m)
+	f.mu.Unlock()
+	return nil
+}
+
+func (f *fakeNodeStream) sentCopy() []*pb.ControlMessage {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]*pb.ControlMessage(nil), f.sent...)
+}
+
+func TestDropVoiceSessionKicksEveryNode(t *testing.T) {
+	s := newTestVoiceControlServer([]string{"Blue"})
+	for _, req := range []*pb.RegisterVoiceServerRequest{
+		{ServerId: "n1", ServerAddress: "10.0.0.1", UdpPort: 5002},
+		{ServerId: "g", ServerAddress: "10.0.0.2", UdpPort: 5002, IsGlobal: true},
+		{ServerId: "n3", ServerAddress: "10.0.0.3", UdpPort: 5002},
+	} {
+		if _, err := s.RegisterVoiceServer(context.Background(), req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	streams := map[string]*fakeNodeStream{"n1": {}, "g": {}}
+	s.mu.Lock()
+	for id, st := range streams {
+		s.nodes[id].stream = st
+	}
+	s.mu.Unlock()
+
+	id := uuid.New()
+	s.DropVoiceSession(id, "kicked")
+
+	for node, st := range streams {
+		sent := st.sentCopy()
+		if len(sent) != 1 {
+			t.Fatalf("node %s got %d messages, want 1", node, len(sent))
+		}
+		m := sent[0]
+		k := m.GetKickClient()
+		if k == nil || k.GetClientId() != id.String() || k.GetReason() != "kicked" || k.GetServerId() != node || m.GetServerId() != node || m.GetEventId() == "" {
+			t.Fatalf("node %s got %v", node, m)
+		}
+	}
+}
+
+func TestDropVoiceSessionNoNodes(t *testing.T) {
+	s := newTestVoiceControlServer([]string{"Blue"})
+	s.DropVoiceSession(uuid.New(), "kicked") // must not panic
 }
