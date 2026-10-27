@@ -1,50 +1,50 @@
 name: Test
 on:
-  pull_request_target:
+  pull_request: {}
+  push:
+    branches: [main]
+
+# Least privilege by default. PR-head code runs here, so this workflow must
+# never hold a write token or a secret (it used to run with both, via the
+# base-branch "target" PR trigger).
+permissions:
+  contents: read
 
 jobs:
   test:
     name: Go Test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Codecov tokenless upload (OIDC). Fork and Dependabot PR runs get no
+      # OIDC token; the upload step below is skipped for them, not failed.
+      id-token: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.25'
+          go-version-file: go.mod
 
-      - name: Install dependencies
-        uses: ConorMacBride/install-package@v1
-        with:
-          apt: gcc libgtk-4-dev libwebkitgtk-6.0-dev protobuf-compiler libasound2-dev
+      - name: Assert Go toolchain
+        run: bash .github/scripts/assert-go-toolchain.sh
 
-      - name: Install Wails
-        run: go install -v github.com/wailsapp/wails/v3/cmd/wails3@latest
+      - name: Generate code
+        uses: ./.github/actions/generate
 
-      - name: Install Protoc Plugins
-        run: |
-          go install -v google.golang.org/protobuf/cmd/protoc-gen-go@latest
-          go install -v google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
-
-      - name: Generate Protobuf files
-        run: |
-          mkdir -p srspb voicecontrolpb vcsauthpb
-          protoc --go_out=./srspb --go_opt=paths=source_relative --go-grpc_out=./srspb --go-grpc_opt=paths=source_relative srs.proto
-          protoc --go_out=./voicecontrolpb --go_opt=paths=source_relative --go-grpc_out=./voicecontrolpb --go-grpc_opt=paths=source_relative control.proto
-          protoc --go_out=./vcsauthpb --go_opt=paths=source_relative --go-grpc_out=./vcsauthpb --go-grpc_opt=paths=source_relative vcs-auth-plugin.proto
-
-      - name: Generate GraphQL code
-        run: go run github.com/99designs/gqlgen@$(go list -m -f '{{.Version}}' github.com/99designs/gqlgen) generate
+      - name: Test CI scripts
+        run: bash .github/scripts/assert-go-toolchain_test.sh && bash .github/scripts/go-deps-update_test.sh
 
       - name: Run tests
-        run: go test -v -tags headless -coverprofile=coverage.out ./...
+        run: go test -race -count=1 -tags headless -coverprofile=coverage.out ./...
 
+      # Fork and Dependabot PR runs get no OIDC token; the upload is skipped
+      # for them, not failed.
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f
+        if: github.event_name == 'push' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           files: coverage.out
           fail_ci_if_error: true
@@ -53,15 +53,15 @@ jobs:
           # so signature verification fails with "no valid OpenPGP data found".
           # See https://github.com/codecov/codecov-action/issues/1955
           use_pypi: true
-          token: ${{ secrets.CODECOV_TOKEN }}
+          use_oidc: true
 
   frontend-test:
     name: Frontend Test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
 
       - uses: actions/setup-node@v7
         with:
