@@ -16,11 +16,12 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
 // fakeUpdateStream is a grpc.ServerStreamingServer[pb.ServerUpdate] that
-// records every Send. Only Context and Send are used by SubscribeToUpdates.
+// records every Send. Only Context, SendHeader and Send are used by SubscribeToUpdates.
 type fakeUpdateStream struct {
 	grpc.ServerStream
 	ctx    context.Context
@@ -34,6 +35,10 @@ func newFakeUpdateStream(ctx context.Context) *fakeUpdateStream {
 }
 
 func (f *fakeUpdateStream) Context() context.Context { return f.ctx }
+
+// SendHeader accepts the C17 subscription headers; the embedded
+// grpc.ServerStream is nil, so it must not be reached.
+func (f *fakeUpdateStream) SendHeader(metadata.MD) error { return nil }
 
 func (f *fakeUpdateStream) Send(u *pb.ServerUpdate) error {
 	f.mu.Lock()

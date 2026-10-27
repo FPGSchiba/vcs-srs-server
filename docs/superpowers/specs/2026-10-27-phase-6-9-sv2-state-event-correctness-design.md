@@ -4,7 +4,7 @@
 
 **Repo:** `vcs-srs-server`. Branch `chore/cleanup-sv2`, cut from `origin/main` (`dcce3ad` at design time: #229 SV1, with SV3 #226 and SV5 #225 merged earlier). `origin/main` was fetched again for pass 2 and was still `dcce3ad`, so every anchor below holds.
 **Umbrella:** client repo `docs/superpowers/specs/2026-10-27-vcs-client-phase-6-9-cleanup-umbrella-design.md`, §3 SV2, §10.
-**Builds on SV1 (merged):** `subscription` / `sub.end` / `streams` / `detachedAt` (`srs/session.go`), the stream loop in `SubscribeToUpdates` (`srs/srs_service.go:388-497`), and the SV1 → CL1 contract table (server `docs/superpowers/specs/2026-10-27-phase-6-9-sv1-session-liveness-design.md` §11, rows C1-C12). SV2 adds rows C13-C16 (§9).
+**Builds on SV1 (merged):** `subscription` / `sub.end` / `streams` / `detachedAt` (`srs/session.go`), the stream loop in `SubscribeToUpdates` (`srs/srs_service.go:388-497`), and the SV1 → CL1 contract table (server `docs/superpowers/specs/2026-10-27-phase-6-9-sv1-session-liveness-design.md` §11, rows C1-C12). SV2 adds rows C13-C17 (§9).
 
 ## Decisions
 
@@ -180,7 +180,7 @@ The plan pins the exact names. In outline:
 
 - **Server behaviour / wire-visible:** all of §7. D1 and D3 are wire decisions; both were decided by the user.
 - **Cross-repo:**
-  - the CL1 contract rows C13-C16 (§9);
+  - the CL1 contract rows C13-C17 (§9);
   - the C# team note addendum in `note-csharp-serveraction.md`, section "Addendum (SV2): the update stream can now end with RESOURCE_EXHAUSTED" (heads-up only; nothing is filed upstream);
   - the run of the client suite against the SV2 build;
   - the SV4 merge order (D4).
@@ -188,7 +188,7 @@ The plan pins the exact names. In outline:
 
 ## 9. Cross-track contracts
 
-### SV2 → CL1 (appended to SV1 §11's table; CL1 codes against C1-C16)
+### SV2 → CL1 (appended to SV1 §11's table; CL1 codes against C1-C17)
 
 | # | Situation | What the VCS client sees | Code | Message (informational; branch on the code) |
 |---|---|---|---|---|
@@ -196,6 +196,7 @@ The plan pins the exact names. In outline:
 | C14 | `SyncClient` roster | each `ClientInfo` carries `unit_id` and `role_id` (as `CLIENT_JOINED` / `CLIENT_INFO_UPDATE` already do) | — | CL1's FFID label can rely on it for players who were already present. |
 | C15 | `SyncClient` side effects | no `CLIENT_INFO_UPDATE` is broadcast to anyone (it carried a nil GUID; VCS already dropped it) | — | — |
 | C16 | `UpdateClientInfo` (VCS does not call it) | `Success:false` changes nothing; a guest must send its current coalition and role; success broadcasts `CLIENT_INFO_UPDATE` with the caller's GUID | — | — |
+| C17 | `SubscribeToUpdates` subscription acknowledgement | response headers (empty metadata) as soon as the subscription is registered, before any update | — | SubscribeToUpdates sends response headers once the subscription is registered; an event published after the client observes the headers is delivered on that stream. On resubscribe (C13) the client waits for the headers before calling `SyncClient`, so no event falls between the snapshot and the stream. |
 
 The VCS client merges the roster today (`internal/control/client.go:51-56` only upserts), so C13's "replacement" is new CL1 work.
 
@@ -231,3 +232,9 @@ Executed on `chore/cleanup-sv2` from `dcce3ad`. Deviations and observations:
 - **D10 branch test.** `TestOverflowAfterUnregisterWaitsForRemover` (`srs/slow_subscriber_test.go`) reaches the branch where the handler observes its overflow after a remover has unregistered the subscription but before it has ended it. It asserts the handler waits, does not set `detachedAt`, and returns the remover's status with the final update delivered last and once. The code already behaved this way, so the test passed on first run; it was checked by mutation (replacing the wait on `sub.done` with ending the subscription itself makes it fail with "handler returned ... ResourceExhausted ... before the remover ended the subscription").
 - **§3.3 snapshot sites in `GuestLogin` and `UnitSelect`.** These two RPCs keep a separate read lock for their `ClientJoined` snapshot, taken after `AddClient` (which locks internally) rather than inside the write section. The snapshot is a deep copy, so it is race-free; it can include changes made between the write and the snapshot, which only makes the roster newer. Behaviour is the same as before SV2. Moving the copy into the write section would mean changing `state.AddClient`'s signature, which is out of proportion for no observable difference.
 - **`UpdateClientInfo` logging.** The INFO line "Updated client info" is now logged only when the update is applied (before SV2 it was also logged on a rejected update). The validation warnings are logged while `serverState` is held; the event-bus side of that is non-blocking (`LogEntry` publish never waits), so the only added hold time is the synchronous slog handlers. Accepted as is.
+
+### Follow-up: subscription ack (C17)
+
+- **Why.** CL1's Linux CI exposed a race in the C13 resync: the client resubscribed and then called `SyncClient`, but nothing told it when the new subscription existed. An event published between the `SyncClient` snapshot and the server registering the subscription was in neither, so it was lost. `SubscribeToUpdates` now calls `stream.SendHeader(metadata.MD{})` once both the event-bus subscription and the session subscription are registered and any older subscriber has been superseded. A `SendHeader` error (dead stream) is logged at WARN and returned as the handler error; the deferred cleanup then starts the C9 grace as for any client-side stream end.
+- **Tests.** `TestSubscribeToUpdatesSendsHeadersOnceRegistered` and `TestSubscribeToUpdatesDeliversEventPublishedAfterHeaders` (`srs/subscribe_ack_test.go`) run a real gRPC server over `bufconn` (part of the existing `google.golang.org/grpc` module, no new dependency). Both failed before the change (no headers within 2s) and pass after; `-count=20 -race` green. `fakeUpdateStream` gained a no-op `SendHeader` because its embedded `grpc.ServerStream` is nil.
+- **Clients that ignore headers** (e.g. the C# peer) are unaffected: gRPC clients receive headers implicitly and the stream's messages are unchanged. This is from reasoning, not tested (PR #253 cannot authenticate against this server).

@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/metadata"
 )
 
 // VoiceAddressProvider resolves UDP addresses for a given coalition.
@@ -413,6 +414,15 @@ func (s *SimpleRadioServer) SubscribeToUpdates(_ *pb.Empty, stream grpc.ServerSt
 		}
 		s.mu.Unlock()
 	}()
+
+	// C17: the response headers mean "this subscription is live". evs and
+	// sub are both registered and any older subscriber is superseded, so an
+	// event published after the client observes the headers is delivered
+	// here. A client that resubscribes waits for them before SyncClient.
+	if err := stream.SendHeader(metadata.MD{}); err != nil {
+		s.logger.Warn("Failed to send update stream headers", "client_id", clientID, "error", err)
+		return err
+	}
 
 	s.logger.Info("Client subscribed to updates", "client_id", clientID)
 
