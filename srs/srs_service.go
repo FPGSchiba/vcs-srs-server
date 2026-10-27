@@ -41,6 +41,9 @@ type SimpleRadioServer struct {
 	dropper  VoiceSessionDropper
 	stopChan chan struct{}
 	stopOnce sync.Once
+	// staleAfter: a client with a live stream but no RPC for this long is
+	// removed. Set by StartCleanupRoutine. Guarded by mu.
+	staleAfter time.Duration
 	// now is the server's clock (time.Now outside tests).
 	now func() time.Time
 }
@@ -519,8 +522,12 @@ func (s *SimpleRadioServer) buildServerSettings() *pb.ServerSettings {
 	return settings
 }
 
-// StartCleanupRoutine launches a goroutine that periodically removes stale clients.
+// StartCleanupRoutine launches a goroutine that periodically removes dead
+// sessions (see reapOnce).
 func (s *SimpleRadioServer) StartCleanupRoutine(interval time.Duration, staleAfter time.Duration) {
+	s.mu.Lock()
+	s.staleAfter = staleAfter
+	s.mu.Unlock()
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -531,21 +538,7 @@ func (s *SimpleRadioServer) StartCleanupRoutine(interval time.Duration, staleAft
 			case <-s.stopChan:
 				return
 			case <-ticker.C:
-				now := time.Now()
-				var stale []uuid.UUID
-				s.mu.Lock()
-				for clientID := range s.streams {
-					s.serverState.RLock()
-					client, exists := s.serverState.Clients[clientID]
-					s.serverState.RUnlock()
-					if !exists || now.Sub(client.LastUpdate) > staleAfter {
-						stale = append(stale, clientID)
-					}
-				}
-				s.mu.Unlock()
-				for _, id := range stale {
-					s.RemoveClient(id, ReasonStale, nil)
-				}
+				s.reapOnce(s.now())
 			}
 		}
 	}()

@@ -379,3 +379,154 @@ func TestDisconnectRemoves(t *testing.T) {
 		t.Fatalf("%d ClientLeft events, want 1", n)
 	}
 }
+
+// --- SRV-01 / SRV-02: the reaper ---
+
+func setLastUpdate(s *SimpleRadioServer, id uuid.UUID, t time.Time) {
+	s.serverState.Lock()
+	s.serverState.Clients[id].LastUpdate = t
+	s.serverState.Unlock()
+}
+
+func TestReapPingingClientSurvives(t *testing.T) {
+	s := newTestServer()
+	clock := withSRSClock(s)
+	id := addTestClient(s)
+	setLastUpdate(s, id, clock.Now())
+	startSubscriber(t, s, id)
+
+	for i := 1; i <= 132; i++ { // 11 minutes in 5s steps
+		clock.Advance(5 * time.Second)
+		if _, err := s.Ping(clientCtx(id), &pb.PingRequest{}); err != nil {
+			t.Fatal(err)
+		}
+		if i%12 == 0 {
+			s.reapOnce(clock.Now())
+			assertPresent(t, s, id)
+		}
+	}
+}
+
+func TestReapStaleLiveStream(t *testing.T) {
+	s := newTestServer()
+	clock := withSRSClock(s)
+	id := addTestClient(s)
+	T := clock.Now()
+	setLastUpdate(s, id, T)
+	left := watchClientLeft(t, s.eventBus, id)
+	_, result, _ := startSubscriber(t, s, id)
+
+	s.reapOnce(T.Add(10 * time.Minute))
+	assertPresent(t, s, id)
+	s.reapOnce(T.Add(10*time.Minute + time.Second))
+	assertSessionEnded(t, waitResult(t, result), "stale")
+	assertGone(t, s, id)
+	if n := left(300 * time.Millisecond); n != 1 {
+		t.Fatalf("%d ClientLeft events, want 1", n)
+	}
+}
+
+// detach subscribes id and ends the stream from the client side at the
+// fake clock's current time, which it returns.
+func detach(t *testing.T, s *SimpleRadioServer, clock *fakeClock, id uuid.UUID) time.Time {
+	t.Helper()
+	T := clock.Now()
+	setLastUpdate(s, id, T)
+	cancel, result, _ := startSubscriber(t, s, id)
+	cancel()
+	if err := waitResult(t, result); err != nil {
+		t.Fatalf("client-side end returned %v", err)
+	}
+	return T
+}
+
+func TestReapStreamLostAfterGrace(t *testing.T) {
+	s := newTestServer()
+	clock := withSRSClock(s)
+	d := withDropper(s)
+	id := addTestClient(s)
+	T := detach(t, s, clock, id)
+
+	s.reapOnce(T.Add(119 * time.Second))
+	assertPresent(t, s, id)
+	removed := s.reapOnce(T.Add(121 * time.Second))
+	assertGone(t, s, id)
+	if len(removed) != 1 || removed[0] != id {
+		t.Fatalf("reapOnce returned %v", removed)
+	}
+	if calls := d.callsCopy(); len(calls) != 1 || calls[0].reason != "stream lost" {
+		t.Fatalf("dropper calls %v, want one with reason \"stream lost\"", calls)
+	}
+}
+
+func TestReapResubscribeKeepsSession(t *testing.T) {
+	s := newTestServer()
+	clock := withSRSClock(s)
+	id := addTestClient(s)
+	T := detach(t, s, clock, id)
+	clock.Advance(60 * time.Second)
+	startSubscriber(t, s, id)
+
+	s.reapOnce(T.Add(300 * time.Second))
+	assertPresent(t, s, id)
+}
+
+func TestReapPingExtendsGrace(t *testing.T) {
+	s := newTestServer()
+	clock := withSRSClock(s)
+	id := addTestClient(s)
+	T := detach(t, s, clock, id)
+	clock.Advance(100 * time.Second)
+	if _, err := s.Ping(clientCtx(id), &pb.PingRequest{}); err != nil {
+		t.Fatal(err)
+	}
+
+	s.reapOnce(T.Add(200 * time.Second))
+	assertPresent(t, s, id)
+	s.reapOnce(T.Add(221 * time.Second))
+	assertGone(t, s, id)
+}
+
+func TestReapNeverSubscribed(t *testing.T) {
+	s := newTestServer()
+	clock := withSRSClock(s)
+	id := addTestClient(s)
+	T := clock.Now()
+	setLastUpdate(s, id, T)
+
+	s.reapOnce(T.Add(119 * time.Second))
+	assertPresent(t, s, id)
+	s.reapOnce(T.Add(121 * time.Second))
+	assertGone(t, s, id)
+}
+
+func TestReapRevalidatesUnderLock(t *testing.T) {
+	s := newTestServer()
+	clock := withSRSClock(s)
+	id := addTestClient(s)
+	T := detach(t, s, clock, id)
+	now := T.Add(121 * time.Second)
+
+	// Collection, as reapOnce does it.
+	s.mu.Lock()
+	s.serverState.RLock()
+	reason, ok := s.reapReasonLocked(id, now)
+	s.serverState.RUnlock()
+	s.mu.Unlock()
+	if !ok || reason != ReasonStreamLost {
+		t.Fatalf("reapReasonLocked = %q, %v; want stream lost, true", reason, ok)
+	}
+
+	// The client resubscribes between collection and removal.
+	_, result, _ := startSubscriber(t, s, id)
+
+	if s.removeClientIf(id, reason, nil, s.reapCond(id, now, reason)) {
+		t.Fatal("removal went ahead although the client resubscribed")
+	}
+	assertPresent(t, s, id)
+	select {
+	case err := <-result:
+		t.Fatalf("new stream ended: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+}

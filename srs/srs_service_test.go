@@ -24,6 +24,7 @@ func newTestServer() *SimpleRadioServer {
 		logger:        slog.New(slog.NewTextHandler(os.Stderr, nil)),
 		eventBus:      events.NewEventBus(),
 		now:           time.Now,
+		staleAfter:    10 * time.Minute,
 		streams:       make(map[uuid.UUID]*subscription),
 		detachedAt:    make(map[uuid.UUID]time.Time),
 		stopChan:      make(chan struct{}),

@@ -2,6 +2,7 @@ package srs
 
 import (
 	"sync"
+	"time"
 
 	"github.com/FPGSchiba/vcs-srs-server/events"
 	pb "github.com/FPGSchiba/vcs-srs-server/srspb"
@@ -149,4 +150,89 @@ func (s *SimpleRadioServer) removeClientIf(id uuid.UUID, reason RemovalReason, f
 		})
 	}
 	return existed
+}
+
+// streamGrace is how long a session survives without an update stream,
+// measured from the later of the stream's end and the client's last RPC.
+const streamGrace = 120 * time.Second
+
+// reapReasonLocked decides whether the reaper should remove id at now.
+// The caller holds s.mu and serverState (read or write).
+//   - live stream, no RPC for staleAfter            -> ReasonStale
+//   - no stream for streamGrace (since the later of
+//     the stream's end and the last RPC)             -> ReasonStreamLost
+//   - a subscription whose client is gone (orphan)  -> ReasonStale
+func (s *SimpleRadioServer) reapReasonLocked(id uuid.UUID, now time.Time) (RemovalReason, bool) {
+	_, subscribed := s.streams[id]
+	client, exists := s.serverState.Clients[id]
+	switch {
+	case !exists:
+		if subscribed {
+			return ReasonStale, true
+		}
+		return "", false
+	case client == nil:
+		return ReasonStale, true
+	case subscribed:
+		if now.Sub(client.LastUpdate) > s.staleAfter {
+			return ReasonStale, true
+		}
+		return "", false
+	default:
+		since := client.LastUpdate
+		if d, ok := s.detachedAt[id]; ok && d.After(since) {
+			since = d
+		}
+		if now.Sub(since) > streamGrace {
+			return ReasonStreamLost, true
+		}
+		return "", false
+	}
+}
+
+// reapCond re-validates a reaper decision inside removeClientIf: the removal
+// goes ahead only if the same reason still holds under both locks, so a
+// client that resubscribed or sent an RPC after collection is kept.
+func (s *SimpleRadioServer) reapCond(id uuid.UUID, now time.Time, reason RemovalReason) func() bool {
+	return func() bool {
+		r, ok := s.reapReasonLocked(id, now)
+		return ok && r == reason
+	}
+}
+
+// reapOnce removes every session reapReasonLocked condemns at now and
+// returns the removed ids.
+func (s *SimpleRadioServer) reapOnce(now time.Time) []uuid.UUID {
+	type candidate struct {
+		id     uuid.UUID
+		reason RemovalReason
+	}
+	var candidates []candidate
+	s.mu.Lock()
+	s.serverState.RLock()
+	for id := range s.serverState.Clients {
+		if r, ok := s.reapReasonLocked(id, now); ok {
+			candidates = append(candidates, candidate{id, r})
+		}
+	}
+	for id := range s.streams {
+		if _, known := s.serverState.Clients[id]; known {
+			continue
+		}
+		if r, ok := s.reapReasonLocked(id, now); ok {
+			candidates = append(candidates, candidate{id, r})
+		}
+	}
+	s.serverState.RUnlock()
+	s.mu.Unlock()
+
+	var removed []uuid.UUID
+	for _, c := range candidates {
+		// An orphan subscription (client already gone) is ended here too;
+		// removeClientIf reports false for it because nothing existed.
+		if s.removeClientIf(c.id, c.reason, nil, s.reapCond(c.id, now, c.reason)) {
+			removed = append(removed, c.id)
+		}
+	}
+	return removed
 }
