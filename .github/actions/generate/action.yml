@@ -6,7 +6,7 @@
 # Precondition: the repository is checked out and actions/setup-go has run.
 #
 # PINNING CONVENTION: never let CI resolve "whatever is current" (an unpinned
-# `@latest`, or an OS package manager's rolling channel). A floating tool
+# "latest" version query, or an OS package manager's rolling channel). A floating tool
 # version means CI can go red on an unrelated upstream release, with a failure
 # that looks like our own code broke.
 #   1. Derive the version from go.mod when the tool IS one of its module
