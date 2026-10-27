@@ -34,6 +34,9 @@ jobs:
       - name: Generate code
         uses: ./.github/actions/generate
 
+      - name: Vet
+        run: go vet -tags headless ./...
+
       - name: Test CI scripts
         run: bash .github/scripts/assert-go-toolchain_test.sh && bash .github/scripts/go-deps-update_test.sh
 
