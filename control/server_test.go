@@ -522,3 +522,30 @@ func TestStartStopReleasesPort(t *testing.T) {
 	}
 	assertRebindable(t, addr)
 }
+
+// Review follow-up: when Serve fails with a non-ErrServerStopped error, the
+// serve goroutine clears isRunning. A later Stop must still tear everything
+// down (gRPC servers, listeners, the SRS server and the AuthServer's pending-
+// login sweeper) instead of returning early and using up stopOnce.
+func TestStopAfterServeFailureStillTearsDown(t *testing.T) {
+	addr := freeAddr(t)
+	s := newStartTestServer(t, state.DistributionModeStandalone, 0, t.TempDir())
+	if err := s.Start(addr, make(chan struct{})); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	// Simulate the serve goroutine's error path.
+	s.mu.Lock()
+	s.isRunning = false
+	s.mu.Unlock()
+
+	if err := s.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	assertRebindable(t, addr)
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.clientGrpcServer != nil || s.clientListener != nil {
+		t.Fatal("Stop left the client gRPC server or listener in place")
+	}
+}

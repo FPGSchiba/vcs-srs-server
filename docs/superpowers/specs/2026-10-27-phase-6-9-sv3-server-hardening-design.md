@@ -159,6 +159,7 @@ CL1 contract: on a **non-Auth** RPC, `Unauthenticated` or `PermissionDenied` = s
 - R1: the C# peer's UX on the 6 outlier sites and interceptor failures changes (SRV-07). Untestable here (PR #253). Manual checklist.
 - R2: SV3 merges in wave 1, CL1 in wave 3. In between, the VCS client shows `rpc error: code = Unauthenticated desc = …` on an expired token instead of `code = Unknown`. Cosmetic.
 - R3: a per-IP cap of 32 behind a shared NAT could refuse logins only if 32 users from one address are simultaneously mid-login; entries are removed on successful login.
+  A single user can also reach the cap alone (added after code review): a failed GuestLogin keeps its pending entry, and the VCS client calls InitAuth again on every Connect, so 32 wrong-password retries from one IP within the 5-minute TTL refuse the 33rd InitAuth until the oldest entries expire. Accepted as-is (it is also a crude brute-force brake); it is listed on the PR's manual-verification checklist.
 - R4: removing the per-RPC sweep makes expiry correctness depend on `touchPending`. Test 3 covers it.
 - R5: cross-coalition isolation can only be heard with two real clients. Manual checklist (umbrella §8).
 - R6: SV1 rebases onto `authenticate`/`authError`; the plan names them exactly so SV1's plan can target them.

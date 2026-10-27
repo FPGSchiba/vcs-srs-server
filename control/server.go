@@ -363,31 +363,37 @@ func (s *Server) Stop() error {
 	var stopErr error
 
 	s.stopOnce.Do(func() {
-		if !s.IsRunning() {
-			return
-		}
+		// No early return on !isRunning: a serve goroutine whose Serve failed
+		// clears isRunning, and the servers, listeners and the AuthServer's
+		// pending-login sweeper still need releasing. Every step is nil-safe.
+		//
+		// Copy the fields out and clear them under s.mu (Start and fail()
+		// write them under the same lock), then do the blocking stops outside
+		// it so a concurrent IsRunning is never held up by GracefulStop.
 		s.mu.Lock()
 		s.isRunning = false
+		srsServer, authServer := s.srsServer, s.authServer
+		clientSrv, controlSrv := s.clientGrpcServer, s.controlGrpcServer
+		clientLis, controlLis := s.clientListener, s.controlListener
+		s.clientGrpcServer, s.controlGrpcServer = nil, nil
+		s.clientListener, s.controlListener = nil, nil
 		s.mu.Unlock()
 
 		s.logger.Info("Stopping gRPC server")
 
-		if s.srsServer != nil {
-			s.srsServer.Stop()
+		if srsServer != nil {
+			srsServer.Stop()
 		}
-		if s.authServer != nil {
-			s.authServer.Stop()
+		if authServer != nil {
+			authServer.Stop()
 		}
 
 		// GracefulStop will automatically close the clientListener
-		if s.clientGrpcServer != nil {
-			s.clientGrpcServer.GracefulStop()
-			s.clientGrpcServer = nil
+		if clientSrv != nil {
+			clientSrv.GracefulStop()
 		}
-
-		if s.controlGrpcServer != nil {
-			s.controlGrpcServer.GracefulStop()
-			s.controlGrpcServer = nil
+		if controlSrv != nil {
+			controlSrv.GracefulStop()
 		}
 
 		// GracefulStop only closes a listener that Serve has already
@@ -395,13 +401,11 @@ func (s *Server) Stop() error {
 		// goroutine, that goroutine's Serve closes the listener only later,
 		// after Stop has returned, so a caller rebinding the port right away
 		// fails. Close them here as well; a second Close is harmless.
-		if s.clientListener != nil {
-			_ = s.clientListener.Close()
-			s.clientListener = nil
+		if clientLis != nil {
+			_ = clientLis.Close()
 		}
-		if s.controlListener != nil {
-			_ = s.controlListener.Close()
-			s.controlListener = nil
+		if controlLis != nil {
+			_ = controlLis.Close()
 		}
 	})
 
