@@ -27,6 +27,9 @@ jobs:
       - name: Generate code
         uses: ./.github/actions/generate
 
+      - name: Vet
+        run: go vet -tags headless ./...
+
       - name: Run tests
         run: go test -race -count=1 -tags headless ./...
 
