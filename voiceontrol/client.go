@@ -35,6 +35,30 @@ type VoiceControlClient struct {
 	connectionFailed   bool
 	settingsState      *state.SettingsState
 	serverState        *state.ServerState
+
+	// kickHandler drops a client's voice binding on this node. Set once
+	// (before ConnectControlServer) and kept across reconnects.
+	kickMu      sync.Mutex
+	kickHandler func(uuid.UUID)
+}
+
+// SetKickHandler registers the function that drops a client's voice binding
+// on this node. It is called for a kick_client command and for a LEFT delta,
+// always outside the server-state lock.
+func (v *VoiceControlClient) SetKickHandler(h func(uuid.UUID)) {
+	v.kickMu.Lock()
+	v.kickHandler = h
+	v.kickMu.Unlock()
+}
+
+// kick calls the kick handler, if one is set.
+func (v *VoiceControlClient) kick(id uuid.UUID) {
+	v.kickMu.Lock()
+	h := v.kickHandler
+	v.kickMu.Unlock()
+	if h != nil {
+		h(id)
+	}
 }
 
 func NewVoiceControlClient(serverId string, settingsState *state.SettingsState, serverState *state.ServerState, isGlobal bool, logger *slog.Logger) *VoiceControlClient {
@@ -245,6 +269,21 @@ func (v *VoiceControlClient) applyControlMessage(msg *pb.ControlMessage) {
 		v.applySnapshot(cmd.StateSnapshot)
 	case *pb.ControlMessage_ClientDelta:
 		v.applyDelta(cmd.ClientDelta)
+		// A client that left the session must not stay routable here. The
+		// handler runs after applyDelta released the state lock.
+		if cmd.ClientDelta.Type == pb.ClientDelta_LEFT {
+			if id, err := uuid.Parse(cmd.ClientDelta.ClientId); err == nil {
+				v.kick(id)
+			}
+		}
+	case *pb.ControlMessage_KickClient:
+		id, err := uuid.Parse(cmd.KickClient.GetClientId())
+		if err != nil {
+			v.logger.Warn("invalid client ID in kick_client", "id", cmd.KickClient.GetClientId())
+			return
+		}
+		v.logger.Info("Control node kicked client", "client_id", id, "reason", cmd.KickClient.GetReason())
+		v.kick(id)
 	case *pb.ControlMessage_AssignCoalitions:
 		v.assignedCoalitions = cmd.AssignCoalitions.Coalitions
 		v.logger.Info("Coalition assignment updated", "coalitions", v.assignedCoalitions)

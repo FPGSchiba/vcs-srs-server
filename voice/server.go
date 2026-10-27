@@ -144,6 +144,9 @@ func (v *Server) Listen(address string, stopChan chan struct{}) error {
 			isGlobal,
 			v.logger,
 		)
+		// The control node drops this node's binding for a removed session
+		// (kick_client, and a LEFT delta).
+		v.controlClient.SetKickHandler(v.DisconnectClient)
 		if err := v.controlClient.ConnectControlServer(); err != nil {
 			v.logger.Error("Failed to connect to control server", "error", err)
 			return err

@@ -894,3 +894,24 @@ func TestParseAndBannedLimitersIndependent(t *testing.T) {
 		t.Fatalf("banned records = %d, want 1", n)
 	}
 }
+
+// SV1: the voice node's kick handler (voice.Server.DisconnectClient, wired
+// by Listen through VoiceControlClient.SetKickHandler) drops the binding.
+func TestKickHandlerDropsBinding(t *testing.T) {
+	ss := &state.ServerState{
+		Clients:      make(map[uuid.UUID]*state.ClientState),
+		RadioClients: make(map[uuid.UUID]*state.RadioState),
+	}
+	s := newBoundTestServer(t, ss)
+	id := uuid.New()
+	s.Lock()
+	s.clients[id] = &Client{Addr: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 4000}, LastSeen: time.Now()}
+	s.Unlock()
+
+	var handler func(uuid.UUID) = s.DisconnectClient
+	handler(id)
+
+	if _, ok := s.GetClientIPFromId(id); ok {
+		t.Fatal("binding still present after the kick handler ran")
+	}
+}
