@@ -12,7 +12,6 @@ import (
 	"github.com/FPGSchiba/vcs-srs-server/state"
 	"github.com/FPGSchiba/vcs-srs-server/utils"
 	"github.com/google/uuid"
-	"google.golang.org/grpc"
 )
 
 func newTestServer() *SimpleRadioServer {
@@ -25,7 +24,8 @@ func newTestServer() *SimpleRadioServer {
 		logger:        slog.New(slog.NewTextHandler(os.Stderr, nil)),
 		eventBus:      events.NewEventBus(),
 		now:           time.Now,
-		streams:       make(map[uuid.UUID]grpc.ServerStreamingServer[pb.ServerUpdate]),
+		streams:       make(map[uuid.UUID]*subscription),
+		detachedAt:    make(map[uuid.UUID]time.Time),
 		stopChan:      make(chan struct{}),
 	}
 }

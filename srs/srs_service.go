@@ -32,7 +32,10 @@ type SimpleRadioServer struct {
 	settingsState *state.SettingsState
 	eventBus      *events.EventBus
 	voiceRegistry VoiceAddressProvider
-	streams       map[uuid.UUID]grpc.ServerStreamingServer[pb.ServerUpdate]
+	streams       map[uuid.UUID]*subscription
+	// detachedAt records when a client's stream ended from the client side;
+	// the 120s reconnect grace runs from here. Guarded by mu.
+	detachedAt map[uuid.UUID]time.Time
 	stopChan      chan struct{}
 	stopOnce      sync.Once
 	// now is the server's clock (time.Now outside tests).
@@ -55,7 +58,8 @@ func NewSimpleRadioServer(serverState *state.ServerState, settingsState *state.S
 		logger:        logger,
 		voiceRegistry: voiceRegistry,
 		mu:            sync.Mutex{},
-		streams:       make(map[uuid.UUID]grpc.ServerStreamingServer[pb.ServerUpdate]),
+		streams:       make(map[uuid.UUID]*subscription),
+		detachedAt:    make(map[uuid.UUID]time.Time),
 		stopChan:      make(chan struct{}),
 		now:           time.Now,
 	}
@@ -378,40 +382,88 @@ func (s *SimpleRadioServer) UpdateRadioInfo(ctx context.Context, req *pb.RadioIn
 	}, nil
 }
 
+func (s *SimpleRadioServer) clientExists(id uuid.UUID) bool {
+	s.serverState.RLock()
+	defer s.serverState.RUnlock()
+	_, ok := s.serverState.Clients[id]
+	return ok
+}
+
 func (s *SimpleRadioServer) SubscribeToUpdates(_ *pb.Empty, stream grpc.ServerStreamingServer[pb.ServerUpdate]) error {
 	clientID, err := clientIDFromContext(stream.Context())
 	if err != nil {
 		s.logger.Error("SubscribeToUpdates failed: invalid client ID", "error", err)
 		return err
 	}
+	if !s.clientExists(clientID) {
+		return errNoSession
+	}
 
 	ch := s.eventBus.Subscribe("*")
 	defer s.eventBus.Unsubscribe(ch)
 
+	// CON-05: the last subscriber wins. A reconnecting client whose old
+	// transport the server has not yet noticed as dead must not be refused.
+	sub := newSubscription()
 	s.mu.Lock()
-	if _, exists := s.streams[clientID]; exists {
-		s.mu.Unlock()
-		return fmt.Errorf("client %s is already subscribed to updates", clientID)
-	}
-	s.streams[clientID] = stream
+	old := s.streams[clientID]
+	s.streams[clientID] = sub
+	delete(s.detachedAt, clientID)
 	s.mu.Unlock()
 
-	defer func() {
+	// A removal may have run between the presence check and registration;
+	// it would not have seen this subscription, so re-check now.
+	if !s.clientExists(clientID) {
 		s.mu.Lock()
-		delete(s.streams, clientID)
+		if s.streams[clientID] == sub {
+			delete(s.streams, clientID)
+		}
+		s.mu.Unlock()
+		if old != nil {
+			old.end(nil, errSuperseded)
+		}
+		return errNoSession
+	}
+	if old != nil {
+		old.end(nil, errSuperseded)
+	}
+
+	defer func() {
+		// Only a subscription ended by the client side is still registered
+		// here (see the subscription invariant); that starts the grace.
+		s.mu.Lock()
+		if s.streams[clientID] == sub {
+			delete(s.streams, clientID)
+			s.detachedAt[clientID] = s.now()
+		}
 		s.mu.Unlock()
 	}()
 
 	s.logger.Info("Client subscribed to updates", "client_id", clientID)
 
+	finish := func() error {
+		if sub.final != nil {
+			if err := stream.Send(sub.final); err != nil {
+				s.logger.Warn("Failed to send final update", "client_id", clientID, "error", err)
+			}
+		}
+		s.logger.Info("Update stream ended by server", "client_id", clientID, "status", sub.err)
+		return sub.err
+	}
+
 	for {
 		select {
+		case <-sub.done:
+			return finish()
 		case <-stream.Context().Done():
 			s.logger.Info("Client unsubscribed from updates", "client_id", clientID)
 			return nil
 		case event, ok := <-ch:
 			if !ok {
 				return nil
+			}
+			if sub.ended() {
+				return finish()
 			}
 
 			// Per-client voice address redirect after coalition rebalancing.
