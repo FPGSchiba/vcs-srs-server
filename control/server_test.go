@@ -2,8 +2,11 @@ package control
 
 import (
 	"bytes"
+	"context"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -11,8 +14,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/FPGSchiba/vcs-srs-server/state"
+	"github.com/FPGSchiba/vcs-srs-server/utils"
+	"github.com/google/uuid"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 func TestClientTransportCredentials(t *testing.T) {
@@ -199,5 +209,152 @@ func TestClientTransportCredentialsLogsFailedHandshake(t *testing.T) {
 	out := buf.String()
 	if !strings.Contains(out, "handshake failed") || !strings.Contains(out, "plaintext") {
 		t.Fatalf("expected a handshake-failure warning naming plaintext, got log output: %s", out)
+	}
+}
+
+// newInterceptorTestServer builds a Server whose token key files live in a
+// temp dir. utils caches the keys process-wide on first use, so every test in
+// this package signs and verifies with the same pair.
+func newInterceptorTestServer(t *testing.T) *Server {
+	t.Helper()
+	dir := t.TempDir()
+	settings := &state.SettingsState{}
+	settings.Security.Token = state.TokenSettings{
+		PrivateKeyFile: filepath.Join(dir, "priv.pem"),
+		PublicKeyFile:  filepath.Join(dir, "pub.pem"),
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	return NewServer(&state.ServerState{}, settings, logger, &state.DistributionState{}, nil)
+}
+
+// mintToken returns a signed token for a fresh GUID, and that GUID.
+func mintToken(t *testing.T, s *Server, role uint8, ttl time.Duration) (string, string) {
+	t.Helper()
+	guid := uuid.NewString()
+	tok, err := utils.GenerateToken(guid, role, "i", "s", ttl,
+		s.settingsState.Security.Token.PrivateKeyFile, s.settingsState.Security.Token.PublicKeyFile)
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+	return tok, guid
+}
+
+type fakeServerStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (f *fakeServerStream) Context() context.Context { return f.ctx }
+
+// runAuth drives either interceptor with ctx and reports whether the handler
+// ran, the client GUID it saw, and the interceptor's error.
+func runAuth(s *Server, stream bool, method string, ctx context.Context) (called bool, gotID interface{}, err error) {
+	if stream {
+		err = s.authStreamInterceptor(nil, &fakeServerStream{ctx: ctx}, &grpc.StreamServerInfo{FullMethod: method},
+			func(srv interface{}, ss grpc.ServerStream) error {
+				called = true
+				gotID = ss.Context().Value(utils.ClientIDKey)
+				return nil
+			})
+		return
+	}
+	_, err = s.authInterceptor(ctx, nil, &grpc.UnaryServerInfo{FullMethod: method},
+		func(ctx context.Context, req interface{}) (interface{}, error) {
+			called = true
+			gotID = ctx.Value(utils.ClientIDKey)
+			return "ok", nil
+		})
+	return
+}
+
+func TestAuthInterceptorCodes(t *testing.T) {
+	s := newInterceptorTestServer(t)
+	expired, _ := mintToken(t, s, utils.GuestRole, -time.Hour)
+	valid, validGUID := mintToken(t, s, utils.GuestRole, time.Hour)
+	withAuth := func(v string) context.Context {
+		return metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", v))
+	}
+
+	for _, kind := range []struct {
+		name   string
+		stream bool
+		method string
+	}{
+		{"unary", false, "/srs.SRSService/SyncClient"},
+		{"stream", true, "/srs.SRSService/SubscribeToUpdates"},
+	} {
+		t.Run(kind.name, func(t *testing.T) {
+			rejects := []struct {
+				name string
+				ctx  context.Context
+			}{
+				{"no metadata", context.Background()},
+				{"no token", metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-other", "1"))},
+				{"garbage token", withAuth("Bearer x.y.z")},
+				{"expired token", withAuth("Bearer " + expired)},
+			}
+			for _, tc := range rejects {
+				t.Run(tc.name, func(t *testing.T) {
+					called, _, err := runAuth(s, kind.stream, kind.method, tc.ctx)
+					if called {
+						t.Fatal("handler must not run")
+					}
+					if got := status.Code(err); got != codes.Unauthenticated {
+						t.Fatalf("code = %v, want Unauthenticated (err %v)", got, err)
+					}
+				})
+			}
+
+			t.Run("valid token", func(t *testing.T) {
+				called, gotID, err := runAuth(s, kind.stream, kind.method, withAuth("Bearer "+valid))
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if !called {
+					t.Fatal("handler not called")
+				}
+				if gotID != validGUID {
+					t.Fatalf("ClientIDKey = %v, want %s", gotID, validGUID)
+				}
+			})
+
+			t.Run("AuthService is exempt", func(t *testing.T) {
+				called, _, err := runAuth(s, kind.stream, "/srs.AuthService/InitAuth", context.Background())
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if !called {
+					t.Fatal("handler not called for an AuthService method")
+				}
+			})
+		})
+	}
+}
+
+func TestAuthErrorMapping(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		code codes.Code
+		msg  string
+	}{
+		{"insufficient role", fmt.Errorf("%w: 0, required: 3", utils.ErrInsufficientRole), codes.PermissionDenied, ""},
+		{"key load failure", fmt.Errorf("%w: boom", utils.ErrTokenKeys), codes.Internal, "token verification unavailable"},
+		{"expired", errors.New("token is expired"), codes.Unauthenticated, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := authError("/m", tc.err)
+			st, ok := status.FromError(err)
+			if !ok {
+				t.Fatalf("not a status error: %v", err)
+			}
+			if st.Code() != tc.code {
+				t.Fatalf("code = %v, want %v", st.Code(), tc.code)
+			}
+			if tc.msg != "" && st.Message() != tc.msg {
+				t.Fatalf("message = %q, want %q", st.Message(), tc.msg)
+			}
+		})
 	}
 }

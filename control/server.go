@@ -394,10 +394,15 @@ func (s *Server) loggingInterceptor(ctx context.Context, req interface{}, info *
 	return resp, err
 }
 
-func (s *Server) authInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-	elements := strings.Split(info.FullMethod, "/")
+// authenticate validates the bearer token for fullMethod and returns a context
+// carrying the client GUID, or a gRPC status error. AuthService and
+// VoiceControlService are exempt and get ctx back unchanged. Both the unary and
+// the stream interceptor go through here so they cannot drift apart again.
+// SV1 adds its unknown-GUID check (SRV-06) here.
+func (s *Server) authenticate(ctx context.Context, fullMethod string) (context.Context, error) {
+	elements := strings.Split(fullMethod, "/")
 	if len(elements) < 3 {
-		return nil, status.Errorf(codes.Unauthenticated, "malformed method path: %s", info.FullMethod)
+		return nil, status.Errorf(codes.Unauthenticated, "malformed method path: %s", fullMethod)
 	}
 	fullServiceName := elements[1]
 	pathName := elements[2]
@@ -409,19 +414,19 @@ func (s *Server) authInterceptor(ctx context.Context, req interface{}, info *grp
 	serviceName := parts[len(parts)-1]
 
 	if serviceName == "AuthService" || serviceName == "VoiceControlService" {
-		return handler(ctx, req)
+		return ctx, nil
 	}
 
-	s.logger.Debug("Authentication required for service", "service", serviceName, "method", info.FullMethod)
+	s.logger.Debug("Authentication required for service", "service", serviceName, "method", fullMethod)
 
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
-		return nil, fmt.Errorf("unauthenticated request to %s: missing metadata", info.FullMethod)
+		return nil, status.Errorf(codes.Unauthenticated, "missing metadata for %s", fullMethod)
 	}
 
 	tokens := md.Get("authorization")
 	if len(tokens) == 0 {
-		return nil, fmt.Errorf("unauthenticated request to %s: missing authorization token", info.FullMethod)
+		return nil, status.Errorf(codes.Unauthenticated, "missing authorization token for %s", fullMethod)
 	}
 	token := strings.TrimPrefix(tokens[0], "Bearer ")
 
@@ -431,15 +436,38 @@ func (s *Server) authInterceptor(ctx context.Context, req interface{}, info *grp
 	claims, err := utils.GetTokenClaims(token, minRole, s.settingsState.Security.Token.PrivateKeyFile, s.settingsState.Security.Token.PublicKeyFile)
 	s.settingsState.RUnlock()
 	if err != nil {
-		s.logger.Error("Authentication error", "method", info.FullMethod, "error", err)
-		return nil, fmt.Errorf("authentication error for %s: %v", info.FullMethod, err)
+		s.logger.Error("Authentication error", "method", fullMethod, "error", err)
+		return nil, authError(fullMethod, err)
 	}
-
 	if claims == nil {
-		return nil, fmt.Errorf("unauthenticated request to %s", info.FullMethod)
+		return nil, status.Errorf(codes.Unauthenticated, "authentication error for %s: no claims", fullMethod)
 	}
 
-	ctx = context.WithValue(ctx, utils.ClientIDKey, claims.ClientGuid)
+	return context.WithValue(ctx, utils.ClientIDKey, claims.ClientGuid), nil
+}
+
+// authError maps a utils.GetTokenClaims error to a gRPC status error. This is
+// the contract the VCS client reads: Unauthenticated means the session is gone
+// (bad, malformed or expired token), PermissionDenied means the token is valid
+// but its role is too low, Internal means the server could not verify at all.
+func authError(fullMethod string, err error) error {
+	switch {
+	case errors.Is(err, utils.ErrTokenKeys):
+		// The cause is logged by the caller; it names server file paths, so it
+		// stays out of the client-facing message.
+		return status.Error(codes.Internal, "token verification unavailable")
+	case errors.Is(err, utils.ErrInsufficientRole):
+		return status.Errorf(codes.PermissionDenied, "insufficient role for %s: %v", fullMethod, err)
+	default:
+		return status.Errorf(codes.Unauthenticated, "authentication error for %s: %v", fullMethod, err)
+	}
+}
+
+func (s *Server) authInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	ctx, err := s.authenticate(ctx, info.FullMethod)
+	if err != nil {
+		return nil, err
+	}
 	return handler(ctx, req)
 }
 
@@ -452,50 +480,12 @@ type wrappedStream struct {
 func (w *wrappedStream) Context() context.Context { return w.ctx }
 
 func (s *Server) authStreamInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-	elements := strings.Split(info.FullMethod, "/")
-	if len(elements) < 3 {
-		return status.Errorf(codes.Unauthenticated, "malformed method path: %s", info.FullMethod)
+	ctx, err := s.authenticate(ss.Context(), info.FullMethod)
+	if err != nil {
+		return err
 	}
-	fullServiceName := elements[1]
-	pathName := elements[2]
-
-	parts := strings.Split(fullServiceName, ".")
-	if len(parts) < 2 {
-		return status.Errorf(codes.Unauthenticated, "malformed service name: %s", fullServiceName)
-	}
-	serviceName := parts[len(parts)-1]
-
-	if serviceName == "AuthService" || serviceName == "VoiceControlService" {
+	if ctx == ss.Context() {
 		return handler(srv, ss)
 	}
-
-	s.logger.Debug("Authentication required for streaming", "service", serviceName, "method", info.FullMethod)
-
-	md, ok := metadata.FromIncomingContext(ss.Context())
-	if !ok {
-		return status.Errorf(codes.Unauthenticated, "missing metadata for %s", info.FullMethod)
-	}
-
-	tokens := md.Get("authorization")
-	if len(tokens) == 0 {
-		return status.Errorf(codes.Unauthenticated, "missing authorization token for %s", info.FullMethod)
-	}
-	token := strings.TrimPrefix(tokens[0], "Bearer ")
-
-	minRole, _ := utils.GetMinimumRoleForMethod(pathName)
-
-	s.settingsState.RLock()
-	claims, err := utils.GetTokenClaims(token, minRole, s.settingsState.Security.Token.PrivateKeyFile, s.settingsState.Security.Token.PublicKeyFile)
-	s.settingsState.RUnlock()
-	if err != nil {
-		s.logger.Error("Stream authentication error", "method", info.FullMethod, "error", err)
-		return status.Errorf(codes.Unauthenticated, "authentication error for %s: %v", info.FullMethod, err)
-	}
-
-	if claims == nil {
-		return status.Errorf(codes.Unauthenticated, "unauthenticated streaming request to %s", info.FullMethod)
-	}
-
-	ctx := context.WithValue(ss.Context(), utils.ClientIDKey, claims.ClientGuid)
 	return handler(srv, &wrappedStream{ServerStream: ss, ctx: ctx})
 }
