@@ -72,3 +72,40 @@ func TestWindowFromSamplerErrors(t *testing.T) {
 		t.Error("a drops-sampler failure must not blank the CPU figures that were read")
 	}
 }
+
+func netSnap(sec int, soft uint64, udp sample.UDPCounters) snapshot {
+	s := snap(sec, 0, 0, 0, 0, 0, 0)
+	s.NetOK, s.Softnet, s.UDP = true, soft, udp
+	return s
+}
+
+func TestWindowFromNetCounters(t *testing.T) {
+	a := netSnap(0, 100, sample.UDPCounters{RcvbufErrors: 10, SndbufErrors: 1, InErrors: 12})
+	b := netSnap(5, 130, sample.UDPCounters{RcvbufErrors: 40, SndbufErrors: 1, InErrors: 50})
+	w := windowFrom([]snapshot{a, b}, 1, []int{0}, 1, nil)
+	if !w.NetOK || w.SoftnetDropped != 30 || w.UDPRcvbufErrors != 30 || w.UDPSndbufErrors != 0 {
+		t.Errorf("window = %+v", w)
+	}
+}
+
+func TestWindowFromSoftnetWrap(t *testing.T) {
+	// softnet's dropped column is a 32-bit per-CPU counter: the sum wraps like it.
+	a := netSnap(0, 0xFFFFFFFE, sample.UDPCounters{})
+	b := netSnap(1, 3, sample.UDPCounters{})
+	w := windowFrom([]snapshot{a, b}, 1, []int{0}, 1, nil)
+	if w.SoftnetDropped != 5 {
+		t.Errorf("SoftnetDropped = %d, want 5", w.SoftnetDropped)
+	}
+}
+
+func TestWindowFromNetUnread(t *testing.T) {
+	a, b := snap(0, 0, 0, 0, 0, 0, 0), snap(2, 10, 10, 0, 0, 0, 0)
+	b.NetErr = "/proc/net/softnet_stat: no such file"
+	w := windowFrom([]snapshot{a, b}, 1, []int{0}, 1, nil)
+	if w.NetOK || w.NetErr == "" {
+		t.Errorf("an unread counter must not be a zero: %+v", w)
+	}
+	if w.Err != "" || math.IsNaN(w.ServerCPU) {
+		t.Errorf("a net read failure must not invalidate the CPU figures here: %+v", w)
+	}
+}

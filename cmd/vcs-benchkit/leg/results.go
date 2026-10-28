@@ -124,6 +124,12 @@ func WriteStepsCSV(w io.Writer, o *Outcome, topology string) error {
 		"shard_queue_full", "update_stream_behind", "node_feed_behind", "node_deregistered",
 		"gen_cpu", "gen_socket_drops", "gen_rx_lag_p99_us", "gen_wheel_lag_p99_us", "gen_sched_p99_us", "gen_gc_p99_us", "gen_violations",
 		"topology", "label", "payload", "join_label", "not_measured",
+		// Appended by the W6 fix round. The columns above are a contract that
+		// readers index by position: only ever append.
+		"requested", "joined", "join_failures", "join_failures_by_stage", "hello_tries_hist", "failed_acked_by_server",
+		"ramp_s", "ramp_server_cpu", "ramp_gen_cpu", "ramp_server_drops", "ramp_softnet_dropped", "ramp_udp_rcvbuf_errors",
+		"ramp_hello_accepted", "ramp_hello_rejected", "ramp_shard_queue_full",
+		"softnet_dropped", "udp_rcvbuf_errors", "udp_sndbuf_errors",
 	}
 	if err := cw.Write(header); err != nil {
 		return err
@@ -147,6 +153,7 @@ func WriteStepsCSV(w io.Writer, o *Outcome, topology string) error {
 			strconv.FormatInt(r.Step.Health.SchedP99Us, 10), strconv.FormatInt(r.Step.Health.GCPauseP99Us, 10), strings.Join(r.Step.Violations, "; "),
 			topology, Label, PayloadLabel, JoinLabel, NotMeasured,
 		}
+		rec = append(rec, joinCells(r)...)
 		if len(rec) != len(header) {
 			return fmt.Errorf("steps.csv: row has %d cells for %d columns", len(rec), len(header))
 		}
@@ -156,6 +163,47 @@ func WriteStepsCSV(w io.Writer, o *Outcome, topology string) error {
 	}
 	cw.Flush()
 	return cw.Error()
+}
+
+// joinCells are the 18 steps.csv cells appended after not_measured: the ramp's
+// join account, the ramp window and the hold's host network counters. A value
+// that was not measured (no ramp, a v1 bot, an unread /proc file) is an empty
+// cell, never a zero.
+func joinCells(r Row) []string {
+	cells := make([]string, 18)
+	j := r.Joins
+	if j.Schema != "" || j.Source == "v1-error" {
+		cells[0], cells[1], cells[2] = strconv.Itoa(j.Requested), strconv.Itoa(j.Joined), strconv.Itoa(j.JoinFailures)
+		parts := make([]string, 0, len(joinStages))
+		for _, k := range joinStages {
+			parts = append(parts, k+"="+strconv.Itoa(j.FailuresByStage[k]))
+		}
+		cells[3] = strings.Join(parts, ";")
+		if len(j.HelloTriesHist) > 0 {
+			h := make([]string, len(j.HelloTriesHist))
+			for i, v := range j.HelloTriesHist {
+				h[i] = strconv.Itoa(v)
+			}
+			cells[4] = strings.Join(h, ";")
+		}
+		if r.FailedAckedByServer >= 0 {
+			cells[5] = strconv.Itoa(r.FailedAckedByServer)
+		}
+		if j.Schema != "" {
+			cells[6] = cell(j.RampS)
+		}
+	}
+	if rw := r.RampWindow; rw.Seconds > 0 {
+		cells[7], cells[8], cells[9] = cell(rw.ServerCPU), cell(rw.GenCPU), u(rw.ServerDrops)
+		if rw.NetOK {
+			cells[10], cells[11] = u(rw.SoftnetDropped), u(rw.UDPRcvbufErrors)
+		}
+		cells[12], cells[13], cells[14] = u(r.RampLogs.HelloAccepted), u(r.RampLogs.HelloRejected), u(r.RampLogs.ShardQueueFull)
+	}
+	if r.Held && r.Window.NetOK {
+		cells[15], cells[16], cells[17] = u(r.Window.SoftnetDropped), u(r.Window.UDPRcvbufErrors), u(r.Window.UDPSndbufErrors)
+	}
+	return cells
 }
 
 // KneeMeta is the per-arm context of knees.csv.

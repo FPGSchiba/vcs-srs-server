@@ -36,6 +36,14 @@ type Window struct {
 	SoftIRQTicks, StealTicks uint64
 	// Seconds is the sampled wall time.
 	Seconds float64
+	// SoftnetDropped is the increase of the summed softnet_stat dropped column
+	// (per-CPU backlog full), UDPRcvbufErrors and UDPSndbufErrors the increase
+	// of the host's snmp Udp: RcvbufErrors and SndbufErrors. They are only
+	// meaningful when NetOK; otherwise NetErr says why they were not read.
+	// A hold window folds NetErr into Err; a ramp window just shows "-".
+	SoftnetDropped, UDPRcvbufErrors, UDPSndbufErrors uint64
+	NetOK                                            bool
+	NetErr                                           string
 	// Err is set when a sampler failed (a missing /proc file, ss not
 	// installed, the server socket absent from ss). The step is then invalid:
 	// a zero drop count that was never read is not a measurement.
@@ -356,6 +364,10 @@ func (d *Driver) measure(ctx context.Context, kind string, n int, hold time.Dura
 	end := d.sys.BeginSample()
 	st, herr := d.sys.Hold(ctx, hold, label)
 	win := end()
+	if win.NetErr != "" {
+		// A hold must not report a counter it never read (a ramp may).
+		win.Err = strings.TrimPrefix(win.Err+"; "+win.NetErr, "; ")
+	}
 	if herr != nil {
 		return row, fmt.Errorf("hold at %d bots: %w", n, herr)
 	}
