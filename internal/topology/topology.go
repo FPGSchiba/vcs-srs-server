@@ -37,10 +37,15 @@ type Spec struct {
 	ReadyTimeout time.Duration
 	// Allow lists ERROR lines the caller expects; a race report never is.
 	Allow Allow
+	// Pin pins a role's process to CPUs with taskset and sets its GOMAXPROCS
+	// (Linux only; any other host refuses). A role without an entry, or with
+	// an empty CPUs, runs unpinned.
+	Pin map[Role]Pin
 
 	// Test seams, set only by this package's tests.
-	argvHook func(role Role, argv []string) []string
-	procHook func(role Role, cmd *exec.Cmd)
+	argvHook  func(role Role, argv []string) []string
+	procHook  func(role Role, cmd *exec.Cmd)
+	stageHook func(stage string) // each readiness rung, as it passes
 }
 
 type proc struct {
@@ -74,6 +79,12 @@ func (b bindError) Unwrap() error { return b.err }
 // On any failure every started process is killed and reaped first. A bind
 // error during start-up tears everything down and retries once.
 func Start(ctx context.Context, sp Spec) (*Topology, error) {
+	return startWithRetry(ctx, sp, startOnce)
+}
+
+// startWithRetry validates and defaults sp, then runs once, retrying a single
+// time when it fails on a lost port race.
+func startWithRetry(ctx context.Context, sp Spec, once func(context.Context, Spec) (*Topology, error)) (*Topology, error) {
 	if sp.Binary == "" || sp.Dir == "" {
 		return nil, errors.New("topology: Spec.Binary and Spec.Dir are required")
 	}
@@ -95,7 +106,7 @@ func Start(ctx context.Context, sp Spec) (*Topology, error) {
 				return nil, fmt.Errorf("topology: retry abandoned: %w (first failure: %v)", cerr, last)
 			}
 		}
-		t, err := startOnce(ctx, sp)
+		t, err := once(ctx, sp)
 		if err == nil {
 			return t, nil
 		}
@@ -282,8 +293,11 @@ func (t *Topology) spawn(name string, role Role, cfg ProcConfig) (*proc, error) 
 		return nil, err
 	}
 	mode := "voice"
-	if role == Control {
+	switch role {
+	case Control:
 		mode = "control"
+	case Standalone:
+		mode = "standalone"
 	}
 	argv := []string{"--mode", mode, "--config", cfgPath, "--banned", banned, "--file-log=false"}
 	if role == Global {
@@ -292,13 +306,20 @@ func (t *Topology) spawn(name string, role Role, cfg ProcConfig) (*proc, error) 
 	if t.sp.argvHook != nil {
 		argv = t.sp.argvHook(role, argv)
 	}
+	exe, exeArgs, extraEnv, err := pinnedCommand(runtime.GOOS, t.sp.Binary, argv, t.sp.Pin[role])
+	if err != nil {
+		return nil, fmt.Errorf("topology: pin %s: %w", name, err)
+	}
 	logPath := filepath.Join(t.sp.Dir, name+".log")
 	lf, err := os.Create(logPath)
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(t.sp.Binary, argv...)
+	cmd := exec.Command(exe, exeArgs...)
 	cmd.Dir = dir
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
 	// The *os.File itself, not a pipe: no copy goroutine can stall the server.
 	cmd.Stdout, cmd.Stderr = lf, lf
 	if err := cmd.Start(); err != nil {
@@ -399,6 +420,21 @@ func (t *Topology) Addr(role Role) string {
 // HTTP is the control process's admin HTTP host:port.
 func (t *Topology) HTTP() string {
 	return net.JoinHostPort(loopback, strconv.Itoa(t.httpPort))
+}
+
+// PIDs returns the OS process id of every main role. A pinned process is
+// started through taskset, which execs the server in place, so the pid is the
+// server's own.
+func (t *Topology) PIDs() map[Role]int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make(map[Role]int, len(t.procs))
+	for r, p := range t.procs {
+		if p.cmd.Process != nil {
+			out[r] = p.cmd.Process.Pid
+		}
+	}
+	return out
 }
 
 // APIKey is the control process's GraphQL API key.

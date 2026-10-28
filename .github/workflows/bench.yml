@@ -1,4 +1,5 @@
-# Bench v0 (W6 S2): build, gate-0 runner probe, B-0 micro-benchmarks.
+# Bench v1 (W6 S4): build (server, loadbot, kit), gate-0 runner probe, B-0
+# micro-benchmarks, the S-arm run matrix and aggregate.
 #
 # - MANUAL ONLY. Never on schedule, push or pull_request.
 # - Do NOT queue more than one run: GitHub keeps one running and one pending
@@ -7,9 +8,15 @@
 # - Every artefact is relative only (ratios, knees, curves) and carries the
 #   runner topology label from that run's own probe. No absolute capacity
 #   number is a claim about any other machine.
-# - server_ref must contain the B-0 bench files and cmd/vcs-benchkit (S2 or
-#   later); an older ref fails the micro job's Predict knees step.
-# - This is v0 of three (S2/S4/S5); later inputs and jobs arrive with them.
+# - server_ref must contain cmd/vcs-benchkit with the leg and aggregate
+#   subcommands (S4 or later); an older ref fails the build or run job.
+# - client_ref is PINNED, not main: a moving client must not change a bench
+#   result. Bump the default deliberately in the PR that needs newer loadbot
+#   behaviour (mirrors client test.yml's pinned server ref). Currently client
+#   main after #54 (Wave 6 C1: internal/loadgen and cmd/vcs-loadbot).
+# - Only the S arm and the one-big-net scenario exist in v1. Seq, D2 and
+#   org-op arrive with S5/C2; there is no publish input or job until then.
+# - This is v1 of three (S2/S4/S5); later inputs and jobs arrive with them.
 # - Inputs never reach run: text directly; they go through env:.
 name: Bench
 on:
@@ -19,8 +26,41 @@ on:
         description: Server ref to build and bench (empty means the dispatched SHA)
         type: string
         default: ''
+      client_ref:
+        description: Client commit that provides vcs-loadbot (full 40-hex SHA; pinned, bumped deliberately)
+        type: string
+        default: '62f5cf7677984045116df5811e789f38145d0306'
+      scenarios:
+        description: Scenario to run (v1 has one-big-net only)
+        type: choice
+        options:
+          - one-big-net
+        default: one-big-net
+      arms:
+        description: Arms to run (v1 has S only)
+        type: choice
+        options:
+          - S
+        default: S
+      repeats:
+        description: Independent legs per scenario, one runner VM each (1 to 5)
+        type: string
+        default: '3'
+      layout:
+        description: parallel runs all legs at once, serial runs one at a time
+        type: choice
+        options:
+          - parallel
+          - serial
+        default: parallel
+      profile:
+        description: Leg profile (v1 has actions-short only)
+        type: choice
+        options:
+          - actions-short
+        default: actions-short
       probe_only:
-        description: Skip the micro job (build and probe still run)
+        description: Skip the micro, run and aggregate jobs (build and probe still run)
         type: boolean
         default: false
 
@@ -43,7 +83,27 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+    outputs:
+      repeats: ${{ steps.matrix.outputs.repeats }}
+      scenarios: ${{ steps.matrix.outputs.scenarios }}
     steps:
+      # Inputs reach the shell only through env:. Reject anything v1 does not
+      # implement before any runner time is spent.
+      - name: Validate inputs
+        id: matrix
+        env:
+          IN_REPEATS: ${{ inputs.repeats }}
+          IN_SCENARIOS: ${{ inputs.scenarios }}
+          IN_ARMS: ${{ inputs.arms }}
+          IN_CLIENT_REF: ${{ inputs.client_ref }}
+        run: |
+          [[ "$IN_REPEATS" =~ ^[1-5]$ ]] || { echo "::error::repeats must be 1 to 5, got '$IN_REPEATS'"; exit 1; }
+          [ "$IN_ARMS" = "S" ] || { echo "::error::v1 runs the S arm only"; exit 1; }
+          [ "$IN_SCENARIOS" = "one-big-net" ] || { echo "::error::v1 runs one-big-net only"; exit 1; }
+          [[ "$IN_CLIENT_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::client_ref must be a full 40-hex SHA"; exit 1; }
+          echo "repeats=$(seq 1 "$IN_REPEATS" | jq -sc .)" >> "$GITHUB_OUTPUT"
+          echo "scenarios=$(jq -nc --arg s "$IN_SCENARIOS" '[$s]')" >> "$GITHUB_OUTPUT"
+
       - name: Checkout code
         uses: actions/checkout@v7
         with:
@@ -64,10 +124,52 @@ jobs:
       - name: Build server
         run: CGO_ENABLED=0 go build -tags headless -trimpath -o vcs-server .
 
-      - name: Record build
+      - name: Build bench kit
+        run: CGO_ENABLED=0 go build -trimpath -o vcs-benchkit ./cmd/vcs-benchkit
+
+      - name: Record server build
         run: |
           jq -n --arg sha "$(git rev-parse HEAD)" --arg go "$(go env GOVERSION)" \
             '{server_sha: $sha, go_version: $go}' > build.json
+
+      # The client is public: no token. The pinned SHA is a deliberate input.
+      - name: Checkout client
+        uses: actions/checkout@v7
+        with:
+          repository: FPGSchiba/vcs-srs-client
+          ref: ${{ inputs.client_ref }}
+          path: .client
+          persist-credentials: false
+
+      # TWO TOOLCHAINS IN ONE JOB. The server was built with the server's own
+      # Go above. setup-go exported GOTOOLCHAIN=local, which makes it ignore
+      # go.mod's toolchain directive, so this step overrides it to auto and
+      # reads the client's `toolchain` line (same pattern as client test.yml).
+      - name: Set up Go (client go.mod)
+        uses: actions/setup-go@v7
+        env:
+          GOTOOLCHAIN: auto
+        with:
+          go-version-file: .client/go.mod
+
+      - name: Assert client Go toolchain
+        run: bash .github/scripts/assert-go-toolchain.sh .client/go.mod
+
+      # buf v1.47.2 (G-TOOL). `go run pkg@version` checks the module against
+      # sum.golang.org, the same pattern test.yml uses for govulncheck (S8545).
+      - name: Generate client protobuf
+        working-directory: .client
+        run: go run github.com/bufbuild/buf/cmd/buf@v1.47.2 generate
+
+      - name: Build loadbot
+        working-directory: .client
+        run: CGO_ENABLED=0 go build -tags purego -trimpath -o "$GITHUB_WORKSPACE/vcs-loadbot" ./cmd/vcs-loadbot
+
+      - name: Record client build
+        run: |
+          jq --arg sha "$(git -C .client rev-parse HEAD)" --arg go "$(cd .client && go env GOVERSION)" \
+            '. + {client_sha: $sha, client_go_version: $go}' build.json > build.tmp
+          mv build.tmp build.json
           cat build.json
 
       - name: Upload build
@@ -76,6 +178,8 @@ jobs:
           name: build
           path: |
             vcs-server
+            vcs-loadbot
+            vcs-benchkit
             build.json
           if-no-files-found: error
 
@@ -204,4 +308,150 @@ jobs:
             micro.csv
             predict.json
             env-probe-micro.json
+          if-no-files-found: error
+
+  run:
+    name: S arm leg ${{ matrix.repeat }} (${{ matrix.scenario }})
+    needs: [build, micro]
+    if: ${{ !inputs.probe_only }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ inputs.layout == 'serial' && 1 || 20 }}
+      matrix:
+        repeat: ${{ fromJSON(needs.build.outputs.repeats) }}
+        scenario: ${{ fromJSON(needs.build.outputs.scenarios) }}
+    steps:
+      # Only the probe script is needed; it comes from the workflow's commit.
+      - name: Checkout scripts
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Download build
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: build
+          path: bin
+
+      - name: Download micro results
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: micro
+          path: micro
+
+      # Each leg runs on its own VM, so it probes its own sibling map and
+      # takes its CPU sets and topology label from that.
+      - name: Probe this runner
+        run: bash .github/scripts/bench-probe.sh > env-probe.json
+
+      - name: Run leg
+        env:
+          REPEAT: ${{ matrix.repeat }}
+          SCENARIO: ${{ matrix.scenario }}
+          ARMS: ${{ inputs.arms }}
+        run: |
+          chmod +x bin/vcs-server bin/vcs-loadbot bin/vcs-benchkit
+          mkdir -p results
+          bin/vcs-benchkit leg \
+            --server-bin "$PWD/bin/vcs-server" \
+            --loadbot-bin "$PWD/bin/vcs-loadbot" \
+            --scenario "$SCENARIO" \
+            --arms "$ARMS" \
+            --seed "$REPEAT" \
+            --out "results/${REPEAT}-${SCENARIO}" \
+            --probe env-probe.json \
+            --predict micro/predict.json \
+            --server-sha "$(jq -r .server_sha bin/build.json)" \
+            --client-sha "$(jq -r .client_sha bin/build.json)" \
+            --q6 "A: server 2 vCPU, bots 2 vCPU (user, 2026-10-28)"
+
+      # A failed leg still writes steps.csv, calibration.csv and the manifest
+      # for inspection, so the summary and the upload run unless cancelled.
+      - name: Summary
+        if: ${{ !cancelled() }}
+        env:
+          REPEAT: ${{ matrix.repeat }}
+          SCENARIO: ${{ matrix.scenario }}
+        run: |
+          knees="results/${REPEAT}-${SCENARIO}/knees.csv"
+          {
+            echo "### Leg ${REPEAT} ${SCENARIO}"
+            echo
+            if [ -f "$knees" ]; then
+              echo '```'
+              cat "$knees"
+              echo '```'
+            else
+              echo "No knees.csv: this leg did not finish. Partial files, if any, are in the leg artifact."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The directory name carries <repeat>-<scenario>, so merge-multiple in
+      # aggregate keeps every leg's files apart.
+      - name: Upload leg results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: results-${{ matrix.repeat }}-${{ matrix.scenario }}
+          path: results
+          if-no-files-found: warn
+
+  # No sanitiser and no publish yet: both arrive with S5.
+  aggregate:
+    name: Aggregate
+    needs: run
+    # Runs after failed legs too, so the surviving legs still aggregate. It is
+    # skipped when run itself was skipped (probe_only, or a failed build/micro).
+    if: ${{ !cancelled() && needs.run.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Download build
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: build
+          path: bin
+
+      - name: Download leg results
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: results-*
+          merge-multiple: true
+          path: results
+
+      - name: Aggregate
+        env:
+          OUT: bench-results-${{ github.run_id }}
+          IN_REPEATS: ${{ inputs.repeats }}
+          RUN_RESULT: ${{ needs.run.result }}
+        run: |
+          chmod +x bin/vcs-benchkit
+          # v1 has one scenario, so the expected leg count is `repeats`.
+          legs="$(find results -name knees.csv 2>/dev/null | wc -l)"
+          if [ "$legs" -ne "$IN_REPEATS" ]; then
+            echo "::warning::aggregating $legs of $IN_REPEATS legs (run job result: $RUN_RESULT); the statistics cover the surviving legs only"
+            echo "PARTIAL: $legs of $IN_REPEATS legs aggregated (run job result: $RUN_RESULT)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          bin/vcs-benchkit aggregate --in results --out "$OUT"
+          {
+            echo "### Aggregate (median, min, max across repeats)"
+            echo
+            echo '```'
+            cat "$OUT/aggregate.csv"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload aggregate
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bench-results-${{ github.run_id }}
+          path: bench-results-${{ github.run_id }}
           if-no-files-found: error
