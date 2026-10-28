@@ -113,11 +113,13 @@ type recvResult struct {
 	err error
 }
 
-func pumpOf(stream grpc.ServerStreamingClient[pb.ServerUpdate]) chan recvResult {
+func pumpOf(t *testing.T, stream grpc.ServerStreamingClient[pb.ServerUpdate]) chan recvResult {
+	t.Helper()
 	fresh := make(chan recvResult, 16)
 	if got, loaded := streamPumps.LoadOrStore(stream, fresh); loaded {
 		return got.(chan recvResult)
 	}
+	t.Cleanup(func() { streamPumps.Delete(stream) })
 	go func() {
 		for {
 			u, err := stream.Recv()
@@ -135,7 +137,7 @@ func pumpOf(stream grpc.ServerStreamingClient[pb.ServerUpdate]) chan recvResult 
 func recvVoiceUpdate(t *testing.T, stream grpc.ServerStreamingClient[pb.ServerUpdate], within time.Duration) *pb.VoiceAddressUpdate {
 	t.Helper()
 	select {
-	case r := <-pumpOf(stream):
+	case r := <-pumpOf(t, stream):
 		if r.err != nil {
 			t.Fatalf("Recv: %v", r.err)
 		}
@@ -153,7 +155,7 @@ func recvVoiceUpdate(t *testing.T, stream grpc.ServerStreamingClient[pb.ServerUp
 func expectNoUpdate(t *testing.T, stream grpc.ServerStreamingClient[pb.ServerUpdate], within time.Duration) {
 	t.Helper()
 	select {
-	case r := <-pumpOf(stream):
+	case r := <-pumpOf(t, stream):
 		t.Fatalf("unexpected update or end of stream: %v, %v", r.u, r.err)
 	case <-time.After(within):
 	}
@@ -201,6 +203,7 @@ func TestRebalanceRedirectsSubscribedCoalition(t *testing.T) {
 	if got.VoiceSecret != secretOf(t, s, blue) {
 		t.Errorf("VoiceSecret does not match Blue's secret")
 	}
+	expectNoUpdate(t, blueStream, 300*time.Millisecond)
 	expectNoUpdate(t, redStream, 300*time.Millisecond)
 }
 
