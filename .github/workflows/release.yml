@@ -34,9 +34,17 @@ jobs:
       - name: Run tests
         run: go test -race -count=1 -tags headless ./...
 
+  # Release gate (W6, R14): a failing distributed suite blocks a release.
+  # Disabling this gate is its own CI change.
+  itest:
+    name: Distributed integration
+    uses: ./.github/workflows/itest.yml
+    with:
+      race: true
+
   docker:
     name: Docker
-    needs: test
+    needs: [test, itest]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
