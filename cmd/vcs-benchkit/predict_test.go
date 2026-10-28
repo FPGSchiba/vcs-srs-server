@@ -142,12 +142,16 @@ func TestPredictRejectsMissingGrid(t *testing.T) {
 
 func TestWriteMicroCSV(t *testing.T) {
 	rows := []BenchRow{{Bench: benchSend, N: 100, L: 10, Logger: "bus", Mode: "single", NsPerOp: 90000, AllocsPerOp: 1, Metric: map[string]float64{"ns/send": 9000}}}
+	rows = append(rows, BenchRow{Bench: "BenchmarkHandleVoicePacket", N: 100, L: 10, Logger: "bus", Mode: "single", NsPerOp: 150000, AllocsPerOp: 30, Metric: map[string]float64{"ns/send-full": 15000}})
 	var b bytes.Buffer
 	if err := writeMicroCSV(&b, rows); err != nil {
 		t.Fatal(err)
 	}
-	want := "bench,n,l,logger,mode,ns_per_op,ns_per_send,ns_per_scan,allocs_per_op\n" +
-		"BenchmarkSocketSend,100,10,bus,single,90000,9000,,1\n"
+	// ns_per_send_full is appended after the plan's columns so the full-path
+	// per-send cost of BenchmarkHandleVoicePacket is not dropped from the CSV.
+	want := "bench,n,l,logger,mode,ns_per_op,ns_per_send,ns_per_scan,allocs_per_op,ns_per_send_full\n" +
+		"BenchmarkSocketSend,100,10,bus,single,90000,9000,,1,\n" +
+		"BenchmarkHandleVoicePacket,100,10,bus,single,150000,,,30,15000\n"
 	if b.String() != want {
 		t.Errorf("csv:\n%s\nwant:\n%s", b.String(), want)
 	}

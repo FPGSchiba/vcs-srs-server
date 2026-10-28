@@ -334,10 +334,11 @@ func fmtMetric(row BenchRow, unit string) string {
 	return strconv.FormatFloat(v, 'g', -1, 64)
 }
 
-// writeMicroCSV writes one CSV line per benchmark key.
+// writeMicroCSV writes one CSV line per benchmark key. ns_per_send_full
+// (BenchmarkHandleVoicePacket) is appended after the plan's columns.
 func writeMicroCSV(w io.Writer, rows []BenchRow) error {
 	cw := csv.NewWriter(w)
-	if err := cw.Write([]string{"bench", "n", "l", "logger", "mode", "ns_per_op", "ns_per_send", "ns_per_scan", "allocs_per_op"}); err != nil {
+	if err := cw.Write([]string{"bench", "n", "l", "logger", "mode", "ns_per_op", "ns_per_send", "ns_per_scan", "allocs_per_op", "ns_per_send_full"}); err != nil {
 		return err
 	}
 	for _, r := range rows {
@@ -346,6 +347,7 @@ func writeMicroCSV(w io.Writer, rows []BenchRow) error {
 			strconv.FormatFloat(r.NsPerOp, 'g', -1, 64),
 			fmtMetric(r, "ns/send"), fmtMetric(r, "ns/scan"),
 			strconv.FormatFloat(r.AllocsPerOp, 'g', -1, 64),
+			fmtMetric(r, "ns/send-full"),
 		}
 		if err := cw.Write(rec); err != nil {
 			return err
