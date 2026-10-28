@@ -26,7 +26,7 @@ This is the server repo's copy of the plan. The design spec lives in the **clien
   - bindings: `Wails v3.0.0`, `Processed: 512 Packages, 5 Services, 25 Methods, 0 Enums, 24 Models, 0 Events`;
   - frontend: `Test Files 16 passed (16)`, `Tests 76 passed (76)`; tsc **112**, empty diff against the baseline set;
   - GUI build/vet: exit 0;
-  - govulncheck (headless and GUI): `Your code is affected by 6 vulnerabilities from 2 modules.` (grpc v1.77.0, quic-go v0.54.0; SEC), govulncheck exit 3, down from 10 / 21;
+  - govulncheck (headless and GUI): `Your code is affected by 6 vulnerabilities from 2 modules.` (grpc v1.77.0, quic-go v0.54.0; SEC), non-zero exit (govulncheck itself exits 3; through `go run` it is reported as 1), down from 10 / 21;
   - script tests (`assert-go-toolchain`, `go-deps-update`, `wails-update-check`): pass;
   - `diff -r` of the bindings against the baseline: only the map types (`{ [_ in string]?: T }`), `LastUpdate: string` (default `"0001-01-01T00:00:00.000Z"`), `bindings/time` gone and `bindings/events/index.ts` added.
   - Local deviation: protoc on the executing machine was `libprotoc 36.0`, not 36.2 (CI pins 36.2). Generation and every Go step succeeded with it.
@@ -136,7 +136,7 @@ Pass means:
 - generate exits 0; build and vet print nothing; the cross-build exits 0; 10 packages are `ok`;
 - vitest reports `Test Files 16 passed`, plus the new case;
 - the tsc count and set are exactly as the task states;
-- **after the bump**, govulncheck reports `Your code is affected by 6 vulnerabilities from 2 modules` (grpc v1.77.0 and quic-go v0.54.0, which belong to SEC) for both tag sets, with exit code 3. That is expected and is not a failure.
+- **after the bump**, govulncheck reports `Your code is affected by 6 vulnerabilities from 2 modules` (grpc v1.77.0 and quic-go v0.54.0, which belong to SEC) for both tag sets, with a non-zero exit (govulncheck itself exits 3; `go run` reports 1). That is expected and is not a failure.
 
 From Task S4 on, also run `bash .github/scripts/wails-update-check_test.sh`.
 
