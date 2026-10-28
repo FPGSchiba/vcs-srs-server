@@ -377,8 +377,13 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	logf("pre-flight ok: predicted knee %d, N_max %d", o.PredictedKnee, nMax)
 
 	// 4-8. The S arm.
+	scratch, err := os.MkdirTemp("", "vcs-benchkit-leg-")
+	if err != nil {
+		return fail(fmt.Errorf("scratch dir: %w", err))
+	}
+	defer os.RemoveAll(scratch)
 	env := &hostEnv{
-		serverBin: o.ServerBin, loadbotBin: o.LoadbotBin, outDir: o.OutDir, scenario: o.Scenario, seed: o.Seed,
+		serverBin: o.ServerBin, loadbotBin: o.LoadbotBin, outDir: o.OutDir, scratchDir: scratch, scenario: o.Scenario, seed: o.Seed,
 		serverPin: serverPin, serverGOMAXPROCS: 1, serverCPUs: serverCPUs, genSet: o.GenSet, genNCPU: len(genCPUs),
 	}
 	d := NewDriver(env, Config{

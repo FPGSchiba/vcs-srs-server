@@ -50,6 +50,14 @@ func TestLegSmoke(t *testing.T) {
 			t.Errorf("missing %s: %v", f, err)
 		}
 	}
+	// The results directory is uploaded as a public artifact: no passwords and
+	// no server data directories may be in it.
+	if _, err := os.Stat(filepath.Join(out, "passwords.json")); err == nil {
+		t.Error("passwords.json is in the results directory")
+	}
+	if m, _ := filepath.Glob(filepath.Join(out, "server-*")); len(m) > 0 {
+		t.Errorf("server data directories in the results directory: %v", m)
+	}
 	mb, err := os.ReadFile(filepath.Join(out, "manifest.json"))
 	if err != nil {
 		t.Fatal(err)

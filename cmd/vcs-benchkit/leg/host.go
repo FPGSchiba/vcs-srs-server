@@ -19,6 +19,10 @@ import (
 // pinned `vcs-loadbot run`. Every Start is a fresh server in a fresh directory.
 type hostEnv struct {
 	serverBin, loadbotBin, outDir, scenario string
+	// scratchDir holds what must not reach the results artifact: the throwaway
+	// coalition passwords and each server's data directory. Only the load bot's
+	// stderr logs go under outDir.
+	scratchDir string
 	seed                                    int64
 	serverPin                               string // the S arm's one CPU
 	serverGOMAXPROCS                        int
@@ -37,8 +41,12 @@ func (e *hostEnv) errorsSeen() []string {
 	return append([]string(nil), e.serverErrs...)
 }
 
+func (e *hostEnv) serverDir(k int) string {
+	return filepath.Join(e.scratchDir, fmt.Sprintf("server-%d", k))
+}
+
 func (e *hostEnv) passwordsFile() (string, error) {
-	p := filepath.Join(e.outDir, "passwords.json")
+	p := filepath.Join(e.scratchDir, "passwords.json")
 	m := map[string]string{}
 	for _, c := range topology.DefaultCoalitions {
 		m[c.Name] = c.Password
@@ -58,7 +66,7 @@ func (e *hostEnv) Start(ctx context.Context) (System, error) {
 
 	top, err := topology.StartStandalone(ctx, topology.Spec{
 		Binary: e.serverBin,
-		Dir:    filepath.Join(e.outDir, fmt.Sprintf("server-%d", k)),
+		Dir:    e.serverDir(k),
 		Pin: map[topology.Role]topology.Pin{
 			topology.Standalone: {CPUs: e.serverPin, GOMAXPROCS: e.serverGOMAXPROCS},
 		},
