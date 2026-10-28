@@ -98,6 +98,8 @@ The certificate and private key are generated automatically by the Control node 
 paths above if they do not exist. Mount `./certs` as a read-write volume on the Control
 node the first time you run it, then switch to `:ro` once the files are created.
 
+The shipped `docker-compose.central.yml` already mounts `./certs:/certs:ro`, so a first start cannot write these files. For the first start, remove `:ro` from the `control` service's `./certs` line, start once, then restore it. Alternatively, create the files beforehand. The same applies to a `clientTLS` pair you let the server generate (see [Client-facing TLS](#client-facing-tls)). `deploy/config/` is not shipped; create it with the files below.
+
 ### Coalition voice node (`config/voice-eu.yaml`)
 
 ```yaml
@@ -110,9 +112,11 @@ voiceControl:
   remoteHost: control  # Docker service name of the Control node
   port: 14448
   certificateFile: /certs/voicecontrol-cert.pem  # Copy of Control's cert
-  publicAddr: voice-eu  # Hostname/IP clients use to reach this node
+  publicAddr: vcs.example.com:5002  # Public host[:port] clients use to reach this node
   region: eu
 ```
+
+`publicAddr` is handed to clients as `host:port`. Clients outside the compose network cannot resolve the service names `voice-eu` / `voice-global`, so use the host's public name or IP (see [Voice address](../README.md#voice-address)).
 
 ### Global voice node (`config/voice-global.yaml`)
 
@@ -128,7 +132,7 @@ voiceControl:
   remoteHost: control
   port: 14448
   certificateFile: /certs/voicecontrol-cert.pem
-  publicAddr: voice-global
+  publicAddr: vcs.example.com:5003
   region: eu
 ```
 
@@ -178,6 +182,8 @@ connect until it is fixed.
 **Public deployments** should point these at a certificate issued by a real
 CA for the hostname users type. Clients then verify against their OS trust
 store with no configuration at all.
+
+As of commit `df8d9f3` the server loads only **PKCS#1 RSA** private keys (`-----BEGIN RSA PRIVATE KEY-----`). Most CAs and `openssl genrsa` on OpenSSL 3 produce PKCS#8 (`-----BEGIN PRIVATE KEY-----`). Convert with OpenSSL 3: `openssl rsa -in key.pem -traditional -out key-pkcs1.pem`; on OpenSSL 1.1.1: `openssl rsa -in key.pem -out key-pkcs1.pem`. ECDSA keys cannot be used today (`openssl rsa` answers `Not an RSA key`). Details: [Client-facing TLS](../README.md#client-facing-tls).
 
 **Self-hosted or LAN deployments** can leave the files absent: the server
 generates a self-signed pair at those paths on first start, the same way the
