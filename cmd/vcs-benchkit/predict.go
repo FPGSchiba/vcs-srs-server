@@ -28,6 +28,7 @@ const (
 	maxKneeN          = 1 << 24
 
 	orgOpBasis = "not a validated prediction; sweep start only"
+	capNote    = "; knee hit the 2^24 search cap, the model never reaches the budget"
 )
 
 // BenchRow is one benchmark key with the median over -count repeats.
@@ -68,8 +69,9 @@ func median(xs []float64) float64 {
 	return (s[m-1] + s[m]) / 2
 }
 
-// ParseBenchOutput parses `go test -bench` output. Non-benchmark lines are
-// ignored; a malformed Benchmark line is an error.
+// ParseBenchOutput parses `go test -bench` output. Non-benchmark lines and
+// bare single-field parent lines (from -test.v) are ignored; any other
+// malformed Benchmark line is an error.
 func ParseBenchOutput(r io.Reader) ([]BenchRow, error) {
 	samples := map[rowKey]map[string][]float64{}
 	sc := bufio.NewScanner(r)
@@ -82,6 +84,10 @@ func ParseBenchOutput(r io.Reader) ([]BenchRow, error) {
 			continue
 		}
 		f := strings.Fields(line)
+		if len(f) == 1 {
+			// Bare parent line emitted by -test.v; no result on it.
+			continue
+		}
 		if len(f) < 4 || len(f)%2 != 0 {
 			return nil, fmt.Errorf("line %d: malformed benchmark line %q", lineNo, line)
 		}
@@ -202,6 +208,13 @@ func pickCurve(rows []BenchRow, bench, logger, unit string, byN bool) []gridPoin
 		pts = append(pts, gridPoint{float64(x), median(vs)})
 	}
 	sort.Slice(pts, func(i, j int) bool { return pts[i].x < pts[j].x })
+	// Cost cannot fall as the axis grows; a noisy dip is measurement error.
+	// A running max keeps the curve monotone, which knee() relies on.
+	for i := 1; i < len(pts); i++ {
+		if pts[i].y < pts[i-1].y {
+			pts[i].y = pts[i-1].y
+		}
+	}
 	return pts
 }
 
@@ -282,7 +295,7 @@ func Predict(rows []BenchRow, logger string) ([]Prediction, error) {
 	for _, arm := range []string{"S", "Seq", "D2"} {
 		out = append(out, Prediction{
 			Scenario: "one-big-net", Arm: arm, KneeN: bigKnee, Validated: true,
-			Basis: "one talker on one shard goroutine; capped at one core in every arm",
+			Basis: withCapNote("one talker on one shard goroutine; capped at one core in every arm", bigKnee),
 		})
 	}
 
@@ -296,12 +309,21 @@ func Predict(rows []BenchRow, logger string) ([]Prediction, error) {
 			talkers := orgTalkerFraction * n
 			return framesPerSec*talkers*orgListeners*tSend(10) + framesPerSec*talkers*tScan(n/a.split)
 		}
+		k := knee(cost, budgetNsPerSec*a.cores)
 		out = append(out, Prediction{
-			Scenario: "org-op", Arm: a.arm, KneeN: knee(cost, budgetNsPerSec*a.cores),
-			Validated: false, Basis: orgOpBasis,
+			Scenario: "org-op", Arm: a.arm, KneeN: k,
+			Validated: false, Basis: withCapNote(orgOpBasis, k),
 		})
 	}
 	return out, nil
+}
+
+// withCapNote appends capNote to basis when the knee hit the search cap.
+func withCapNote(basis string, kneeN int) string {
+	if kneeN >= maxKneeN {
+		return basis + capNote
+	}
+	return basis
 }
 
 func fmtMetric(row BenchRow, unit string) string {

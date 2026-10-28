@@ -44,7 +44,7 @@ func TestParseBenchOutput(t *testing.T) {
 		t.Errorf("scan median: %+v", r)
 	}
 
-	if _, err := ParseBenchOutput(strings.NewReader("BenchmarkX/N=a\n")); err == nil {
+	if _, err := ParseBenchOutput(strings.NewReader("BenchmarkX/N=a 10\n")); err == nil {
 		t.Error("garbled Benchmark line must be an error")
 	}
 	if _, err := ParseBenchOutput(strings.NewReader("BenchmarkX/N=a  10  5 ns/op\n")); err == nil {
@@ -150,5 +150,82 @@ func TestWriteMicroCSV(t *testing.T) {
 		"BenchmarkSocketSend,100,10,bus,single,90000,9000,,1\n"
 	if b.String() != want {
 		t.Errorf("csv:\n%s\nwant:\n%s", b.String(), want)
+	}
+}
+
+func TestPredictOrgOpHandComputed(t *testing.T) {
+	ps, err := Predict(synth("bus"), "bus")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// ns/send is 2000 at every L. For N >= 1000 tscan(N) = 10N (see above), so
+	// org-op cost(S) = 50*0.05N*7.7*2000 + 50*0.05N*tscan(N/split)
+	//                = 38500N + 2.5N*tscan(N/split).
+	// S   (1 core, split 1): 25N^2   + 38500N <= 8e8   -> N <= 4939.02 -> 4939
+	// Seq (2 cores, split 1): 25N^2  + 38500N <= 1.6e9 -> N <= 7266.97 -> 7266
+	// D2  (2 cores, split 2): tscan(N/2) = 5N for N >= 2000, so
+	//                         12.5N^2 + 38500N <= 1.6e9 -> N <= 9878.04 -> 9878
+	want := map[string]int{"S": 4939, "Seq": 7266, "D2": 9878}
+	for arm, k := range want {
+		if got := pred(t, ps, "org-op", arm).KneeN; got != k {
+			t.Errorf("org-op %s: knee %d, want %d", arm, got, k)
+		}
+	}
+}
+
+func TestPredictEnforcesMonotoneScanCurve(t *testing.T) {
+	// A noisy grid where tscan dips at N=5000. Without a running max the
+	// extrapolation beyond 5000 has a negative slope and the knee is wrong.
+	scan := map[int]float64{100: 1000, 1000: 10000, 5000: 5000}
+	var rows []BenchRow
+	for n, s := range scan {
+		for _, l := range []int{10, 100} {
+			rows = append(rows,
+				BenchRow{Bench: benchSend, N: n, L: l, Logger: "bus", Mode: "single", Metric: map[string]float64{"ns/send": 2000}},
+				BenchRow{Bench: benchScan, N: n, L: l, Logger: "bus", Mode: "single", Metric: map[string]float64{"ns/scan": s}},
+			)
+		}
+	}
+	ps, err := Predict(rows, "bus")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Running max flattens tscan at 10000 from N=1000, so
+	// cost = 1e5*(N-1) + 5e5 <= 8e8 -> N <= 7996.
+	if got := pred(t, ps, "one-big-net", "S").KneeN; got != 7996 {
+		t.Errorf("knee %d, want 7996", got)
+	}
+}
+
+func TestPredictNotesKneeAtCap(t *testing.T) {
+	var rows []BenchRow
+	for _, r := range synth("bus") {
+		for k := range r.Metric {
+			r.Metric[k] = 0
+		}
+		rows = append(rows, r)
+	}
+	ps, err := Predict(rows, "bus")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := pred(t, ps, "one-big-net", "S")
+	if p.KneeN != maxKneeN || !strings.Contains(p.Basis, "2^24") {
+		t.Errorf("want cap note, got knee %d basis %q", p.KneeN, p.Basis)
+	}
+	o := pred(t, ps, "org-op", "S")
+	if !strings.HasPrefix(o.Basis, orgOpBasis) || !strings.Contains(o.Basis, "2^24") {
+		t.Errorf("org-op basis %q", o.Basis)
+	}
+}
+
+func TestParseBenchOutputSkipsBareParentLines(t *testing.T) {
+	in := "BenchmarkSocketSend\nBenchmarkSocketSend/N=100/L=10/log=bus/mode=single-8  10  91000 ns/op  9100 ns/send  1 allocs/op\n"
+	rows, err := ParseBenchOutput(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("want 1 row, got %d", len(rows))
 	}
 }
