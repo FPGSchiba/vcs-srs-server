@@ -589,7 +589,7 @@ func (s *VoiceControlServer) EstablishStream(stream pb.VoiceControlService_Estab
 	// Subscribe before building the snapshot, so no delta falls between the
 	// two. The feed carries only the events this handler forwards or acts on,
 	// and it is overflow-aware: a feed that falls behind is ended, never
-	// silently thinned (D7).
+	// silently thinned (D7); a node whose feed ends is deregistered (D8 tombstone).
 	sub := s.eventBus.SubscribeNames(nodeFeedSize, nodeFeedEvents...)
 	defer sub.Close()
 
@@ -603,7 +603,7 @@ func (s *VoiceControlServer) EstablishStream(stream pb.VoiceControlService_Estab
 		// so nothing after it may be forwarded.
 		select {
 		case <-sub.Overflow():
-			return s.endLaggingFeed(node, stream, sub)
+			return s.endLaggingFeed(serverID, node, sub)
 		default:
 		}
 		select {
@@ -611,7 +611,7 @@ func (s *VoiceControlServer) EstablishStream(stream pb.VoiceControlService_Estab
 			s.deregisterNodeIf(serverID, node)
 			return nil
 		case <-sub.Overflow():
-			return s.endLaggingFeed(node, stream, sub)
+			return s.endLaggingFeed(serverID, node, sub)
 		case event, ok := <-sub.C:
 			if !ok {
 				return nil
@@ -649,24 +649,14 @@ func (s *VoiceControlServer) EstablishStream(stream pb.VoiceControlService_Estab
 	}
 }
 
-// endLaggingFeed ends a node feed that overflowed. The node stays registered
-// (so its re-registration keeps its coalitions, D5) but its dead stream is
-// detached; the node sees the stream end, reconnects and gets a fresh
-// snapshot.
-func (s *VoiceControlServer) endLaggingFeed(node *registeredNode, stream pb.VoiceControlService_EstablishStreamServer, sub *events.Subscription) error {
-	s.detachStreamIf(node, stream)
-	s.logger.Warn("Voice node feed fell behind, ending stream", "serverId", node.serverID, "dropped", sub.Dropped())
+// endLaggingFeed ends a node feed that overflowed. Like any dead stream, the
+// node is deregistered (ownership-checked, R-2), so its coalitions are held by
+// the D8 tombstone for nodeGrace; the node sees the stream end, re-registers
+// (getting them back) and gets a fresh snapshot.
+func (s *VoiceControlServer) endLaggingFeed(serverID string, node *registeredNode, sub *events.Subscription) error {
+	s.deregisterNodeIf(serverID, node)
+	s.logger.Warn("Voice node feed fell behind, ending stream", "serverId", serverID, "dropped", sub.Dropped())
 	return errNodeFeedFellBehind
-}
-
-// detachStreamIf clears node's stream only if it is still stream, so an old
-// handler never detaches a newer stream.
-func (s *VoiceControlServer) detachStreamIf(node *registeredNode, stream pb.VoiceControlService_EstablishStreamServer) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if node.stream == stream {
-		node.stream = nil
-	}
 }
 
 // nodeScope returns a copy of what decides which clients node is sent:

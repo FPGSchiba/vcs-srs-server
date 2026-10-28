@@ -78,10 +78,13 @@ func TestNodeFeedIgnoresLogFlood(t *testing.T) {
 	}
 }
 
-// D7: a feed that falls behind ends (so the node resyncs) instead of silently
-// dropping deltas; the registration and its coalitions survive.
-func TestNodeFeedOverflowEndsStreamKeepsRegistration(t *testing.T) {
+// D7 + D8: a feed that falls behind ends (so the node resyncs) instead of
+// silently dropping deltas. The lagging node is deregistered like any other
+// dead stream, so its coalitions are held by the D8 tombstone: a same-ID
+// re-registration within the 120 s grace gets them back.
+func TestNodeFeedOverflowDeregistersNodeCoalitionsReturnWithinGrace(t *testing.T) {
 	s, st, errc, id, logs := feedNode(t)
+	clk := &fakeClock{t: time.Unix(1_700_000_000, 0)}
 	// Give n1 a coalition set a fresh registration would not produce (as in
 	// threeNodes), so the final assertion can tell carry-over from reassignment.
 	s.settingsState.Lock()
@@ -93,6 +96,7 @@ func TestNodeFeedOverflowEndsStreamKeepsRegistration(t *testing.T) {
 		register(t, s, &pb.RegisterVoiceServerRequest{ServerId: n, ServerAddress: "10.0.0.2", UdpPort: 5002})
 	}
 	s.mu.Lock()
+	s.now = clk.now
 	s.nodes["a"].coalitions = []string{"Red"}
 	s.nodes["b"].coalitions = []string{"Gold"}
 	s.nodes["n1"].coalitions = []string{"Blue", "Green"}
@@ -113,22 +117,24 @@ func TestNodeFeedOverflowEndsStreamKeepsRegistration(t *testing.T) {
 		t.Fatalf("%d fell-behind WARNs, want 1", n)
 	}
 	s.mu.RLock()
-	node, ok := s.nodes["n1"]
-	var attached bool
-	if ok {
-		attached = node.stream != nil
-	}
+	_, registered := s.nodes["n1"]
+	gone, tombstoned := s.recentlyGone["n1"]
 	s.mu.RUnlock()
-	if !ok {
-		t.Fatal("the lagging node was deregistered; it must stay registered to keep its coalitions")
+	if registered {
+		t.Fatal("the lagging node is still registered; a dead node must be deregistered (D7)")
 	}
-	if attached {
-		t.Fatal("the lagging node's dead stream is still attached")
+	if !tombstoned {
+		t.Fatal("the lagging node left no tombstone; its coalitions are not reserved (D8)")
 	}
-	resp := register(t, s, &pb.RegisterVoiceServerRequest{ServerId: "n1", ServerAddress: "10.0.0.1", UdpPort: 5002})
 	want := []string{"Blue", "Green"}
+	if got := sortedCopy(gone.coalitions); !slices.Equal(got, want) {
+		t.Fatalf("tombstone holds %v, want %v", got, want)
+	}
+
+	clk.add(nodeGrace - time.Second)
+	resp := register(t, s, &pb.RegisterVoiceServerRequest{ServerId: "n1", ServerAddress: "10.0.0.1", UdpPort: 5002})
 	if got := sortedCopy(resp.AssignedCoalitions); !slices.Equal(got, want) {
-		t.Fatalf("re-registration after the overflow assigned %v, want %v", got, want)
+		t.Fatalf("re-registration %v after the overflow assigned %v, want %v", nodeGrace-time.Second, got, want)
 	}
 	if got := nodeCoalitions(s, "n1"); !slices.Equal(got, want) {
 		t.Fatalf("n1 owns %v after re-registering, want %v", got, want)
