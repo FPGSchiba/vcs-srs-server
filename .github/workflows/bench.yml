@@ -382,21 +382,22 @@ jobs:
           dir="results/${REPEAT}-${SCENARIO}"
           md="$dir/results.md"
           knees="$dir/knees.csv"
-          {
-            echo "### Leg ${REPEAT} ${SCENARIO}"
-            echo
-          } >> "$GITHUB_STEP_SUMMARY"
           if [ -f "$md" ]; then
-            # The same table the leg already printed to the run log.
+            # The same table the leg already printed to the run log; it
+            # carries its own "### Leg" heading.
             cat "$md" >> "$GITHUB_STEP_SUMMARY"
-          elif [ -f "$knees" ]; then
-            {
-              echo '```'
-              cat "$knees"
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "No knees.csv: this leg did not finish. Partial files, if any, are in the leg artifact." >> "$GITHUB_STEP_SUMMARY"
+            {
+              echo "### Leg ${REPEAT} ${SCENARIO}"
+              echo
+              if [ -f "$knees" ]; then
+                echo '```'
+                cat "$knees"
+                echo '```'
+              else
+                echo "No knees.csv: this leg did not finish. Partial files, if any, are in the leg artifact."
+              fi
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
 
       # The directory name carries <repeat>-<scenario>, so merge-multiple in
@@ -452,10 +453,7 @@ jobs:
           status=0
           bin/vcs-benchkit aggregate --in results --out "$OUT" || status=$?
           if [ -f "$OUT/aggregate.md" ]; then
-            {
-              echo "### Aggregate (all legs)"
-              echo
-            } >> "$GITHUB_STEP_SUMMARY"
+            # It carries its own "### Aggregate: k of m legs finished" heading.
             cat "$OUT/aggregate.md" >> "$GITHUB_STEP_SUMMARY"
           fi
           if [ -f "$OUT/aggregate.csv" ]; then
