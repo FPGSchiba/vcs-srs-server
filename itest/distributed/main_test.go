@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"testing"
 	"time"
@@ -25,7 +26,14 @@ var serverBin string
 // any level=ERROR line or race report in a server log fails the run. A line
 // is added here only with a comment citing its server source and why it is
 // expected.
-var allowlist = topology.Allow{}
+var allowlist = topology.Allow{
+	// A6 (TestKickEndsStreamAndVoice): the kicked bot's cleanup calls
+	// Disconnect on a session control already ended. The auth interceptor
+	// rejects it with Unauthenticated and control/server.go:464 logs every
+	// gRPC error at ERROR (message built at control/server.go:525). This
+	// is expected for a kicked client and for no other method.
+	regexp.MustCompile(`level=ERROR msg="gRPC error" method=/srspb\.SRSService/Disconnect error="rpc error: code = Unauthenticated desc = session not found for /srspb\.SRSService/Disconnect`),
+}
 
 func TestMain(m *testing.M) {
 	os.Exit(run(m))
