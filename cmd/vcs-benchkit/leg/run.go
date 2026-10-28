@@ -316,7 +316,7 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 		Schema: "leg-manifest/1", Label: Label, Payload: PayloadLabel, JoinLabel: JoinLabel, NotMeasured: NotMeasured,
 		Arm: o.Arms, Scenario: o.Scenario, Seed: o.Seed, Q6: o.Q6, Topology: o.Topology,
 		ServerSHA: o.ServerSHA, ClientSHA: o.ClientSHA, KitGoVersion: runtime.Version(),
-		Pins: pins,
+		Pins:          pins,
 		PredictedKnee: o.PredictedKnee, JoinRate: o.JoinRate, Budget: o.Budget.String(),
 		Durations: map[string]string{
 			"warmup": o.Warmup.String(), "hold": o.Hold.String(), "confirm": o.Confirm.String(),

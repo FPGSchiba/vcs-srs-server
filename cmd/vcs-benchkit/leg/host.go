@@ -22,13 +22,13 @@ type hostEnv struct {
 	// scratchDir holds what must not reach the results artifact: the throwaway
 	// coalition passwords and each server's data directory. Only the load bot's
 	// stderr logs go under outDir.
-	scratchDir string
-	seed                                    int64
-	serverPin                               string // the S arm's one CPU
-	serverGOMAXPROCS                        int
-	serverCPUs                              []int // the whole server set, for softirq
-	genSet                                  string
-	genNCPU                                 int
+	scratchDir       string
+	seed             int64
+	serverPin        string // the S arm's one CPU
+	serverGOMAXPROCS int
+	serverCPUs       []int // the whole server set, for softirq
+	genSet           string
+	genNCPU          int
 
 	mu         sync.Mutex
 	k          int

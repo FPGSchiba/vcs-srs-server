@@ -4,9 +4,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
