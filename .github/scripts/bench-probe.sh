@@ -35,7 +35,7 @@ expand() {
 csv() { paste -sd, -; } # lines to comma list
 
 steal() { # <stat file>: 8th value after the label (awk $9) of the aggregate cpu line; 0 if absent
-  local f; f="$(need "$1")"
+  local f; f="$(need "$1")" || exit 1
   local v; v="$(awk '$1=="cpu"{print $9; exit}' "$f")"
   printf '%s' "${v:-0}"
 }
@@ -79,11 +79,13 @@ if [ -e "$cfg" ]; then
   elif grep -q '^# CONFIG_IRQ_TIME_ACCOUNTING is not set' "$cfg"; then irq=n; fi
 fi
 
-sc() { local v; v="$(slurp "$root/proc/sys/net/core/$1")"; printf '%s' "${v//[$'\n']/}"; }
+sc() { local v; v="$(slurp "$root/proc/sys/net/core/$1")" || exit 1; printf '%s' "${v//[$'\n']/}"; }
 port_range="$(slurp "$root/proc/sys/net/ipv4/ip_local_port_range" | tr -s ' \t' ' ' | tr -d '\n' | sed 's/ $//')"
 rmem_default="$(sc rmem_default)"; rmem_max="$(sc rmem_max)"
 wmem_default="$(sc wmem_default)"; wmem_max="$(sc wmem_max)"
 
+# Bash clears errexit inside $(...), so every helper that reads a file ends
+# its subshell with `|| exit 1` and the caller's assignment then trips set -e.
 s0="$(steal "$root/proc/stat")"
 sleep "$steal_seconds"
 s1="$(steal "${PROBE_STAT2:-$root/proc/stat}")"

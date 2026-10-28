@@ -59,6 +59,22 @@ else
   fail "missing-root (rc=$rc out=$out)"
 fi
 
+# A missing file read inside a command substitution (sysctl, steal sample)
+# must also abort cleanly: non-zero exit and no partial JSON on stdout.
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+for missing in proc/sys/net/core/wmem_max proc/stat; do
+  rm -rf "$tmp/root"; cp -r "$fx/no-smt" "$tmp/root"; rm "$tmp/root/$missing"
+  set +e
+  stdout="$(PROBE_ROOT="$tmp/root" PROBE_STEAL_SECONDS=0 bash "$script" 2>"$tmp/err")"; rc=$?
+  set -e
+  if [ "$rc" -ne 0 ] && [ -z "$stdout" ] && grep -q "bench-probe: .*$missing not found" "$tmp/err"; then
+    pass "missing-$missing"
+  else
+    fail "missing-$missing (rc=$rc stdout=${stdout:0:40}...)"
+  fi
+done
+
 if [ "$failures" -ne 0 ]; then
   echo "$failures failure(s)"
   exit 1
