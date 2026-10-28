@@ -5,6 +5,7 @@ package distributed
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"net"
 	"strconv"
 	"sync/atomic"
@@ -78,6 +79,9 @@ func newBotOn(t *testing.T, tp *topology.Topology, coalition string) *bot {
 		t.Fatalf("bot dial: %v", err)
 	}
 	b.conn = conn
+	// Close conn on any early t.Fatalf; Close is idempotent, so the full
+	// cleanup below may close it again.
+	t.Cleanup(func() { _ = conn.Close() })
 
 	rpcCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -297,14 +301,19 @@ func (b *bot) recvFrames(addr string, freqKHz uint32, window time.Duration) [][]
 	c := b.sock(addr)
 	var out [][]byte
 	buf := make([]byte, 2048)
-	_ = c.SetReadDeadline(time.Now().Add(window))
+	deadline := time.Now().Add(window)
+	_ = c.SetReadDeadline(deadline)
 	for {
 		n, err := c.Read(buf)
 		if err != nil {
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
 				return out
 			}
-			continue // e.g. a stale ICMP refusal; keep reading until the deadline
+			if errors.Is(err, net.ErrClosed) || !time.Now().Before(deadline) {
+				return out
+			}
+			time.Sleep(5 * time.Millisecond) // e.g. a stale ICMP refusal; retry until the deadline
+			continue
 		}
 		p, perr := voice.ParsePacket(buf[:n])
 		if perr != nil || p.Type != voice.PacketTypeVoice || p.Frequency != freqKHz || len(p.Payload) < 4 {
