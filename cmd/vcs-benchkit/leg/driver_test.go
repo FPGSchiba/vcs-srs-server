@@ -490,3 +490,61 @@ func TestDriverProbeHoldsFeedTheSettleColumns(t *testing.T) {
 		t.Errorf("row = %+v, want a pass with no hold-phase rex", r)
 	}
 }
+
+// TestDriverBudgetStopAfterABreachIsAKnee: whatever budget makes the guard
+// stop the sweep after a breach was already measured, the result must be a
+// knee at the last pass, never "time-bound" (which reads as censored and would
+// turn the D13 go/no-go into a no-go for a knee the leg actually bracketed).
+func TestDriverBudgetStopAfterABreachIsAKnee(t *testing.T) {
+	found := false
+	for b := 2 * time.Minute; b <= 40*time.Minute; b += 5 * time.Second {
+		w := &fakeWorld{kneeN: 150} // 100 passes, 200 breaches, then bisect
+		cfg := testConfig()
+		cfg.Budget = b
+		out, err := NewDriver(w, cfg).Run(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		stopped := strings.Contains(strings.Join(out.Notes, ";"), "budget guard")
+		breached := false
+		for _, r := range out.Rows {
+			if r.Kind == "sweep" && r.Outcome == sweep.Breach {
+				breached = true
+			}
+		}
+		if !stopped || !breached {
+			continue
+		}
+		found = true
+		if out.Result.Kind != sweep.KneeFound || out.Result.N < 100 || out.Result.N >= 200 {
+			t.Fatalf("budget %s: result = %v, want a knee in [100, 200)", b, out.Result)
+		}
+		if !strings.Contains(strings.Join(out.Notes, ";"), "bisection") {
+			t.Errorf("budget %s: notes do not say the bisection was cut short: %v", b, out.Notes)
+		}
+	}
+	if !found {
+		t.Fatal("no budget stopped the sweep after a breach; the test scenario needs retuning")
+	}
+}
+
+type fixedClock struct{ t time.Time }
+
+func (c fixedClock) Now() time.Time { return c.t }
+
+// TestOverBudgetReservesBothTailRamps: the confirm may rebuild and ramp to the
+// knee, and the overload then ramps another knee's worth of bots, so the
+// reserve holds two ramps and two settles, not one.
+func TestOverBudgetReservesBothTailRamps(t *testing.T) {
+	t0 := time.Unix(1_700_000_000, 0)
+	cfg := testConfig()
+	cfg.Clock = fixedClock{t0}
+	cfg.Budget = 400 * time.Second
+	d := NewDriver(&fakeWorld{}, cfg)
+	d.start = t0
+	// Step 100 costs ~54 s; one ramp of 2700 bots at 27/s is 100 s. With one
+	// tail ramp the total is ~364 s (fits 400 s); with both it is ~484 s.
+	if !d.overBudget(100, 2700) {
+		t.Fatal("overBudget ignored the overload's own ramp after a rebuilt confirm")
+	}
+}

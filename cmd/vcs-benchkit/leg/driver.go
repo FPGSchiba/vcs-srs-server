@@ -313,7 +313,9 @@ func (d *Driver) overBudget(n, lo int) bool {
 	} else {
 		cost += secs(n - d.joined)
 	}
-	reserve := d.cfg.Confirm + d.cfg.Overload + secs(lo) + 30*time.Second
+	// The confirm may rebuild and ramp to the knee, and the overload then
+	// ramps another knee's worth of bots: two ramps and two settles.
+	reserve := d.cfg.Confirm + d.cfg.Overload + 2*secs(lo) + 2*sweep.SettleTypical + 30*time.Second
 	return d.cfg.Clock.Now().Sub(d.start)+cost+reserve > d.cfg.Budget
 }
 
@@ -336,7 +338,6 @@ func (d *Driver) Run(ctx context.Context) (*Outcome, error) {
 
 	sw := sweep.NewSweep(d.cfg.Predicted, d.cfg.NMax)
 	lo := 0
-	budgetStop := false
 	for {
 		n, more := sw.Next()
 		if !more {
@@ -344,7 +345,10 @@ func (d *Driver) Run(ctx context.Context) (*Outcome, error) {
 		}
 		if d.overBudget(n, lo) {
 			d.note("budget guard: stopped before the %d-bot step so the confirm and overload still fit", n)
-			budgetStop = true
+			if blo, bhi := sw.Bracket(); bhi > 0 {
+				d.note("the bisection was cut short: the knee lies in [%d, %d)", blo, bhi)
+			}
+			sw.Stop()
 			break
 		}
 		row, err := d.measure(ctx, "sweep", n, d.cfg.Hold, fmt.Sprintf("step-%d", len(d.out.Rows)+1))
@@ -364,11 +368,7 @@ func (d *Driver) Run(ctx context.Context) (*Outcome, error) {
 			d.note("%s step at %d bots was invalid, not a breach: %s", r.Kind, r.N, strings.Join(r.Reasons, "; "))
 		}
 	}
-	if budgetStop {
-		d.out.Result = sweep.Result{Kind: sweep.TimeBound, N: lo}
-	} else {
-		d.out.Result = sw.Result()
-	}
+	d.out.Result = sw.Result()
 
 	// Confirm at the found knee, then one overload step at 2x.
 	k := d.out.Result.N

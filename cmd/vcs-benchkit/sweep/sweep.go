@@ -203,6 +203,32 @@ func (s *Sweep) finish(r Result) {
 	s.result = r
 }
 
+// Bracket returns the largest passing size (0 = none) and the smallest
+// breached size (0 = no breach yet) seen so far.
+func (s *Sweep) Bracket() (lo, hi int) { return s.lo, s.hi }
+
+// Stop ends the sweep early (the leg's budget guard) and returns its result.
+// A sweep still doubling has seen no breach, so it is time-bound at its last
+// pass. Once a breach brackets the knee, the last pass is a knee, coarser
+// than three bisections would give but not censored; with no pass at all it
+// is below range. A pending step is discarded. A finished sweep keeps its
+// result.
+func (s *Sweep) Stop() Result {
+	if s.phase == phaseDone {
+		return s.result
+	}
+	s.pending = false
+	switch {
+	case s.phase == phaseDoubling:
+		s.finish(Result{Kind: TimeBound, N: s.lo})
+	case s.lo == 0:
+		s.finish(Result{Kind: BelowRange, N: s.smallestB})
+	default:
+		s.finish(Result{Kind: KneeFound, N: s.lo})
+	}
+	return s.result
+}
+
 // Result is the sweep's answer. It is only meaningful once Next has returned
 // false.
 func (s *Sweep) Result() Result { return s.result }

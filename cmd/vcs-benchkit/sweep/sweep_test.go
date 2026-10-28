@@ -197,3 +197,55 @@ func TestResultString(t *testing.T) {
 		}
 	}
 }
+
+// TestSweepStop pins how a sweep cut short (the leg's budget guard) is
+// reported. Only a sweep still doubling, with no breach seen, is time-bound;
+// once a breach brackets the knee the last pass is a knee, coarser than three
+// bisections would give but not censored.
+func TestSweepStop(t *testing.T) {
+	P, B := Pass, Breach
+	cases := []struct {
+		name    string
+		script  []StepOutcome // outcomes of the first steps, from predicted 4000
+		want    Result
+		wantBrk [2]int
+	}{
+		{"doubling, no breach yet", []StepOutcome{P, P}, Result{Kind: TimeBound, N: 2000}, [2]int{2000, 0}},
+		{"nothing run yet", nil, Result{Kind: TimeBound, N: 0}, [2]int{0, 0}},
+		{"breach seen, bisection cut short", []StepOutcome{P, P, B}, Result{Kind: KneeFound, N: 2000}, [2]int{2000, 4000}},
+		{"one bisection done", []StepOutcome{P, P, B, P}, Result{Kind: KneeFound, N: 3000}, [2]int{3000, 4000}},
+		{"first step breached", []StepOutcome{B}, Result{Kind: BelowRange, N: 1000}, [2]int{0, 1000}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewSweep(4000, 100000)
+			for _, o := range tc.script {
+				if _, ok := s.Next(); !ok {
+					t.Fatal("sweep finished early")
+				}
+				if err := s.Record(o); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if lo, hi := s.Bracket(); lo != tc.wantBrk[0] || hi != tc.wantBrk[1] {
+				t.Errorf("Bracket() = %d, %d; want %v", lo, hi, tc.wantBrk)
+			}
+			if got := s.Stop(); got != tc.want {
+				t.Errorf("Stop() = %v, want %v", got, tc.want)
+			}
+			if _, ok := s.Next(); ok {
+				t.Error("Next after Stop must report done")
+			}
+			if got := s.Result(); got != tc.want {
+				t.Errorf("Result() after Stop = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	// Stop on a finished sweep keeps its result.
+	s := NewSweep(4000, 1000)
+	s.Next()
+	_ = s.Record(Pass)
+	if got := s.Stop(); got != (Result{Kind: TimeBound, N: 1000}) {
+		t.Errorf("Stop on a finished sweep = %v", got)
+	}
+}
