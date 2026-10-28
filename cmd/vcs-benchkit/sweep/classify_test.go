@@ -61,7 +61,9 @@ func TestClassify(t *testing.T) {
 		{"several generator violations all named", func(s *StepData) { s.GeneratorViolations = []string{"socket_drops", "gen_cpu"} }, Invalid, []string{"socket_drops", "gen_cpu"}},
 		{"kit-measured generator cpu above 85 percent invalidates", func(s *StepData) { s.GenCPU = 0.86 }, Invalid, []string{"generator cpu"}},
 		{"generator cpu exactly 85 percent is valid", func(s *StepData) { s.GenCPU = 0.85 }, Pass, nil},
-		{"unmeasured generator cpu is not invalid", func(s *StepData) { s.GenCPU = -1 }, Pass, nil},
+		{"unmeasured generator cpu is invalid", func(s *StepData) { s.GenCPU = -1 }, Invalid, []string{"generator cpu not measured"}},
+		{"nan generator cpu is unmeasured and invalid", func(s *StepData) { s.GenCPU = math.NaN() }, Invalid, []string{"generator cpu not measured"}},
+		{"zero generator cpu is a measurement", func(s *StepData) { s.GenCPU = 0 }, Pass, nil},
 		{"cannot settle invalidates", func(s *StepData) { s.CannotSettle = true }, Invalid, []string{"settle"}},
 		{"nan loss is unmeasured and invalid", func(s *StepData) { s.LossRatio = math.NaN() }, Invalid, []string{"loss"}},
 		{"nan cpu is unmeasured and invalid", func(s *StepData) { s.ServerCPU = math.NaN() }, Invalid, []string{"cpu"}},
@@ -147,5 +149,13 @@ func TestStepOutcomeString(t *testing.T) {
 	}
 	if StepOutcome(99).String() == "" {
 		t.Error("unknown outcome must still render")
+	}
+}
+
+// TestDefaultLateLossBound pins the 1 % late-loss threshold, an implementer
+// choice (design 6.4.4 gives no number), so a change is deliberate.
+func TestDefaultLateLossBound(t *testing.T) {
+	if DefaultBounds.MaxLateLossRatio != 0.01 {
+		t.Fatalf("MaxLateLossRatio = %v, want 0.01", DefaultBounds.MaxLateLossRatio)
 	}
 }

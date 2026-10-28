@@ -42,6 +42,9 @@ type Bounds struct {
 	MaxLossRatio float64
 	// MaxLateLossRatio: frames later than the 60 ms jitter target count as
 	// lost (proposal section 3), so the same 1 % applies, at or above it.
+	// The 1 % is an implementer choice: design 6.4.4 only says "late loss
+	// above the threshold". This field and DefaultBounds are the single
+	// source that the leg driver and the S5 publishing code must cite.
 	MaxLateLossRatio float64
 	// MaxOneWayP99: one-way p99 strictly above it breaches.
 	MaxOneWayP99 time.Duration
@@ -101,8 +104,9 @@ type StepData struct {
 	// GeneratorViolations are the load bot's own D14 violations for the hold
 	// (loadgen Bounds.Violations). Non-empty invalidates the step.
 	GeneratorViolations []string
-	// GenCPU is the kit-measured generator CPU fraction over the hold; a
-	// negative value means not measured, which is not a violation.
+	// GenCPU is the kit-measured generator CPU fraction over the hold. The leg
+	// driver must always supply it: a negative or NaN value means not
+	// measured, which invalidates the step.
 	GenCPU float64
 	// CannotSettle is set when the settle phase hit its bound
 	// (Settled reported InvalidCannotSettle).
@@ -132,7 +136,13 @@ func invalidReasons(s StepData, b Bounds) []string {
 	for _, v := range s.GeneratorViolations {
 		r = append(r, "generator health: "+v)
 	}
-	if s.GenCPU >= 0 && s.GenCPU > b.MaxGenCPU {
+	// An unmeasured generator CPU (negative or NaN) is invalid, like the other
+	// unmeasured fields: D14 needs CPU headroom evidence, so a failed sampler
+	// must not let a step count as valid.
+	switch {
+	case s.GenCPU < 0 || math.IsNaN(s.GenCPU):
+		r = append(r, "invalid: generator cpu not measured")
+	case s.GenCPU > b.MaxGenCPU:
 		r = append(r, fmt.Sprintf("generator cpu %.0f%% above %.0f%%", s.GenCPU*100, b.MaxGenCPU*100))
 	}
 	if s.CannotSettle {
