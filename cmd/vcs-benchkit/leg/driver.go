@@ -100,8 +100,11 @@ type Row struct {
 type Outcome struct {
 	Rows   []Row
 	Result sweep.Result
-	Starts int
-	Notes  []string
+	// Unconfirmed is set when the confirm step at the found knee did not pass:
+	// the knee is then the sweep's finding only.
+	Unconfirmed bool
+	Starts      int
+	Notes       []string
 }
 
 // Driver runs the protocol for one arm.
@@ -202,13 +205,19 @@ func (d *Driver) ensure(ctx context.Context, n int) error {
 // The bot has no live counters, so each probe hold's report supplies them:
 // total update-stream receives across its bots, and the resyncs seen during the
 // probe. Both are stricter than the design's "sampled full-store bots".
-func (d *Driver) settle(ctx context.Context, rampEnd time.Time) (ok bool, reason string, err error) {
+//
+// The bot counts a probe as a hold phase, so a probe's ResourceExhausted counts
+// are returned for the caller to fold into the step's ramp and settle columns
+// (they are ramp artefacts and never part of the measured hold).
+func (d *Driver) settle(ctx context.Context, rampEnd time.Time) (ok bool, reason string, rex PhaseCounts, err error) {
 	var samples []sweep.SettleSample
 	for i := 0; ; i++ {
 		st, err := d.sys.Hold(ctx, d.cfg.ProbeHold, fmt.Sprintf("probe-%d", i))
 		if err != nil {
-			return false, "", err
+			return false, "", rex, err
 		}
+		rex.Ramp += st.ResourceExhausted.Ramp
+		rex.Settle += st.ResourceExhausted.Settle + st.ResourceExhausted.Hold
 		var total uint64
 		for _, v := range st.Updates {
 			total += v
@@ -221,10 +230,10 @@ func (d *Driver) settle(ctx context.Context, rampEnd time.Time) (ok bool, reason
 		})
 		ok, reason := sweep.Settled(samples, now)
 		if ok {
-			return true, "", nil
+			return true, "", rex, nil
 		}
 		if strings.HasPrefix(reason, sweep.InvalidCannotSettle) {
-			return false, reason, nil
+			return false, reason, rex, nil
 		}
 	}
 }
@@ -236,13 +245,14 @@ func (d *Driver) measure(ctx context.Context, kind string, n int, hold time.Dura
 		return row, err
 	}
 	rampEnd := d.cfg.Clock.Now()
-	ok, reason, err := d.settle(ctx, rampEnd)
+	ok, reason, probeRex, err := d.settle(ctx, rampEnd)
 	if err != nil {
 		return row, fmt.Errorf("settle at %d bots: %w", n, err)
 	}
 	row.SettleSeconds = d.cfg.Clock.Now().Sub(rampEnd).Seconds()
 	nan := math.NaN()
 	if !ok {
+		row.Step.ResourceExhausted = probeRex
 		row.Data = sweep.StepData{N: n, LossRatio: nan, LateLossRatio: nan, ServerCPU: nan, GenCPU: nan, CannotSettle: true}
 		row.Outcome, row.Reasons = sweep.Classify(row.Data, d.cfg.Bounds)
 		row.Reasons = append([]string{reason}, row.Reasons...)
@@ -263,6 +273,8 @@ func (d *Driver) measure(ctx context.Context, kind string, n int, hold time.Dura
 	if err != nil {
 		return row, fmt.Errorf("read server log: %w", err)
 	}
+	st.ResourceExhausted.Ramp += probeRex.Ramp
+	st.ResourceExhausted.Settle += probeRex.Settle
 	row.Held, row.Step, row.Window = true, st, win
 	row.Logs = CountLog(after).Sub(CountLog(before))
 	row.Data = sweep.StepData{
@@ -369,6 +381,10 @@ func (d *Driver) Run(ctx context.Context) (*Outcome, error) {
 		return &d.out, err
 	}
 	d.out.Rows = append(d.out.Rows, row)
+	if row.Outcome != sweep.Pass {
+		d.out.Unconfirmed = true
+		d.note("the confirm step at %d bots was %s, so the knee is unconfirmed: %s", k, row.Outcome, strings.Join(row.Reasons, "; "))
+	}
 	ov := min(2*k, 2*d.cfg.NMax)
 	if ov <= k {
 		return &d.out, nil

@@ -409,3 +409,84 @@ func TestDriverResourceExhaustedInTheHoldIsABreach(t *testing.T) {
 		t.Fatalf("result = %v, want a knee below 400", out.Result)
 	}
 }
+
+func TestDriverFailedConfirmIsNotedAndMarksTheKneeUnconfirmed(t *testing.T) {
+	w := &fakeWorld{kneeN: 700,
+		stepHook: func(n int, label string, st *Step) {
+			if label == "confirm" {
+				st.LossRatio = 0.05
+			}
+		}}
+	out, err := NewDriver(w, testConfig()).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Result.Kind != sweep.KneeFound || out.Result.N != 700 {
+		t.Fatalf("result = %v", out.Result)
+	}
+	if !out.Unconfirmed {
+		t.Error("a knee that fails its own confirm must be marked unconfirmed")
+	}
+	notes := strings.Join(out.Notes, ";")
+	if !strings.Contains(notes, "confirm") || !strings.Contains(notes, "700") || !strings.Contains(notes, "loss") {
+		t.Errorf("notes = %v, want the failed confirm and its reason", out.Notes)
+	}
+}
+
+func TestDriverInvalidConfirmIsNotedToo(t *testing.T) {
+	w := &fakeWorld{kneeN: 700,
+		stepHook: func(n int, label string, st *Step) {
+			if label == "confirm" {
+				st.Violations = []string{"rx lag p99 9ms above 2ms"}
+			}
+		}}
+	out, err := NewDriver(w, testConfig()).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Unconfirmed || !strings.Contains(strings.Join(out.Notes, ";"), "confirm") {
+		t.Fatalf("unconfirmed = %v notes = %v", out.Unconfirmed, out.Notes)
+	}
+}
+
+func TestDriverPassingConfirmLeavesTheKneeConfirmed(t *testing.T) {
+	out, err := NewDriver(&fakeWorld{kneeN: 700}, testConfig()).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Unconfirmed {
+		t.Errorf("notes = %v", out.Notes)
+	}
+	for _, n := range out.Notes {
+		if strings.Contains(n, "confirm step") {
+			t.Errorf("unexpected confirm note %q", n)
+		}
+	}
+}
+
+// Settle runs on 1 s probe holds, which the bot counts as hold phases, so their
+// ResourceExhausted counts must be folded into the settle column.
+func TestDriverProbeHoldsFeedTheSettleColumns(t *testing.T) {
+	w := &fakeWorld{kneeN: 1 << 30,
+		stepHook: func(n int, label string, st *Step) {
+			if strings.HasPrefix(label, "probe-") && n == 400 {
+				st.ResourceExhausted.Hold = 2
+				st.ResourceExhausted.Ramp = 1
+			}
+		}}
+	out, err := NewDriver(w, testConfig()).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := sweepRow(t, out, 400)
+	if r.Step.ResourceExhausted.Settle < 2 {
+		t.Errorf("rex settle = %d, want the probes' counts (>= 2)", r.Step.ResourceExhausted.Settle)
+	}
+	if r.Step.ResourceExhausted.Ramp < 1 {
+		t.Errorf("rex ramp = %d, want the probes' ramp counts (>= 1)", r.Step.ResourceExhausted.Ramp)
+	}
+	// Probe counts never reach the hold column, so they cannot cause a breach.
+	if r.Step.ResourceExhausted.Hold != 0 || r.Outcome != sweep.Pass {
+		t.Errorf("row = %+v, want a pass with no hold-phase rex", r)
+	}
+}

@@ -390,6 +390,9 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	m.Starts, m.Notes, m.ServerErrors = out.Starts, out.Notes, env.errorsSeen()
 	if runErr == nil {
 		m.Result = out.Result.String()
+		if out.Unconfirmed {
+			m.Result += " (unconfirmed: the confirm step did not pass)"
+		}
 	}
 
 	// 9. Files, written even after a failure so the partial run is inspectable.
