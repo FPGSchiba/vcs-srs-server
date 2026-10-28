@@ -97,7 +97,7 @@ go run github.com/99designs/gqlgen generate
 ## Building
 
 - **GUI:** `wails3 build` builds `bin/vcs-server` (`bin/vcs-server.exe` on Windows). It also rewrites `build/windows/icons.ico`, `build/darwin/icons.icns` and `frontend/package-lock.json`; do not commit those changes by accident. Linux and macOS GUI builds need the packages from [Installation](#installation).
-- **Headless, via the Taskfile:** `wails3 task <os>:build:headless`, where `<os>` is `windows`, `linux` or `darwin`. Add `PRODUCTION=true` for a release build. The output is `bin/vcs-server-headless`.
+- **Headless, via the Taskfile:** `wails3 task <os>:build:headless`, where `<os>` is `windows`, `linux` or `darwin`. Add `PRODUCTION=true` for a release build. The output is `bin/vcs-server-headless` (`bin/vcs-server-headless.exe` for `windows`).
 - **Headless, without Wails:** after [code generation](#code-generation), `go build -tags headless -o bin/vcs-server-headless .`
 - **Checks CI runs:** `go vet -tags headless ./...` and `go test -race -count=1 -tags headless ./...`.
 
