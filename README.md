@@ -375,6 +375,8 @@ KEEPALIVE deliberately does not carry the secret. It cannot rebind, so it cannot
 
 ## Distributed VOIP System Architecture
 
+*Design notes from before the implementation. Where they differ from [Client connections](#client-connections), that section is authoritative.*
+
 ### Overview
 
 This document outlines the architecture and implementation plan for a distributed VOIP system over digitalized radio frequencies, focusing on reliability, scalability, and maintainability.
