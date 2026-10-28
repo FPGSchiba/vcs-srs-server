@@ -16,7 +16,7 @@ need() { # <path>: print the path or fail
   fi
   printf '%s' "$1"
 }
-slurp() { local p; p="$(need "$1")" || exit 1; tr -d '' < "$p"; }
+slurp() { local p; p="$(need "$1")" || exit 1; tr -d "\r" < "$p"; }
 
 # expand "0-1,4" into "0 1 4"
 expand() {
