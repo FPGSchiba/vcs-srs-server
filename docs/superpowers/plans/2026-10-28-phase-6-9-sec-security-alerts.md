@@ -21,7 +21,7 @@
 
 **Tech Stack:** Go 1.27.3, grpc v1.85.0, quic-go v0.64.1, x/net v0.62.0, `golang.org/x/crypto/bcrypt`, govulncheck v1.9.0 (through `go run`), protoc 36.2 + gqlgen in-module (server), buf v1.47.2 (client), npm, GitHub Actions.
 
-**Spec:** the approved design `C:/Users/janne/AppData/Local/Temp/claude/D--Projects-vcs-srs-client/61e6be5b-33d5-417e-8854-ccbdd02e4132/scratchpad/design-SEC.md`, revision 2 plus "User decisions (2026-10-28)". Client Task C6 commits it as `docs/superpowers/specs/2026-10-28-phase-6-9-sec-security-alerts-design.md`. Executors read §3 (change list), §5 (plan shape), §6 (gates), §8 (manual list) and the User decisions. Umbrella: client `docs/superpowers/specs/2026-10-27-vcs-client-phase-6-9-cleanup-umbrella-design.md:269`.
+**Spec:** the approved design `design-SEC.md` (executor scratchpad; committed to the client repo as below), revision 2 plus "User decisions (2026-10-28)". Client Task C6 commits it as `docs/superpowers/specs/2026-10-28-phase-6-9-sec-security-alerts-design.md`. Executors read §3 (change list), §5 (plan shape), §6 (gates), §8 (manual list) and the User decisions. Umbrella: client `docs/superpowers/specs/2026-10-27-vcs-client-phase-6-9-cleanup-umbrella-design.md:269`.
 
 **Planning bases:** client `origin/main` `b80b0e6`, server `origin/main` `df8d9f3`. All `file:line` citations are against these SHAs and were read with `git show origin/main:<path>`. If `origin/main` has moved at T0, fix each edit by its content, not by its line number.
 
@@ -62,7 +62,7 @@
 - **gopls is unreliable here.** Trust only `go build` and `go vet`.
 - **Commits** end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Push and PR are done separately, outside this plan. Never merge: the user merges.
 
-`$S` = `C:/Users/janne/AppData/Local/Temp/claude/D--Projects-vcs-srs-client/61e6be5b-33d5-417e-8854-ccbdd02e4132/scratchpad`. Run every shell block in Git Bash with `export MSYS_NO_PATHCONV=1`.
+`$S` = the executor's scratchpad directory (local evidence files; not committed). Run every shell block in Git Bash with `export MSYS_NO_PATHCONV=1`.
 
 ### Server verification suite (worktree root; protoc 36.2 on PATH)
 
@@ -183,8 +183,8 @@ Not testable here, recorded for the user: a new advisory published after the mer
 
 ### Task S0: Worktree and baseline
 
-- [ ] **Step 1:** `git -C D:/Projects/vcs-srs-server fetch origin && git -C D:/Projects/vcs-srs-server worktree add -b chore/cleanup-sec D:/Projects/vcs-srs-server-wt/sec origin/main`. Run every later command from `D:/Projects/vcs-srs-server-wt/sec`. Record `git log -1 --format=%h`, expected `df8d9f3` or later. (The local `main` checkout is at `850d984`; never branch from it.)
-- [ ] **Step 2:** Run the server verification suite. Save:
+- [x] **Step 1:** `git -C D:/Projects/vcs-srs-server fetch origin && git -C D:/Projects/vcs-srs-server worktree add -b chore/cleanup-sec D:/Projects/vcs-srs-server-wt/sec origin/main`. Run every later command from `D:/Projects/vcs-srs-server-wt/sec`. Record `git log -1 --format=%h`, expected `df8d9f3` or later. (The local `main` checkout is at `850d984`; never branch from it.)
+- [x] **Step 2:** Run the server verification suite. Save:
   - `cp go.mod "$S/sec-srv-go.mod.before"` and `cp go.sum "$S/sec-srv-go.sum.before"`;
   - each govulncheck output to `$S/sec-srv-vuln-{headless,gui}-before.txt`, expected 6 reachable (grpc ×4, quic-go ×2), identical to `$S/secsrv-vuln-before-{headless,gui}.txt`;
   - the `npm audit` output to `$S/sec-srv-npm-audit-before.txt` (esbuild via `typed-scss-modules`);
@@ -207,7 +207,7 @@ Not testable here, recorded for the user: a new advisory published after the mer
   - `CheckPasswordHash(hash, plaintext string) bool` keeps its signature and returns false when `CheckHashCost(hash) != nil`, before any compare.
 - Produces a test helper in `srs/auth_service_test.go`: `func forgeCost(t *testing.T, hash string, cost int) string`. It requires the `$2a$04$` prefix (output of `hashPassword`, `:262-269`) and returns the hash with that prefix replaced by `fmt.Sprintf("$2a$%02d$", cost)`. Forged hashes are accepted by `bcrypt.Cost` (design §4.3 #1).
 
-- [ ] **Step 1: Write the utils tests** in `utils/general_test.go`:
+- [x] **Step 1: Write the utils tests** in `utils/general_test.go`:
   - `TestCheckHashCost`, a table built from `bcrypt.GenerateFromPassword([]byte("pw"), bcrypt.MinCost)` with the cost field rewritten:
     - `cost4` → nil;
     - `cost12` → nil;
@@ -216,7 +216,7 @@ Not testable here, recorded for the user: a new advisory published after the mer
     - `""` and `not-a-hash` → `errors.Is(err, ErrMalformedHash)`.
   - `TestCheckPasswordHashRefusesOverCostQuickly`: a forged cost-14 hash of `"pw"`. `start := time.Now(); ok := CheckPasswordHash(h, "pw")`. Assert `!ok` and `time.Since(start) < 50*time.Millisecond`. Today this takes about 560 ms (design §4.3 #1).
   - `TestCheckPasswordHashStillMatches`: a cost-4 hash of `"pw"` → true, and `"other"` → false.
-- [ ] **Step 2: Write the GuestLogin tests** in `srs/auth_service_test.go`. Each uses `newGuestLoginTestServer` (`:47`), `mustInit` (`:250`), `testPeerContext()` (`:82`), name `"Victim"` and unit `"AB1"`. Before the call, replace `s.logger` with `slog.New(slog.NewTextHandler(&buf, nil))`.
+- [x] **Step 2: Write the GuestLogin tests** in `srs/auth_service_test.go`. Each uses `newGuestLoginTestServer` (`:47`), `mustInit` (`:250`), `testPeerContext()` (`:82`), name `"Victim"` and unit `"AB1"`. Before the call, replace `s.logger` with `slog.New(slog.NewTextHandler(&buf, nil))`.
   - `TestGuestLoginRejectsOverCostHash`:
     - the password is `forgeCost(t, hashPassword(t, guestTestCoalitionPassword), 13)`;
     - assert `err == nil`, `!resp.GetSuccess()`, and that `resp.GetErrorMessage()` equals `Invalid password hash: bcrypt cost 13 exceeds the server maximum of 12`;
@@ -224,13 +224,13 @@ Not testable here, recorded for the user: a new advisory published after the mer
     - assert `buf` contains `level=WARN` and `127.0.0.1`.
   - `TestGuestLoginRejectsMalformedHash`: a table over `""` and `"not-a-hash"`, with a fresh `mustInit` per row. Message: `Invalid password hash: malformed`; `pendingCount(s) == 1`.
   - `TestGuestLoginAcceptsMaxCost` (regression guard, green before and after): `bcrypt.GenerateFromPassword([]byte(guestTestCoalitionPassword), 12)` → `resp.GetSuccess()`.
-- [ ] **Step 3: Run** `go test -count=1 -tags headless ./utils/ ./srs/ -run 'TestCheckHashCost|TestCheckPasswordHash|TestGuestLoginRejects|TestGuestLoginAcceptsMaxCost' -v`. Expected: a compile FAIL on `undefined: CheckHashCost` / `ErrMalformedHash`. Temporarily move `TestCheckHashCost` aside, then run again. Expected:
+- [x] **Step 3: Run** `go test -count=1 -tags headless ./utils/ ./srs/ -run 'TestCheckHashCost|TestCheckPasswordHash|TestGuestLoginRejects|TestGuestLoginAcceptsMaxCost' -v`. Expected: a compile FAIL on `undefined: CheckHashCost` / `ErrMalformedHash`. Temporarily move `TestCheckHashCost` aside, then run again. Expected:
   - `TestCheckPasswordHashRefusesOverCostQuickly` FAILs on time (~560 ms);
   - both `TestGuestLoginRejects…` FAIL with message `No coalition found with that password` (`auth_service.go:496-500`);
   - the guard and `StillMatches` PASS.
 
   Restore the moved test and save the output to `$S/sec-s1-red.txt`.
-- [ ] **Step 4: Implement.**
+- [x] **Step 4: Implement.**
   - `utils/general.go`: the Interfaces above.
   - `srs/auth_service.go`, after the username check (`:476-481`) and before `:483`:
     ```go
@@ -241,9 +241,9 @@ Not testable here, recorded for the user: a new advisory published after the mer
     }
     ```
   - Add a one-line comment above it citing the remote CPU-exhaustion reason (design §3 B1/B2) and the C# peer at cost 12.
-- [ ] **Step 5: Run** the Step 3 command. Expected: all PASS. Then `go test -race -count=1 -tags headless ./srs/ ./utils/`, which must be `ok`.
-- [ ] **Step 6: After-fix-only test.** Add `TestGuestLoginRejectsCost31Quickly`: forged cost 31, return in `< 1*time.Second`, with the cost-31 message. Add a comment: never run against pre-cap code, because it would take about 21 h (design §5.1 #1). Run it. Expected: PASS.
-- [ ] **Step 7: Commit** `fix(auth): cap the client-supplied bcrypt cost at 12 and reject malformed hashes (SEC B1)`.
+- [x] **Step 5: Run** the Step 3 command. Expected: all PASS. Then `go test -race -count=1 -tags headless ./srs/ ./utils/`, which must be `ok`.
+- [x] **Step 6: After-fix-only test.** Add `TestGuestLoginRejectsCost31Quickly`: forged cost 31, return in `< 1*time.Second`, with the cost-31 message. Add a comment: never run against pre-cap code, because it would take about 21 h (design §5.1 #1). Run it. Expected: PASS.
+- [x] **Step 7: Commit** `fix(auth): cap the client-supplied bcrypt cost at 12 and reject malformed hashes (SEC B1)`.
 
 ### Task S2: Compare outside the settings lock (GATE: server behaviour, Q2 = A "(b)")
 
@@ -255,55 +255,55 @@ Not testable here, recorded for the user: a new advisory published after the mer
 - Consumes: S1's `CheckHashCost` gate, which still runs first.
 - Produces: the package-level seam `var comparePassword = utils.CheckPasswordHash` in `srs/auth_service.go`. Only tests reassign it.
 
-- [ ] **Step 1: Behaviour-neutral seam.** Add `comparePassword` and call it in place of `utils.CheckPasswordHash` at `:488`. Run `go test -count=1 -tags headless ./srs/`. Expected: `ok`.
-- [ ] **Step 2: Write `TestGuestLoginComparesOutsideSettingsLock`.**
+- [x] **Step 1: Behaviour-neutral seam.** Add `comparePassword` and call it in place of `utils.CheckPasswordHash` at `:488`. Run `go test -count=1 -tags headless ./srs/`. Expected: `ok`.
+- [x] **Step 2: Write `TestGuestLoginComparesOutsideSettingsLock`.**
   - Swap `comparePassword` for a stub that closes `entered` once and then blocks on `<-release` before returning `utils.CheckPasswordHash(hash, plain)`. Restore it in `t.Cleanup`.
   - Start `GuestLogin` (a valid cost-4 hash) in a goroutine that closes `done` when it returns. Wait for `entered` (2 s guard).
   - In a second goroutine, call `s.settingsState.Lock()` and then close `locked`.
   - `select` on `locked` against `time.After(100*time.Millisecond)`:
     - **on timeout:** `close(release)`, wait for `locked`, `Unlock()`, wait for `done`, then `t.Fatal("settingsState.Lock() blocked behind the password compare; compare must run outside the RLock")`;
     - **on success:** `Unlock()`, `close(release)`, wait for `done`, and assert the response is `Success`.
-- [ ] **Step 3: Run** `go test -race -count=1 -tags headless ./srs/ -run TestGuestLoginComparesOutsideSettingsLock -v`. Expected: FAIL with the message above, after about 100 ms, with no hang.
-- [ ] **Step 4: Implement.** Under the RLock, set `coalitions := append([]state.Coalition(nil), s.settingsState.Coalitions...)`, then `RUnlock`. Loop over `coalitions` with `comparePassword` outside the lock. The `selectedCoalition`/`coalitionFound` semantics are unchanged.
-- [ ] **Step 5: Run** the same test (PASS), then `go test -race -count=1 -tags headless ./srs/ ./control/` (`ok`). `TestAuthInterceptorCodes` and the session E2E tests stay green.
-- [ ] **Step 6: Commit** `fix(auth): compare guest password hashes outside the settings read lock (SEC B2)`.
+- [x] **Step 3: Run** `go test -race -count=1 -tags headless ./srs/ -run TestGuestLoginComparesOutsideSettingsLock -v`. Expected: FAIL with the message above, after about 100 ms, with no hang.
+- [x] **Step 4: Implement.** Under the RLock, set `coalitions := append([]state.Coalition(nil), s.settingsState.Coalitions...)`, then `RUnlock`. Loop over `coalitions` with `comparePassword` outside the lock. The `selectedCoalition`/`coalitionFound` semantics are unchanged.
+- [x] **Step 5: Run** the same test (PASS), then `go test -race -count=1 -tags headless ./srs/ ./control/` (`ok`). `TestAuthInterceptorCodes` and the session E2E tests stay green.
+- [x] **Step 6: Commit** `fix(auth): compare guest password hashes outside the settings read lock (SEC B2)`.
 
 ### Task S3: Go dependency bumps (GATE: dependency, Q1 = A, Q6 = A)
 
 **Files:** `go.mod`, `go.sum`
 
-- [ ] **Step 1: Red evidence.** It is `$S/sec-srv-vuln-{headless,gui}-before.txt` from S0: 6 reachable. No new run.
-- [ ] **Step 2: Bump.**
+- [x] **Step 1: Red evidence.** It is `$S/sec-srv-vuln-{headless,gui}-before.txt` from S0: 6 reachable. No new run.
+- [x] **Step 2: Bump.**
   ```bash
   go get google.golang.org/grpc@v1.85.0 github.com/quic-go/quic-go@v0.64.1 golang.org/x/net@v0.62.0
   ```
   Then re-run the whole generate block (protoc-gen-go is now derived as v1.36.12), then `go mod tidy`, then `go mod tidy -diff` (exit 0).
-- [ ] **Step 3: Check the delta.** `diff "$S/secsrv-go.mod.after" go.mod`: this is the probe result without x/net, so only the x/net-driven lines may differ. `diff "$S/sec-srv-go.mod.before" go.mod` must show exactly:
+- [x] **Step 3: Check the delta.** `diff "$S/secsrv-go.mod.after" go.mod`: this is the probe result without x/net, so only the x/net-driven lines may differ. `diff "$S/sec-srv-go.mod.before" go.mod` must show exactly:
   - grpc `v1.77.0→v1.85.0`, protobuf `v1.36.11→v1.36.12`;
   - quic-go `v0.54.0→v0.64.1`, qpack `v0.5.1→v0.6.0`;
   - genproto rpc `→ v0.0.0-20260817212433-ac3dfec99bb1`;
   - x/net `v0.60.0→v0.62.0`, x/crypto `v0.57.0→v0.58.0`, x/sys `v0.48.0→v0.49.0`, x/text `v0.42.0→v0.43.0`;
   - optionally `golang.org/x/term v0.47.0 // indirect`.
 
-  gin `v1.11.0`, gqlgen `v0.17.89`, x/tools `v0.49.0` and wails `v3.0.0` are unchanged. **Any other line means stop and report.** `git diff --ignore-cr-at-eol --stat -- graph/` must be empty: gqlgen may only touch CRLF.
-- [ ] **Step 4: Verify.**
+  gin `v1.11.0`, gqlgen `v0.17.89`, x/tools `v0.49.0` and wails `v3.0.0` are unchanged. **Any other line means stop and report.** `git diff --ignore-cr-at-eol --stat -- graph/` must be empty: gqlgen may only touch CRLF. *(Executed: x/tools `v0.49.0 → v0.51.0` and x/sync `v0.23.0 → v0.24.0` also moved. `go mod graph` shows both are required by `golang.org/x/text@v0.43.0`, an approved forced move; no new module. Recorded in the commit body and the PR.)*
+- [x] **Step 4: Verify.**
   - `go build -tags headless ./... && go vet -tags headless ./...`;
   - `go test -race -count=1 -tags headless ./...`: 10 packages `ok`, including `TestAuthInterceptorCodes` (`control/server_test.go:271`), `TestAuthErrorMapping` (`:349`) and the session E2E tests (`control/session_e2e_test.go:138,170`);
   - govulncheck headless and GUI (the GUI run needs the S0 `frontend/dist`). Expected for both: `Your code is affected by 0 vulnerabilities.`, with module-level x/crypto GO-2026-5932 only and no x/net line. Save to `$S/sec-srv-vuln-{headless,gui}-after.txt`.
-- [ ] **Step 5: Commit** `chore(deps): grpc v1.85.0, quic-go v0.64.1, x/net v0.62.0 (SEC A1, A2, A6b)`. The body lists the forced moves and the eight Dependabot alerts closed (#38, #93, #118, #120, #121, #15, #23, #67).
+- [x] **Step 5: Commit** `chore(deps): grpc v1.85.0, quic-go v0.64.1, x/net v0.62.0 (SEC A1, A2, A6b)`. The body lists the forced moves and the eight Dependabot alerts closed (#38, #93, #118, #120, #121, #15, #23, #67).
 
 ### Task S4: Remove `typed-scss-modules` (GATE: dependency, Q3 = A)
 
 **Files:** `frontend/package.json:42`, `frontend/package-lock.json` (the `node_modules/typed-scss-modules` subtree from `:5465`, including its nested `@esbuild/*` and `esbuild 0.17.19`)
 
-- [ ] **Step 1: Red evidence.** `(cd frontend && npm ls esbuild)` lists `esbuild@0.17.19` under `typed-scss-modules`; `npm audit` reports GHSA-67mh-4wv8-2f99.
-- [ ] **Step 2:** `git grep -n "typed-scss-modules" -- ':!frontend/package*.json'` must print nothing. If anything still references it, stop and report. Then `(cd frontend && npm uninstall --legacy-peer-deps typed-scss-modules)`.
-- [ ] **Step 3: Verify.**
+- [x] **Step 1: Red evidence.** `(cd frontend && npm ls esbuild)` lists `esbuild@0.17.19` under `typed-scss-modules`; `npm audit` reports GHSA-67mh-4wv8-2f99.
+- [x] **Step 2:** `git grep -n "typed-scss-modules" -- ':!frontend/package*.json'` must print nothing. If anything still references it, stop and report. Then `(cd frontend && npm uninstall --legacy-peer-deps typed-scss-modules)`.
+- [x] **Step 3: Verify.**
   - `npm ls esbuild` shows only `esbuild@0.28.2`;
   - `npm audit` prints `found 0 vulnerabilities` (any other finding: stop and report);
   - `npm ci --ignore-scripts --legacy-peer-deps && npm test`: the S0 file count, all passing;
   - `git diff --stat` touches only the two package files.
-- [ ] **Step 4: Commit** `chore(frontend): drop unused typed-scss-modules, clearing esbuild alert #2 (SEC A5)`.
+- [x] **Step 4: Commit** `chore(frontend): drop unused typed-scss-modules, clearing esbuild alert #2 (SEC A5)`.
 
 ### Task S5: CI: govulncheck, `--ignore-scripts`, SHA pins (GATE: ci-cd, D5, D-c, Q4 = A)
 
@@ -311,7 +311,7 @@ Not testable here, recorded for the user: a new advisory published after the mer
 
 The server has no workflow-shape tests (Go or otherwise), so each check is a grep or parse check.
 
-- [ ] **Step 1: Edit `test.yml`.**
+- [x] **Step 1: Edit `test.yml`.**
   - After the "Vet" step (`:38-39`), insert:
     ```yaml
       # Blocking (Phase 6.9 SEC D5): any reachable advisory fails the job.
@@ -323,7 +323,7 @@ The server has no workflow-shape tests (Go or otherwise), so each check is a gre
     ```
     Indent it to match the sibling steps.
   - `:79` becomes `run: npm ci --ignore-scripts --legacy-peer-deps`.
-- [ ] **Step 2: Edit `release.yml`.** Pin each of the 7 actions as `uses: <action>@<sha> # <tag>`. Re-resolve each one at execution time:
+- [x] **Step 2: Edit `release.yml`.** Pin each of the 7 actions as `uses: <action>@<sha> # <tag>`. Re-resolve each one at execution time:
   ```bash
   sha=$(gh api repos/<owner>/<repo>/commits/<major> --jq .sha)
   gh api "repos/<owner>/<repo>/tags?per_page=100" --jq ".[]|select(.commit.sha==\"$sha\")|.name"
@@ -338,36 +338,36 @@ The server has no workflow-shape tests (Go or otherwise), so each check is a gre
   - `softprops/action-gh-release` `efb35369e0ad2afab669f228072c1b0d510eae64` v3.0.3.
 
   If a major tag's SHA now differs, use the new SHA and its tag and record that in the commit body. `actions/*` lines stay as they are: Sonar flags only these 7, and that matches the client's practice.
-- [ ] **Step 3: Check.**
+- [x] **Step 3: Check.**
   - `grep -c 'govulncheck@v1.9.0 -tags headless ./...' .github/workflows/test.yml` → `1`;
   - `grep -n 'npm ci' .github/workflows/test.yml` shows only the `--ignore-scripts --legacy-peer-deps` line;
   - `grep -nE 'uses: (docker|mikepenz|softprops)/' .github/workflows/release.yml | grep -vE '@[0-9a-f]{40} # v[0-9]+\.[0-9]+\.[0-9]+$'` prints nothing;
   - `grep -cE '@[0-9a-f]{40} # v' .github/workflows/release.yml` → `7`;
   - `python -c "import yaml;[yaml.safe_load(open(f)) for f in ('.github/workflows/test.yml','.github/workflows/release.yml')]"` exits 0 (if PyYAML is missing, use `npx --yes yaml-lint` or skip with a note);
   - step order: `grep -n 'name: Vet\|name: govulncheck\|name: Test CI scripts' .github/workflows/test.yml` lists them in that order.
-- [ ] **Step 4: Run the step locally**, exactly as CI does: `go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -tags headless ./...; echo "exit=$?"`. Expected: `exit=0`. Re-run it against the S0 red output for evidence: S0 showed exit 1 with 6 findings.
-- [ ] **Step 5: Commit** `ci: blocking govulncheck, npm ci --ignore-scripts, SHA-pinned release actions (SEC D5, D-c, S7637)`.
+- [x] **Step 4: Run the step locally**, exactly as CI does: `go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -tags headless ./...; echo "exit=$?"`. Expected: `exit=0`. Re-run it against the S0 red output for evidence: S0 showed exit 1 with 6 findings.
+- [x] **Step 5: Commit** `ci: blocking govulncheck, npm ci --ignore-scripts, SHA-pinned release actions (SEC D5, D-c, S7637)`.
 
 ### Task S6: Sonar housekeeping (D-e, D-f)
 
 **Files:** delete `build/linux/appimage/build.sh`; modify `dev/config/control.yaml:12` (insert above `coalitions:`)
 
-- [ ] **Step 1: Check that nothing calls the script.** `git grep -n 'appimage/build.sh' -- ':!docs'` must print nothing. The Taskfile uses `wails3 generate appimage` (`build/linux/Taskfile.yml:46`). Then `git rm build/linux/appimage/build.sh`.
-- [ ] **Step 2:** Insert above `coalitions:` (`:12`): `# Dev-only docker-compose fixture (docker-compose.dev.yml mounts it read-only): throwaway passwords, never used in a deployment.` Then `python -c "import yaml;d=yaml.safe_load(open('dev/config/control.yaml'));assert [c['password'] for c in d['coalitions']]==['blue123','red123']"` exits 0.
-- [ ] **Step 3: Commit** `chore: drop the unused Wails-alpha AppImage script; mark the dev passwords as fixtures (SEC S6506, S2068)`.
+- [x] **Step 1: Check that nothing calls the script.** `git grep -n 'appimage/build.sh' -- ':!docs'` must print nothing. The Taskfile uses `wails3 generate appimage` (`build/linux/Taskfile.yml:46`). Then `git rm build/linux/appimage/build.sh`.
+- [x] **Step 2:** Insert above `coalitions:` (`:12`): `# Dev-only docker-compose fixture (docker-compose.dev.yml mounts it read-only): throwaway passwords, never used in a deployment.` Then `python -c "import yaml;d=yaml.safe_load(open('dev/config/control.yaml'));assert [c['password'] for c in d['coalitions']]==['blue123','red123']"` exits 0.
+- [x] **Step 3: Commit** `chore: drop the unused Wails-alpha AppImage script; mark the dev passwords as fixtures (SEC S6506, S2068)`.
 
 ### Task S7: Full-suite verification and plan copy
 
 **Files:** Create `docs/superpowers/plans/2026-10-28-phase-6-9-sec-security-alerts.md` (this plan, with its checkboxes as executed). It points to the client spec path `docs/superpowers/specs/2026-10-28-phase-6-9-sec-security-alerts-design.md`.
 
-- [ ] **Step 1:** Run the server verification suite (full) on a clean `frontend/node_modules`. Expected:
+- [x] **Step 1:** Run the server verification suite (full) on a clean `frontend/node_modules`. Expected:
   - every pass criterion "from S3/S4 on";
   - govulncheck 0 for both tag sets (outputs pasted in the PR);
   - `npm audit` 0;
   - 10 Go packages `ok`;
   - the three script tests PASS.
-- [ ] **Step 2:** Build the bumped headless binary for the client lane: `go build -tags headless -o "$S/vcs-server-sec.exe" .`.
-- [ ] **Step 3:** `git status --short` is clean apart from the plan copy. `git log --oneline origin/main..HEAD` shows S1–S6. Then commit `docs(phase-6.9): SEC plan (server)`.
+- [x] **Step 2:** Build the bumped headless binary for the client lane: `go build -tags headless -o "$S/vcs-server-sec.exe" .`.
+- [x] **Step 3:** `git status --short` is clean apart from the plan copy. `git log --oneline origin/main..HEAD` shows S1–S6. Then commit `docs(phase-6.9): SEC plan (server)`.
 
 ---
 
