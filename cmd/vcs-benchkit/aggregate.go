@@ -145,12 +145,28 @@ func readLegInfo(root, dir string, kneeFile bool) (legInfo, error) {
 		}
 	}
 	if rows, err := readColumns(filepath.Join(d, "calibration.csv")); err == nil {
+		stop := ""
 		for _, r := range rows {
+			// calibration.csv has one stopped row and one receive_capacity row;
+			// if a file ever held several, the last of each wins.
+			if r["kind"] == "stopped" {
+				stop = "stopped at " + r["n"]
+				if r["violations"] != "" {
+					stop += ": " + r["violations"]
+				}
+			}
 			if r["kind"] == "receive_capacity" && r["egress_pps"] != "" {
 				li.calib = r["egress_pps"]
 				if r["lower_bound"] == "true" {
 					li.calib += " (lower bound)"
 				}
+			}
+		}
+		if stop != "" {
+			if li.calib == "-" {
+				li.calib = stop
+			} else {
+				li.calib += " (" + stop + ")"
 			}
 		}
 	}

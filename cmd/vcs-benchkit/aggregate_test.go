@@ -255,3 +255,20 @@ func TestAggregatePrintsTableToStdout(t *testing.T) {
 		t.Fatalf("stdout:\n%s", buf.String())
 	}
 }
+
+func TestReadLegInfoShowsCalibrationStopReason(t *testing.T) {
+	in := t.TempDir()
+	writeLeg(t, in, "1-x", "S", "one-big-net", "knee 10", "knee", "10", "t")
+	cal := "kind,n,egress_pps,valid,violations,lower_bound\nstep,2048,102350,true,,\n" +
+		"stopped,4096,,,bot 3702: no HELLO_ACK after 5 tries,\nreceive_capacity,,102350,,,true\n"
+	if err := os.WriteFile(filepath.Join(in, "1-x", "calibration.csv"), []byte(cal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	li, err := readLegInfo(in, "1-x", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(li.calib, "102350") || !strings.Contains(li.calib, "stopped at 4096: bot 3702: no HELLO_ACK after 5 tries") {
+		t.Fatalf("calib cell = %q", li.calib)
+	}
+}
