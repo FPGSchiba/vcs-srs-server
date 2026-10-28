@@ -1,0 +1,2 @@
+{"type":"progress","phase":"ramp","requested":2076,"had":1038,"done":512,"joined":510,"join_failures":2,"in_flight":16,"hello_retried":9,"elapsed_s":5.0}
+{"type":"progress","phase":"calibrate_ramp","target":4096,"bots":3000,"hello_retried":12,"elapsed_s":5.0}
