@@ -1,0 +1,207 @@
+# Bench v0 (W6 S2): build, gate-0 runner probe, B-0 micro-benchmarks.
+#
+# - MANUAL ONLY. Never on schedule, push or pull_request.
+# - Do NOT queue more than one run: GitHub keeps one running and one pending
+#   run per concurrency group and cancels older pending ones, so a third
+#   dispatch silently drops the second (design 6.2).
+# - Every artefact is relative only (ratios, knees, curves) and carries the
+#   runner topology label from that run's own probe. No absolute capacity
+#   number is a claim about any other machine.
+# - server_ref must contain the B-0 bench files and cmd/vcs-benchkit (S2 or
+#   later); an older ref fails the micro job's Predict knees step.
+# - This is v0 of three (S2/S4/S5); later inputs and jobs arrive with them.
+# - Inputs never reach run: text directly; they go through env:.
+name: Bench
+on:
+  workflow_dispatch:
+    inputs:
+      server_ref:
+        description: Server ref to build and bench (empty means the dispatched SHA)
+        type: string
+        default: ''
+      probe_only:
+        description: Skip the micro job (build and probe still run)
+        type: boolean
+        default: false
+
+permissions: {}
+
+# Without an explicit shell, run steps use `bash -e` with no pipefail, so a
+# failing benchmark piped through tee would still pass the step.
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: bench
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.server_ref || github.sha }}
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Assert Go toolchain
+        run: bash .github/scripts/assert-go-toolchain.sh
+
+      - name: Generate code
+        uses: ./.github/actions/generate
+
+      - name: Build server
+        run: CGO_ENABLED=0 go build -tags headless -trimpath -o vcs-server .
+
+      - name: Record build
+        run: |
+          jq -n --arg sha "$(git rev-parse HEAD)" --arg go "$(go env GOVERSION)" \
+            '{server_sha: $sha, go_version: $go}' > build.json
+          cat build.json
+
+      - name: Upload build
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: build
+          path: |
+            vcs-server
+            build.json
+          if-no-files-found: error
+
+  probe:
+    name: Runner probe (gate 0)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      server_set: ${{ steps.sets.outputs.server_set }}
+      generator_set: ${{ steps.sets.outputs.generator_set }}
+      topology_label: ${{ steps.sets.outputs.topology_label }}
+    steps:
+      # Scripts come from the workflow's own commit, not server_ref.
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Probe self-test
+        run: bash .github/scripts/bench-probe_test.sh
+
+      - name: Probe runner
+        run: bash .github/scripts/bench-probe.sh > env-probe.json
+
+      - name: Export CPU sets
+        id: sets
+        run: |
+          echo "server_set=$(jq -r .server_set env-probe.json)" >> "$GITHUB_OUTPUT"
+          echo "generator_set=$(jq -r .generator_set env-probe.json)" >> "$GITHUB_OUTPUT"
+          echo "topology_label=$(jq -r .topology_label env-probe.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Runner probe"
+            echo
+            echo "- topology: $(jq -r .topology_label env-probe.json)"
+            echo "- smt: $(jq -r .smt env-probe.json)"
+            echo "- cpu: $(jq -r .cpu_model env-probe.json)"
+            echo "- steal seconds sampled: $(jq -r .steal_seconds env-probe.json)"
+            echo
+            echo "CPU split is the provisional Q6-A rule until the user decides Q6."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload probe
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: env-probe
+          path: env-probe.json
+          if-no-files-found: error
+
+  micro:
+    name: B-0 micro-benchmarks
+    needs: [build, probe]
+    if: ${{ !inputs.probe_only }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.server_ref || github.sha }}
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Assert Go toolchain
+        run: bash .github/scripts/assert-go-toolchain.sh
+
+      - name: Generate code
+        uses: ./.github/actions/generate
+
+      # The probe job ran on a different VM. Pin from this VM's own sibling
+      # map, with the probe script from the workflow's commit, and record it.
+      - name: Checkout probe script
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: .bench-wf
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Probe this runner
+        id: sets
+        env:
+          PROBE_JOB_TOPOLOGY: ${{ needs.probe.outputs.topology_label }}
+        run: |
+          PROBE_STEAL_SECONDS=0 bash .bench-wf/.github/scripts/bench-probe.sh > env-probe-micro.json
+          echo "server_set=$(jq -r .server_set env-probe-micro.json)" >> "$GITHUB_OUTPUT"
+          topology="$(jq -r .topology_label env-probe-micro.json)"
+          echo "micro runner: $topology, server set $(jq -r .server_set env-probe-micro.json)" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$topology" != "$PROBE_JOB_TOPOLOGY" ]; then
+            echo "::warning::micro runner topology '$topology' differs from the probe job's '$PROBE_JOB_TOPOLOGY'; label micro results from env-probe-micro.json"
+          fi
+
+      - name: Compile voice benchmarks
+        run: go test -c -tags headless -o voice.test ./voice/
+
+      - name: Run benchmarks
+        env:
+          SERVER_SET: ${{ steps.sets.outputs.server_set }}
+        run: |
+          taskset -c "$SERVER_SET" env GOMAXPROCS=2 ./voice.test -test.run '^$' -test.bench '^Benchmark(SocketSend|GetListeningClients|HandleVoicePacket)$' -test.benchmem -test.count=10 | tee micro.txt
+
+      - name: Benchstat
+        run: go run golang.org/x/perf/cmd/benchstat@v0.0.0-20261009192801-be2c69fb417e micro.txt | tee micro-benchstat.txt
+
+      - name: Predict knees
+        run: go run ./cmd/vcs-benchkit predict --micro micro.txt --logger bus --csv micro.csv > predict.json
+
+      - name: Upload micro results
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: micro
+          path: |
+            micro.txt
+            micro-benchstat.txt
+            micro.csv
+            predict.json
+            env-probe-micro.json
+          if-no-files-found: error
