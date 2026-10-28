@@ -45,6 +45,7 @@ type fakeWorld struct {
 	rampGenCPU float64 // generator CPU of a ramp window whose SetN had join failures (0 = the usual 0.2)
 	failedGUID string  // GUID carried by the v2 failed entries
 	logs       string  // server log text returned by LogText
+	logErr     error   // LogText fails with this error when set
 	updates    uint64
 	// stepHook and winHook let a test shape one report or one sampler window
 	// independently of the other (n is the bot count of the system).
@@ -124,7 +125,12 @@ func (s *fakeSystem) Hold(ctx context.Context, d time.Duration, label string) (S
 	return st, nil
 }
 
-func (s *fakeSystem) LogText() (string, error) { return s.w.logs, nil }
+func (s *fakeSystem) LogText() (string, error) {
+	if s.w.logErr != nil {
+		return "", s.w.logErr
+	}
+	return s.w.logs, nil
+}
 func (s *fakeSystem) BeginSample() func() Window {
 	n := s.n
 	return func() Window {
@@ -726,5 +732,58 @@ func TestDriverPreflightJoinFailureIsFatal(t *testing.T) {
 	_, err := NewDriver(w, testConfig()).Run(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "pre-flight: join failures") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// After a join failure the system is dead and the next step boots fresh at 2
+// bots, so the next step's cost is a rebuild plus a ramp from 2, not a ramp
+// from the stale pre-failure count.
+func TestOverBudgetPricesPendingRebuild(t *testing.T) {
+	t0 := time.Unix(1_700_000_000, 0)
+	cfg := testConfig()
+	cfg.Clock = fixedClock{t0}
+	d := NewDriver(&fakeWorld{}, cfg)
+	d.start = t0
+	d.joined = 1000 // stale: the system that held them failed a join
+	// Step 1100 from the stale count is a 100-bot ramp (~4 s); the real cost
+	// is a rebuild plus ~1098 bots at 27/s (~41 s + 30 s). Some budget fits
+	// the first and not the second.
+	found := false
+	for b := time.Second; b < 2000*time.Second; b += time.Second {
+		d.cfg.Budget = b
+		d.rebuild = false
+		stale := d.overBudget(1100, 0)
+		d.rebuild = true
+		pending := d.overBudget(1100, 0)
+		if !stale && pending {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("overBudget ignored the pending rebuild: priced the ramp from the stale count")
+	}
+}
+
+// A failed log read must not make the whole server log the ramp's delta.
+func TestEnsureUnreadableLogIsNotARampDelta(t *testing.T) {
+	w := &fakeWorld{kneeN: 1 << 30, joinFailN: 150, joinsV2: true,
+		failedGUID: "0b6f3c1e-8f0a-4c1d-9a51-1f2d3c4b5a69",
+		logs:       strings.Repeat("Accepted voice HELLO 0b6f3c1e-8f0a-4c1d-9a51-1f2d3c4b5a69\n", 50)}
+	d := NewDriver(w, testConfig())
+	ctx := context.Background()
+	if err := d.boot(ctx); err != nil {
+		t.Fatal(err)
+	}
+	w.logErr = errors.New("read server log: file closed")
+	r, err := d.ensure(ctx, 150)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Logs != (LogCounts{}) || r.FailedAcked != -1 {
+		t.Fatalf("logs = %+v acked = %d, want zero and unknown", r.Logs, r.FailedAcked)
+	}
+	if !strings.Contains(strings.Join(d.out.Notes, ";"), "ramp log unreadable") {
+		t.Fatalf("notes = %v, want a note that the ramp log was unreadable", d.out.Notes)
 	}
 }

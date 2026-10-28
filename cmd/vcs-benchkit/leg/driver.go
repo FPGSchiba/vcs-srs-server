@@ -240,18 +240,27 @@ func (d *Driver) ensure(ctx context.Context, n int) (ramp, error) {
 	}
 	t0 := d.cfg.Clock.Now()
 	add := n - d.joined
-	before, _ := d.sys.LogText()
+	before, errBefore := d.sys.LogText()
 	end := d.sys.BeginSample()
 	j, err := d.sys.SetN(ctx, n)
 	win := end()
 	if err != nil {
 		return r, fmt.Errorf("set_n %d: %w", n, err)
 	}
-	after, _ := d.sys.LogText()
-	r = ramp{Joins: j, Window: win, Ran: true, FailedAcked: -1,
-		Logs: CountLog(after).Sub(CountLog(before))}
+	after, errAfter := d.sys.LogText()
+	r = ramp{Joins: j, Window: win, Ran: true, FailedAcked: -1}
+	// A failed read must not turn the server's whole log into the ramp's
+	// delta: the counts stay zero (unknown) and the note says why.
+	logsOK := errBefore == nil && errAfter == nil
+	if logsOK {
+		r.Logs = CountLog(after).Sub(CountLog(before))
+	} else {
+		d.note("ramp log unreadable at %d bots (%v): ramp log counts left empty", n, errors.Join(errBefore, errAfter))
+	}
 	if j.JoinFailures > 0 {
-		r.FailedAcked = FailedAcked(before, after, j.Failed)
+		if logsOK {
+			r.FailedAcked = FailedAcked(before, after, j.Failed)
+		}
 		d.rebuild, d.rebuildAt = true, n
 		return r, nil
 	}
@@ -389,7 +398,11 @@ func (d *Driver) overBudget(n, lo int) bool {
 	rate := d.rate
 	secs := func(bots int) time.Duration { return time.Duration(float64(bots) / rate * float64(time.Second)) }
 	cost := sweep.SettleTypical + sweep.HoldDuration
-	if n < d.joined {
+	if d.rebuild {
+		// A join failure killed the system: the step boots fresh at 2 bots
+		// and ramps from there, whatever d.joined last was.
+		cost += secs(max(0, n-2)) + 30*time.Second
+	} else if n < d.joined {
 		cost += secs(n) + 30*time.Second
 	} else {
 		cost += secs(n - d.joined)
