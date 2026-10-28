@@ -1,5 +1,5 @@
 // Command vcs-benchkit holds the Wave 6 bench tooling: predict (the B-0
-// model) and leg (one arm of one scenario on one VM).
+// model), leg (one arm of one scenario on one VM) and aggregate (merge legs).
 package main
 
 import (
@@ -12,13 +12,15 @@ const label = "Shared GitHub runner (4 vCPU), loopback, relative only. Not a cap
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: vcs-benchkit <subcommand> [flags]\nsubcommands: predict, leg")
+		fmt.Fprintln(os.Stderr, "usage: vcs-benchkit <subcommand> [flags]\nsubcommands: predict, leg, aggregate")
 		os.Exit(2)
 	}
 	var err error
 	switch os.Args[1] {
 	case "predict":
 		err = runPredict(os.Args[2:], os.Stdout)
+	case "aggregate":
+		err = runAggregate(os.Args[2:], os.Stderr)
 	case "leg":
 		err = runLeg(os.Args[2:], os.Stdout, os.Stderr)
 	default:
