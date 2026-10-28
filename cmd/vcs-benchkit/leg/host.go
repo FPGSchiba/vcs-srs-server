@@ -29,6 +29,8 @@ type hostEnv struct {
 	serverCPUs       []int // the whole server set, for softirq
 	genSet           string
 	genNCPU          int
+	// onProgress receives the load bot's progress lines; nil drops them.
+	onProgress func(Progress)
 
 	mu         sync.Mutex
 	k          int
@@ -114,7 +116,7 @@ func (e *hostEnv) Start(ctx context.Context) (System, error) {
 	}
 	s := &hostSystem{
 		env: e, top: top, cmd: cmd, stdin: stdin, logf: logf,
-		bot:  NewBot(stdin, stdout, nil),
+		bot:  NewBot(stdin, stdout, e.onProgress),
 		done: make(chan struct{}),
 		sampler: &procSampler{
 			serverPID: top.PIDs()[topology.Standalone], genPID: cmd.Process.Pid,

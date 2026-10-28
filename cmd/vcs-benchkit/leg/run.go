@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/FPGSchiba/vcs-srs-server/cmd/vcs-benchkit/sweep"
@@ -267,6 +268,8 @@ func writeManifest(dir string, m *Manifest) error {
 
 // Run executes one leg: manifest, calibration, pre-flight, the S arm, files.
 func Run(ctx context.Context, o Options, logw io.Writer) error {
+	// Progress arrives from the bot's reader goroutine as well as this one.
+	logw = &syncWriter{w: logw}
 	// Resolve inputs: explicit flags win over the probe and prediction files.
 	var probeRaw []byte
 	if o.ProbeFile != "" {
@@ -329,7 +332,29 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 		_ = writeManifest(o.OutDir, m)
 		return err
 	}
-	logf := func(f string, a ...any) { fmt.Fprintf(logw, f+"\n", a...) }
+	tag := LegTag(o.Seed, o.Arms, o.Scenario)
+	logf := func(f string, a ...any) { fmt.Fprintf(logw, "%s "+f+"\n", append([]any{tag}, a...)...) }
+	say := func(line string) { fmt.Fprintln(logw, line) }
+
+	// Whatever happens next, the leg ends with its results table: in the log
+	// for the person watching the run and in results.md for the step summary.
+	var cal *Calibration
+	var out *Outcome
+	defer func() {
+		in := ResultsInput{
+			Seed: o.Seed, Arm: o.Arms, Scenario: o.Scenario, Result: m.Result, Error: m.Error,
+			Cal: cal, Out: out, Predicted: o.PredictedKnee, NMax: m.NMax,
+		}
+		var buf bytes.Buffer
+		if err := WriteResultsMarkdown(&buf, in); err != nil {
+			logf("results.md: %v", err)
+			return
+		}
+		if err := os.WriteFile(filepath.Join(o.OutDir, "results.md"), buf.Bytes(), 0o644); err != nil {
+			logf("results.md: %v", err)
+		}
+		fmt.Fprintf(logw, "\n%s\n", buf.String())
+	}()
 
 	// 1. Manifest inputs: sysctls (raise rmem_max/wmem_max only), port range, ulimit.
 	if o.Sysctl && runtime.GOOS == "linux" {
@@ -350,9 +375,23 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	// 2. Calibration: the generator's receive side on its own.
 	legStart := time.Now()
 	logf("calibration: reflector on %s, generator on %s", o.ServerSet, o.GenSet)
-	cal, err := RunCalibration(ctx, CalConfig{
+	cal, err = RunCalibration(ctx, CalConfig{
 		LoadbotBin: o.LoadbotBin, ServerSet: o.ServerSet, GenSet: o.GenSet, Seed: o.Seed,
 		Steps: o.CalSteps, Hold: o.CalHold, Senders: len(serverCPUs), StderrDir: o.OutDir,
+		OnLine: func(kind string, raw []byte) {
+			switch kind {
+			case "calibration":
+				var s CalStep
+				if json.Unmarshal(raw, &s) == nil {
+					say(FormatCalLine(tag, s))
+				}
+			case "progress":
+				var p Progress
+				if json.Unmarshal(raw, &p) == nil {
+					say(FormatRampProgress(tag, p))
+				}
+			}
+		},
 	})
 	if err != nil {
 		return fail(fmt.Errorf("calibration: %w", err))
@@ -361,7 +400,7 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	if cal.StoppedAt > 0 {
 		note := fmt.Sprintf("calibration stopped at N=%d: %s", cal.StoppedAt, cal.StopReason)
 		calNotes = append(calNotes, note)
-		logf("%s; receive capacity %.0f pps (lower bound %v) from %d completed steps", note, cal.ReceivePPS, cal.LowerBound, len(cal.Steps))
+		say(FormatCalStopped(tag, cal))
 	}
 	if err := writeFile(o.OutDir, "calibration.csv", func(w io.Writer) error { return WriteCalibrationCSV(w, cal, o.Topology) }); err != nil {
 		return fail(err)
@@ -391,13 +430,17 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	env := &hostEnv{
 		serverBin: o.ServerBin, loadbotBin: o.LoadbotBin, outDir: o.OutDir, scratchDir: scratch, scenario: o.Scenario, seed: o.Seed,
 		serverPin: serverPin, serverGOMAXPROCS: 1, serverCPUs: serverCPUs, genSet: o.GenSet, genNCPU: len(genCPUs),
+		onProgress: func(p Progress) { say(FormatRampProgress(tag, p)) },
 	}
 	d := NewDriver(env, Config{
 		Predicted: o.PredictedKnee, NMax: nMax, JoinRate: o.JoinRate, Budget: remaining,
 		Warmup: o.Warmup, Hold: o.Hold, Confirm: o.Confirm, Overload: o.Overload, ProbeHold: time.Second,
 		Bounds: sweep.DefaultBounds,
+		OnRow:  func(r Row) { say(FormatRowLine(tag, r)) },
+		Logf:   logf,
 	})
-	out, runErr := d.Run(ctx)
+	var runErr error
+	out, runErr = d.Run(ctx)
 	m.Starts, m.Notes, m.ServerErrors = out.Starts, append(calNotes, out.Notes...), env.errorsSeen()
 	if runErr == nil {
 		m.Result = out.Result.String()
@@ -420,4 +463,17 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	}
 	logf("result: %s (calibration receive capacity %.0f pps, lower bound %v)", out.Result, cal.ReceivePPS, cal.LowerBound)
 	return writeManifest(o.OutDir, m)
+}
+
+// syncWriter serialises writes so progress lines from the bot's reader
+// goroutine never interleave with the leg's own.
+type syncWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *syncWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
 }

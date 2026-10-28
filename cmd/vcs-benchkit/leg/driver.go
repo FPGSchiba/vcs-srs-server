@@ -86,6 +86,12 @@ type Config struct {
 
 	Bounds sweep.Bounds
 	Clock  Clock
+
+	// OnRow is called with each row right after it is appended to the outcome;
+	// Logf receives the driver's own progress lines (a ramp starting and
+	// ending). Both are optional and only for the operator's log.
+	OnRow func(Row)
+	Logf  func(format string, a ...any)
 }
 
 // Row is one measured step.
@@ -159,6 +165,20 @@ func NewDriver(env Env, cfg Config) *Driver {
 		cfg.Bounds = sweep.DefaultBounds
 	}
 	return &Driver{env: env, cfg: cfg, rate: cfg.JoinRate}
+}
+
+func (d *Driver) logf(f string, a ...any) {
+	if d.cfg.Logf != nil {
+		d.cfg.Logf(f, a...)
+	}
+}
+
+// record appends a finished row and reports it.
+func (d *Driver) record(r Row) {
+	d.out.Rows = append(d.out.Rows, r)
+	if d.cfg.OnRow != nil {
+		d.cfg.OnRow(r)
+	}
 }
 
 func (d *Driver) note(f string, a ...any) { d.out.Notes = append(d.out.Notes, fmt.Sprintf(f, a...)) }
@@ -250,10 +270,15 @@ func (d *Driver) ensure(ctx context.Context, n int) (ramp, error) {
 	add := n - d.joined
 	before, errBefore := d.sys.LogText()
 	end := d.sys.BeginSample()
+	d.logf("ramp N=%d->%d started", d.joined, n)
 	j, err := d.sys.SetN(ctx, n)
 	win := end()
 	if err != nil {
 		return r, fmt.Errorf("set_n %d: %w", n, err)
+	}
+	if j.Source != JoinsSourcePending {
+		d.logf("ramp N=%d->%d done in %.0fs: joined=%d join_failures=%d", d.joined, n,
+			d.cfg.Clock.Now().Sub(t0).Seconds(), max(0, n-d.joined-j.JoinFailures), j.JoinFailures)
 	}
 	after, errAfter := d.sys.LogText()
 	r = ramp{Joins: j, Window: win, Ran: true, FailedAcked: -1}
@@ -463,7 +488,7 @@ func (d *Driver) Run(ctx context.Context) (*Outcome, error) {
 		if err != nil {
 			return &d.out, err
 		}
-		d.out.Rows = append(d.out.Rows, row)
+		d.record(row)
 		if row.Outcome == sweep.Pass && n > lo {
 			lo = n
 		}
@@ -488,7 +513,7 @@ func (d *Driver) Run(ctx context.Context) (*Outcome, error) {
 	if err != nil {
 		return &d.out, err
 	}
-	d.out.Rows = append(d.out.Rows, row)
+	d.record(row)
 	if row.Outcome != sweep.Pass {
 		d.out.Unconfirmed = true
 		d.note("the confirm step at %d bots was %s, so the knee is unconfirmed: %s", k, row.Outcome, strings.Join(row.Reasons, "; "))
@@ -501,6 +526,6 @@ func (d *Driver) Run(ctx context.Context) (*Outcome, error) {
 	if err != nil {
 		return &d.out, err
 	}
-	d.out.Rows = append(d.out.Rows, row)
+	d.record(row)
 	return &d.out, nil
 }

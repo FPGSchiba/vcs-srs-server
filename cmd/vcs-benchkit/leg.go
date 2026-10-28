@@ -65,7 +65,7 @@ func runLeg(args []string, stdout, stderr io.Writer) error {
 		ctx, cancel = context.WithTimeout(ctx, o.Budget+15*time.Minute)
 		defer cancel()
 	}
-	if err := leg.Run(ctx, o, stderr); err != nil {
+	if err := leg.Run(ctx, o, stdout); err != nil {
 		return err
 	}
 	fmt.Fprintf(stdout, "leg written to %s\n", o.OutDir)
