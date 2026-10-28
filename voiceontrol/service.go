@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -12,7 +14,9 @@ import (
 	"github.com/FPGSchiba/vcs-srs-server/state"
 	pb "github.com/FPGSchiba/vcs-srs-server/voicecontrolpb"
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/status"
 )
 
 type registeredNode struct {
@@ -64,6 +68,30 @@ type VoiceControlServer struct {
 	globalNodeAddr string
 	pendingMoves   map[string]pendingMove // coalition name → queued move (sticky rebalance)
 	clientNodes    map[uuid.UUID]string   // clientID → nodeServerID (from ReportClientConnected)
+	// recentlyGone remembers the coalitions of non-global nodes deregistered
+	// within nodeGrace, keyed by server ID, so a node that comes back after a
+	// blip gets them back (Q5). Expired lazily on registration.
+	recentlyGone map[string]goneNode
+	// now is the clock for recentlyGone; time.Now outside tests.
+	now func() time.Time
+}
+
+// The voice-node feed (D7): the events EstablishStream forwards or acts on,
+// and its buffer. A feed that overflows is ended with errNodeFeedFellBehind,
+// the same code SV2 uses for a lagging client update stream.
+const nodeFeedSize = 256
+
+var nodeFeedEvents = []string{events.ClientsChanged, events.RadioClientsChanged, events.ServerAction, events.CoalitionsChanged}
+
+var errNodeFeedFellBehind = status.Error(codes.ResourceExhausted, "voice node feed fell behind: reconnect to resync")
+
+// nodeGrace is how long a deregistered node's coalitions are held for it.
+// It matches the client session grace (SV1).
+const nodeGrace = 120 * time.Second
+
+type goneNode struct {
+	coalitions []string
+	at         time.Time
 }
 
 func NewVoiceControlServer(serverState *state.ServerState, settingsState *state.SettingsState, eventBus *events.EventBus, logger *slog.Logger) *VoiceControlServer {
@@ -75,6 +103,8 @@ func NewVoiceControlServer(serverState *state.ServerState, settingsState *state.
 		nodes:         make(map[string]*registeredNode),
 		pendingMoves:  make(map[string]pendingMove),
 		clientNodes:   make(map[uuid.UUID]string),
+		recentlyGone:  make(map[string]goneNode),
+		now:           time.Now,
 	}
 }
 
@@ -158,7 +188,8 @@ func (s *VoiceControlServer) GetDistributionStatus() DistributionView {
 func (s *VoiceControlServer) RegisterVoiceServer(ctx context.Context, req *pb.RegisterVoiceServerRequest) (*pb.RegisterVoiceServerResponse, error) {
 	s.mu.Lock()
 
-	udpAddr := fmt.Sprintf("%s:%d", req.ServerAddress, req.UdpPort)
+	// JoinHostPort brackets an IPv6 host: [2001:db8::1]:5002.
+	udpAddr := net.JoinHostPort(req.ServerAddress, strconv.Itoa(int(req.UdpPort)))
 	node := &registeredNode{
 		serverID: req.ServerId,
 		address:  udpAddr,
@@ -168,9 +199,19 @@ func (s *VoiceControlServer) RegisterVoiceServer(ctx context.Context, req *pb.Re
 
 	if req.IsGlobal {
 		s.globalNodeAddr = udpAddr
+	} else if prev, ok := s.nodes[req.ServerId]; ok && !prev.isGlobal {
+		// Same node re-registering (a reconnect) while its record is still
+		// here: it keeps its coalitions (R-3). Its old record is replaced,
+		// not counted as another node's, so nothing moves under its clients.
+		node.coalitions = append([]string(nil), prev.coalitions...)
+	} else if back := s.reclaimGoneCoalitions(req.ServerId); len(back) > 0 {
+		// Same node returning within nodeGrace of its deregistration: it gets
+		// back whichever of its coalitions nobody else took meanwhile (Q5).
+		node.coalitions = back
 	} else {
 		node.coalitions = s.assignCoalitions(req.PreferredCoalitions)
 	}
+	delete(s.recentlyGone, req.ServerId)
 	s.nodes[req.ServerId] = node
 
 	if !req.IsGlobal {
@@ -178,7 +219,7 @@ func (s *VoiceControlServer) RegisterVoiceServer(ctx context.Context, req *pb.Re
 		s.rebalance(true)
 	}
 
-	assignedCoalitions := node.coalitions
+	assignedCoalitions := append([]string(nil), node.coalitions...)
 	globalAddr := s.globalNodeAddr
 	s.mu.Unlock()
 
@@ -196,6 +237,37 @@ func (s *VoiceControlServer) RegisterVoiceServer(ctx context.Context, req *pb.Re
 		AssignedCoalitions: assignedCoalitions,
 		GlobalVoiceAddress: globalAddr,
 	}, nil
+}
+
+// reclaimGoneCoalitions expires tombstones older than nodeGrace and returns
+// the coalitions serverID's tombstone holds that no live non-global node owns
+// now. Must be called with s.mu write-locked.
+func (s *VoiceControlServer) reclaimGoneCoalitions(serverID string) []string {
+	now := s.now()
+	for id, g := range s.recentlyGone {
+		if now.Sub(g.at) > nodeGrace {
+			delete(s.recentlyGone, id)
+		}
+	}
+	gone, ok := s.recentlyGone[serverID]
+	if !ok {
+		return nil
+	}
+	owned := make(map[string]bool)
+	for _, n := range s.nodes {
+		if !n.isGlobal {
+			for _, c := range n.coalitions {
+				owned[c] = true
+			}
+		}
+	}
+	var back []string
+	for _, c := range gone.coalitions {
+		if !owned[c] {
+			back = append(back, c)
+		}
+	}
+	return back
 }
 
 // assignCoalitions must be called with s.mu write-locked.
@@ -514,20 +586,33 @@ func (s *VoiceControlServer) EstablishStream(stream pb.VoiceControlService_Estab
 
 	s.logger.Info("Stream established with voice node", "serverId", serverID)
 
+	// Subscribe before building the snapshot, so no delta falls between the
+	// two. The feed carries only the events this handler forwards or acts on,
+	// and it is overflow-aware: a feed that falls behind is ended, never
+	// silently thinned (D7); a node whose feed ends is deregistered (D8 tombstone).
+	sub := s.eventBus.SubscribeNames(nodeFeedSize, nodeFeedEvents...)
+	defer sub.Close()
+
 	snapshot := s.buildStateSnapshot(node)
 	if err := stream.Send(snapshot); err != nil {
 		return fmt.Errorf("failed to send state snapshot to %s: %w", serverID, err)
 	}
 
-	ch := s.eventBus.Subscribe("*")
-	defer s.eventBus.Unsubscribe(ch)
-
 	for {
+		// An overflow wins over any event still buffered: the feed has a gap,
+		// so nothing after it may be forwarded.
+		select {
+		case <-sub.Overflow():
+			return s.endLaggingFeed(serverID, node, sub)
+		default:
+		}
 		select {
 		case <-stream.Context().Done():
-			s.deregisterNode(serverID)
+			s.deregisterNodeIf(serverID, node)
 			return nil
-		case event, ok := <-ch:
+		case <-sub.Overflow():
+			return s.endLaggingFeed(serverID, node, sub)
+		case event, ok := <-sub.C:
 			if !ok {
 				return nil
 			}
@@ -557,14 +642,35 @@ func (s *VoiceControlServer) EstablishStream(stream pb.VoiceControlService_Estab
 			sendErr := stream.Send(msg)
 			node.sendMu.Unlock()
 			if sendErr != nil {
-				s.deregisterNode(serverID)
+				s.deregisterNodeIf(serverID, node)
 				return sendErr
 			}
 		}
 	}
 }
 
+// endLaggingFeed ends a node feed that overflowed. Like any dead stream, the
+// node is deregistered (ownership-checked, R-2), so its coalitions are held by
+// the D8 tombstone for nodeGrace; the node sees the stream end, re-registers
+// (getting them back) and gets a fresh snapshot.
+func (s *VoiceControlServer) endLaggingFeed(serverID string, node *registeredNode, sub *events.Subscription) error {
+	s.deregisterNodeIf(serverID, node)
+	s.logger.Warn("Voice node feed fell behind, ending stream", "serverId", serverID, "dropped", sub.Dropped())
+	return errNodeFeedFellBehind
+}
+
+// nodeScope returns a copy of what decides which clients node is sent:
+// whether it is global and its coalitions. node's fields are rewritten under
+// s.mu by rebalance, from any node's handler.
+func (s *VoiceControlServer) nodeScope(node *registeredNode) (isGlobal bool, coalitions []string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return node.isGlobal, append([]string(nil), node.coalitions...)
+}
+
 func (s *VoiceControlServer) buildStateSnapshot(node *registeredNode) *pb.ControlMessage {
+	isGlobal, coalitions := s.nodeScope(node)
+
 	s.serverState.RLock()
 	defer s.serverState.RUnlock()
 
@@ -572,7 +678,7 @@ func (s *VoiceControlServer) buildStateSnapshot(node *registeredNode) *pb.Contro
 	radios := make(map[string]*pb.VoiceRadioInfo)
 
 	for id, client := range s.serverState.Clients {
-		if node.isGlobal || containsStr(node.coalitions, client.Coalition) {
+		if isGlobal || containsStr(coalitions, client.Coalition) {
 			clients[id.String()] = &pb.VoiceClientInfo{
 				Name:        client.Name,
 				Coalition:   client.Coalition,
@@ -587,7 +693,7 @@ func (s *VoiceControlServer) buildStateSnapshot(node *registeredNode) *pb.Contro
 		if !ok {
 			continue
 		}
-		if node.isGlobal || containsStr(node.coalitions, c.Coalition) {
+		if isGlobal || containsStr(coalitions, c.Coalition) {
 			radios[id.String()] = convertRadioStateToProto(radio)
 		}
 	}
@@ -600,6 +706,7 @@ func (s *VoiceControlServer) buildStateSnapshot(node *registeredNode) *pb.Contro
 }
 
 func (s *VoiceControlServer) buildClientDelta(node *registeredNode, event events.Event) *pb.ControlMessage {
+	isGlobal, coalitions := s.nodeScope(node)
 	switch event.Name {
 	case events.ClientsChanged:
 		ce, ok := event.Data.(events.ClientChangeEvent)
@@ -620,7 +727,7 @@ func (s *VoiceControlServer) buildClientDelta(node *registeredNode, event events
 		if !exists {
 			return nil
 		}
-		if !node.isGlobal && !containsStr(node.coalitions, client.Coalition) {
+		if !isGlobal && !containsStr(coalitions, client.Coalition) {
 			return nil
 		}
 
@@ -651,9 +758,13 @@ func (s *VoiceControlServer) buildClientDelta(node *registeredNode, event events
 			return nil
 		}
 		s.serverState.RLock()
+		var coalition string
 		client, clientExists := s.serverState.Clients[re.ClientID]
+		if clientExists {
+			coalition = client.Coalition
+		}
 		s.serverState.RUnlock()
-		if !clientExists || (!node.isGlobal && !containsStr(node.coalitions, client.Coalition)) {
+		if !clientExists || (!isGlobal && !containsStr(coalitions, coalition)) {
 			return nil
 		}
 		return &pb.ControlMessage{
@@ -689,18 +800,25 @@ func (s *VoiceControlServer) buildClientDelta(node *registeredNode, event events
 	return nil
 }
 
-func (s *VoiceControlServer) deregisterNode(serverID string) {
+// deregisterNodeIf removes serverID's registration only if it is still node,
+// the record the caller's stream attached to (R-2). A node that re-registered
+// under the same ID has a new record, which an old stream's end must not
+// delete. It reports whether anything was removed.
+func (s *VoiceControlServer) deregisterNodeIf(serverID string, node *registeredNode) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	node, exists := s.nodes[serverID]
-	if !exists {
-		return
+	if current, exists := s.nodes[serverID]; !exists || current != node {
+		return false
 	}
-	if node.isGlobal {
+	if node.isGlobal && s.globalNodeAddr == node.address {
 		s.globalNodeAddr = ""
+	}
+	if !node.isGlobal {
+		s.recentlyGone[serverID] = goneNode{coalitions: append([]string(nil), node.coalitions...), at: s.now()}
 	}
 	delete(s.nodes, serverID)
 	s.logger.Info("Voice node deregistered", "serverId", serverID)
+	return true
 }
 
 func containsStr(slice []string, s string) bool {

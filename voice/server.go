@@ -110,6 +110,23 @@ type Server struct {
 	// other.
 	parseRejects  rejectLimiter
 	bannedRejects rejectLimiter
+
+	// version is reported to the control node when registering (SetVersion).
+	version string
+	// controlClientHook, when set, is called with the control client after it
+	// is built and before it connects. Tests use it to point the client at a
+	// fake control node; it is nil in production.
+	controlClientHook func(*voiceontrol.VoiceControlClient)
+	// shardHook, when set, is called by a shard worker before each job. Tests
+	// use it to block workers; it is nil in production.
+	shardHook func(int)
+
+	// shardQueues/shardWG are the fan-out workers (shard.go). They are set up
+	// and torn down by Listen's goroutine only.
+	shardQueues []chan shardJob
+	shardWG     sync.WaitGroup
+	// queueFullRejects rate-limits the shard-queue-full drop log.
+	queueFullRejects rejectLimiter
 }
 
 func NewServer(state *state.ServerState, logger *slog.Logger, distributionState *state.DistributionState, settingsState *state.SettingsState) *Server {
@@ -124,6 +141,13 @@ func NewServer(state *state.ServerState, logger *slog.Logger, distributionState 
 	}
 }
 
+// SetVersion sets the server version this node reports to the control node.
+func (v *Server) SetVersion(version string) {
+	v.Lock()
+	v.version = version
+	v.Unlock()
+}
+
 func (v *Server) isDistributedServer() bool {
 	v.distributionState.RLock()
 	defer v.distributionState.RUnlock()
@@ -131,36 +155,26 @@ func (v *Server) isDistributedServer() bool {
 }
 
 func (v *Server) Listen(address string, stopChan chan struct{}) error {
-	if v.isDistributedServer() {
-		// Initialize control client if this is a distributed server
-		v.distributionState.RLock()
-		isGlobal := v.distributionState.IsGlobal
-		v.distributionState.RUnlock()
-
-		v.controlClient = voiceontrol.NewVoiceControlClient(
-			v.serverId,
-			v.settingsState,
-			v.serverState,
-			isGlobal,
-			v.logger,
-		)
-		// The control node drops this node's binding for a removed session
-		// (kick_client, and a LEFT delta).
-		v.controlClient.SetKickHandler(v.DisconnectClient)
-		if err := v.controlClient.ConnectControlServer(); err != nil {
-			v.logger.Error("Failed to connect to control server", "error", err)
-			return err
-		}
-	}
-
 	addr, err := net.ResolveUDPAddr("udp", address)
 	if err != nil {
 		return err
 	}
 
+	// Bind first: a distributed node must never advertise a port it failed
+	// to bind (SRV-11).
 	conn, err := net.ListenUDP("udp", addr)
 	if err != nil {
 		return err
+	}
+
+	if v.isDistributedServer() {
+		if err := v.connectControl(conn.LocalAddr().(*net.UDPAddr).Port); err != nil {
+			v.logger.Error("Failed to connect to control server", "error", err)
+			_ = conn.Close()
+			return err
+		}
+		// However the read loop ends, the control registration ends with it.
+		defer v.closeControlClient()
 	}
 
 	v.Lock()
@@ -172,6 +186,9 @@ func (v *Server) Listen(address string, stopChan chan struct{}) error {
 
 	// Start the cleanup routine
 	go v.cleanupRoutine()
+
+	v.startShards(shardCount(), shardQueueDepth)
+	defer v.stopShards()
 
 	// Main receive loop
 	buffer := make([]byte, BufferSize)
@@ -200,11 +217,67 @@ func (v *Server) Listen(address string, stopChan chan struct{}) error {
 				continue
 			}
 
-			// Handle the received packet
+			// Hand the packet to its sender's shard.
 			pkt := make([]byte, n)
 			copy(pkt, buffer[:n])
-			go v.handlePacket(pkt, remoteAddr)
+			v.dispatch(pkt, remoteAddr)
 		}
+	}
+}
+
+// connectControl builds this node's control client and starts it. listenPort
+// is the bound UDP port, advertised when publicAddr carries no port. It
+// returns an error only for a configuration problem (see
+// VoiceControlClient.ConnectControlServer).
+func (v *Server) connectControl(listenPort int) error {
+	v.distributionState.RLock()
+	isGlobal := v.distributionState.IsGlobal
+	v.distributionState.RUnlock()
+
+	v.RLock()
+	version := v.version
+	hook := v.controlClientHook
+	v.RUnlock()
+
+	c := voiceontrol.NewVoiceControlClient(
+		v.serverId,
+		v.settingsState,
+		v.serverState,
+		isGlobal,
+		version,
+		v.logger,
+	)
+	// The control node drops this node's binding for a removed session
+	// (kick_client, and a LEFT delta).
+	c.SetKickHandler(v.DisconnectClient)
+	if hook != nil {
+		hook(c)
+	}
+	// Publish the client before ConnectControlServer starts its supervisor:
+	// the kick handler (DisconnectClient) runs on that supervisor and reads
+	// v.controlClient, and starting the goroutine after this write is what
+	// orders the two.
+	v.Lock()
+	v.controlClient = c
+	v.Unlock()
+	if err := c.ConnectControlServer(listenPort); err != nil {
+		v.Lock()
+		v.controlClient = nil
+		v.Unlock()
+		return err
+	}
+	return nil
+}
+
+// closeControlClient closes the control client, if any. It must be called
+// without v's lock held: Close waits for the control supervisor, which may be
+// inside the kick handler (DisconnectClient), which takes that lock.
+func (v *Server) closeControlClient() {
+	v.RLock()
+	c := v.controlClient
+	v.RUnlock()
+	if c != nil {
+		_ = c.Close()
 	}
 }
 
@@ -235,14 +308,23 @@ func (v *Server) handlePacket(data []byte, addr *net.UDPAddr) {
 
 	packet, err := ParsePacket(data)
 	if err != nil {
-		// Anyone can spray garbage at a UDP port, so this is rate-limited and
-		// WARN rather than one ERROR per datagram.
-		if ok, n := v.parseRejects.shouldLog(time.Now()); ok {
-			v.logger.Warn("Failed to parse voice packet", "IP", addr.IP.String(), "error", err, "suppressed_since_last", n)
-		}
+		v.logParseFailure(addr, err)
 		return
 	}
+	v.handleParsedPacket(packet, addr)
+}
 
+// logParseFailure logs an unparseable datagram. Anyone can spray garbage at a
+// UDP port, so this is rate-limited and WARN rather than one ERROR per
+// datagram.
+func (v *Server) logParseFailure(addr *net.UDPAddr, err error) {
+	if ok, n := v.parseRejects.shouldLog(time.Now()); ok {
+		v.logger.Warn("Failed to parse voice packet", "IP", addr.IP.String(), "error", err, "suppressed_since_last", n)
+	}
+}
+
+// handleParsedPacket routes one parsed packet by type. Shard workers call it.
+func (v *Server) handleParsedPacket(packet *VCSPacket, addr *net.UDPAddr) {
 	switch packet.Type {
 	case PacketTypeHello:
 		v.handleHelloPacket(packet, addr)
@@ -466,17 +548,24 @@ func (v *Server) handleGoodbyePacket(packet *VCSPacket, addr *net.UDPAddr) {
 	v.DisconnectClient(packet.SenderID)
 }
 
+// broadcastVoice forwards a voice frame to every listening client. It runs
+// on the sender's shard: the frame is serialised once and written inline, so
+// frames from one sender go out in the order they arrived (SRV-13).
 func (v *Server) broadcastVoice(packet *VCSPacket, senderID uuid.UUID) {
-	for _, client := range v.GetListeningClients(packet, senderID) { // Already a lot of logic is done in GetListeningClients
-		go func(addr *net.UDPAddr) {
-			_, err := v.conn.WriteToUDP(packet.SerializePacket(), addr)
-			v.logger.Debug("Sent packet to client", "sender_id", packet.SenderID, "receiver_addr", addr.String())
-			if err != nil {
-				v.logger.Error("Failed to send voice packet",
-					"to", addr.String(),
-					"error", err)
-			}
-		}(client.Addr)
+	listeners := v.GetListeningClients(packet, senderID) // Already a lot of logic is done in GetListeningClients
+	if len(listeners) == 0 {
+		return
+	}
+	data := packet.SerializePacket()
+	for _, client := range listeners {
+		addr := client.Addr
+		_, err := v.conn.WriteToUDP(data, addr)
+		v.logger.Debug("Sent packet to client", "sender_id", packet.SenderID, "receiver_addr", addr.String())
+		if err != nil {
+			v.logger.Error("Failed to send voice packet",
+				"to", addr.String(),
+				"error", err)
+		}
 	}
 }
 
@@ -512,22 +601,26 @@ func (v *Server) cleanup() {
 
 func (v *Server) Stop() error {
 	v.Lock()
-	defer v.Unlock()
-
 	if !v.running {
+		v.Unlock()
 		return nil
 	}
 
 	v.stopOnce.Do(func() { close(v.stopChan) })
 
+	var connErr error
 	if v.conn != nil {
-		err := v.conn.Close()
-		if err != nil {
-			return err
-		}
+		connErr = v.conn.Close()
 	}
-
 	v.running = false
+	v.Unlock()
+
+	// Outside the lock (see closeControlClient). Ending the control stream
+	// lets the control node deregister this node (R-4).
+	v.closeControlClient()
+	if connErr != nil {
+		return connErr
+	}
 	v.logger.Info("Voice server stopped")
 	return nil
 }

@@ -171,6 +171,7 @@ func (a *VCSApplication) startVoiceServer() {
 
 	go func() {
 		v := voice.NewServer(a.ServerState, a.Logger, a.DistributionState, a.SettingsState)
+		v.SetVersion(Version)
 		a.setVoiceServer(v)
 
 		a.AdminState.Lock()

@@ -17,7 +17,6 @@ func newTestClient(serverState *state.ServerState) *VoiceControlClient {
 		serverId:      "test-node",
 		logger:        slog.New(slog.NewTextHandler(os.Stderr, nil)),
 		serverState:   serverState,
-		stopc:         make(chan struct{}),
 		settingsState: &state.SettingsState{},
 	}
 }

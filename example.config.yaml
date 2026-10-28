@@ -37,6 +37,7 @@ voiceControl: # Voice control configuration only needed if distribution is activ
   listenHost: 0.0.0.0 # Host to listen for voice control (for control distribution)
   certificateFile: /path/to/voicecontrol-cert.pem # Path to the certificate file
   privateKeyFile: /path/to/voicecontrol-private-key.pem # Path to the private key file
+  publicAddr: vcs.example.net:5002 # Required in voice distribution mode: the address clients reach this voice node on. host:port (the port wins, e.g. a NAT mapping) or a bare host (port from servers.voice.port); 0.0.0.0 / :: is refused
 clientTLS: # TLS for the client-facing control port (servers.control). Omit the block for plaintext.
   certificateFile: /path/to/srs-cert.pem # Generated at this location if not present
   privateKeyFile: /path/to/srs-private-key.pem # Generated at this location if not present
