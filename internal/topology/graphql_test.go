@@ -56,3 +56,15 @@ func TestPostGraphQL(t *testing.T) {
 		t.Errorf("errors case: %v", err)
 	}
 }
+
+// The admin API is plaintext HTTP (the server serves no TLS there), so
+// postGraphQL refuses any host that is not a loopback IP literal before
+// sending anything.
+func TestPostGraphQLRefusesNonLoopback(t *testing.T) {
+	for _, addr := range []string{"example.com:80", "localhost:8080", "10.0.0.1:80", "0.0.0.0:80", "not-a-hostport"} {
+		err := postGraphQL(context.Background(), addr, "k", "{x}", nil, nil)
+		if err == nil || !strings.Contains(err.Error(), "loopback") {
+			t.Errorf("%s: err = %v, want a loopback refusal", addr, err)
+		}
+	}
+}

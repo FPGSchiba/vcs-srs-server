@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -137,5 +138,20 @@ func TestStartExtraNodeHonoursCancelledContext(t *testing.T) {
 	}
 	if spawned != 0 {
 		t.Fatalf("spawned %d processes, want 0", spawned)
+	}
+}
+
+// BuildServer runs the go tool of the toolchain that built this binary, by
+// absolute path, never a PATH lookup.
+func TestGoToolIsAbsoluteGOROOTBinary(t *testing.T) {
+	p, err := goTool()
+	if err != nil {
+		t.Fatalf("goTool: %v", err)
+	}
+	if !filepath.IsAbs(p) {
+		t.Errorf("goTool = %q, want an absolute path", p)
+	}
+	if _, err := os.Stat(p); err != nil {
+		t.Errorf("goTool = %q: %v", p, err)
 	}
 }

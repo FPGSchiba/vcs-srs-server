@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +19,9 @@ import (
 )
 
 const defaultReadyTimeout = 20 * time.Second
+
+// loopback is the only host any topology process binds or is dialled on.
+const loopback = "127.0.0.1"
 
 // Spec describes a distributed topology: one control process, two
 // non-global voice nodes and one global voice node, all on loopback.
@@ -223,7 +227,7 @@ func (t *Topology) want() map[Role]string {
 }
 
 func (t *Topology) vcAddr() string {
-	return net.JoinHostPort("127.0.0.1", strconv.Itoa(t.vcPort))
+	return net.JoinHostPort(loopback, strconv.Itoa(t.vcPort))
 }
 
 func (t *Topology) controlConfig() ProcConfig {
@@ -233,7 +237,7 @@ func (t *Topology) controlConfig() ProcConfig {
 		Coalitions:        t.sp.Coalitions,
 		GlobalFrequencies: []float32{249.0}, TestFrequencies: []float32{247.2},
 		APIKey: t.apiKey, VCCert: t.certFile, VCKey: t.keyFile,
-		RemoteHost: "127.0.0.1",
+		RemoteHost: loopback,
 	}
 }
 
@@ -251,8 +255,8 @@ func (t *Topology) nodeConfigOn(r Role, voicePort int, serverName string) (ProcC
 		VoicePort: voicePort, VoiceControlPort: t.vcPort,
 		GlobalFrequencies: t.sp.NodeGlobalFrequencies,
 		APIKey:            t.apiKey, VCCert: t.certFile, VCKey: t.keyFile,
-		RemoteHost: "127.0.0.1",
-		PublicAddr: net.JoinHostPort("127.0.0.1", strconv.Itoa(voicePort)),
+		RemoteHost: loopback,
+		PublicAddr: net.JoinHostPort(loopback, strconv.Itoa(voicePort)),
 		ServerName: serverName,
 	}, nil
 }
@@ -387,14 +391,14 @@ func tail(s string, n int) string {
 // host:port for Control.
 func (t *Topology) Addr(role Role) string {
 	if role == Control {
-		return net.JoinHostPort("127.0.0.1", strconv.Itoa(t.controlPort))
+		return net.JoinHostPort(loopback, strconv.Itoa(t.controlPort))
 	}
-	return net.JoinHostPort("127.0.0.1", strconv.Itoa(t.voicePorts[role]))
+	return net.JoinHostPort(loopback, strconv.Itoa(t.voicePorts[role]))
 }
 
 // HTTP is the control process's admin HTTP host:port.
 func (t *Topology) HTTP() string {
-	return net.JoinHostPort("127.0.0.1", strconv.Itoa(t.httpPort))
+	return net.JoinHostPort(loopback, strconv.Itoa(t.httpPort))
 }
 
 // APIKey is the control process's GraphQL API key.
@@ -554,15 +558,38 @@ func (t *Topology) Stop() error {
 	return nil
 }
 
+// goTool returns the absolute path of the go command of the toolchain that
+// built this binary (GOROOT/bin/go), so BuildServer never resolves "go"
+// through PATH.
+func goTool() (string, error) {
+	root := runtime.GOROOT() //nolint:staticcheck // the toolchain root is exactly what is wanted here
+	if root == "" {
+		return "", errors.New("topology: GOROOT unknown (binary built with -trimpath?); set VCS_SERVER_BIN instead")
+	}
+	name := "go"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	p := filepath.Join(root, "bin", name)
+	if _, err := os.Stat(p); err != nil {
+		return "", fmt.Errorf("topology: go tool not found at %s: %w; set VCS_SERVER_BIN instead", p, err)
+	}
+	return p, nil
+}
+
 // BuildServer builds the headless server binary into outPath from the
-// module root.
+// module root, with the go command of the toolchain that built the caller.
 func BuildServer(ctx context.Context, outPath string) error {
-	list := exec.CommandContext(ctx, "go", "list", "-m", "-f", "{{.Dir}}")
+	gobin, err := goTool()
+	if err != nil {
+		return err
+	}
+	list := exec.CommandContext(ctx, gobin, "list", "-m", "-f", "{{.Dir}}")
 	dirOut, err := list.Output()
 	if err != nil {
 		return fmt.Errorf("topology: go list -m: %w", err)
 	}
-	build := exec.CommandContext(ctx, "go", "build", "-tags", "headless", "-o", outPath, ".")
+	build := exec.CommandContext(ctx, gobin, "build", "-tags", "headless", "-o", outPath, ".")
 	build.Dir = strings.TrimSpace(string(dirOut))
 	if out, err := build.CombinedOutput(); err != nil {
 		return fmt.Errorf("topology: go build: %w\n%s", err, out)
