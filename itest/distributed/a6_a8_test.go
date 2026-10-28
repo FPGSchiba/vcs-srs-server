@@ -21,12 +21,18 @@ func TestKickEndsStreamAndVoice(t *testing.T) {
 	const mhz = float32(251.0)
 	f := freqKHz(mhz)
 
-	blue1, blue2 := newBot(t, "Blue"), newBot(t, "Blue")
-	for _, b := range []*bot{blue1, blue2} {
+	blue1, blue2, blue3 := newBot(t, "Blue"), newBot(t, "Blue"), newBot(t, "Blue")
+	for _, b := range []*bot{blue1, blue2, blue3} {
 		b.tune(mhz)
 		if !b.hello(b.coalitionAddr, 2*time.Second) {
 			t.Fatalf("%s bot HELLO to %s not ACKed", b.coalition, b.coalitionAddr)
 		}
+	}
+
+	// Positive control: a healthy bound client's keepalive is ACKed in this
+	// topology, so the kicked client's silence below is not vacuous.
+	if !keepaliveAcked(t, blue2, 1500*time.Millisecond) {
+		t.Fatalf("positive control: healthy Blue2's keepalive was not ACKed")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -54,20 +60,33 @@ func TestKickEndsStreamAndVoice(t *testing.T) {
 		t.Errorf("Blue1 update stream still open 2s after kick")
 	}
 
-	// Blue2 sends 10 frames; Blue1 receives none.
+	// Blue2 sends 10 frames; Blue1 receives none. Blue3 (still connected)
+	// receives them, which shows the relay works and Blue1's silence is the kick.
 	blue2.send(blue2.coalitionAddr, f, seqRange(1, 10)...)
+	if got := blue3.recv(blue3.coalitionAddr, f, 700*time.Millisecond); len(got) != 10 {
+		t.Errorf("positive control: healthy Blue3 received %d frames, want 10: %v", len(got), got)
+	}
 	if got := blue1.recv(blue1.coalitionAddr, f, 700*time.Millisecond); len(got) != 0 {
 		t.Errorf("kicked Blue1 received %d frames, want 0: %v", len(got), got)
 	}
 
 	// Blue1's keepalive gets no ACK within 1.5 s.
-	c := blue1.sock(blue1.coalitionAddr)
-	ka := voice.NewVCSKeepalivePacket(blue1.guidU).SerializePacket()
+	if keepaliveAcked(t, blue1, 1500*time.Millisecond) {
+		t.Errorf("kicked Blue1's keepalive was ACKed")
+	}
+}
+
+// keepaliveAcked sends one keepalive from b and reports whether a keepalive
+// ACK arrives within window.
+func keepaliveAcked(t *testing.T, b *bot, window time.Duration) bool {
+	t.Helper()
+	c := b.sock(b.coalitionAddr)
+	ka := voice.NewVCSKeepalivePacket(b.guidU).SerializePacket()
 	if _, err := c.Write(ka); err != nil {
 		t.Fatalf("keepalive send: %v", err)
 	}
 	buf := make([]byte, 2048)
-	deadline := time.Now().Add(1500 * time.Millisecond)
+	deadline := time.Now().Add(window)
 	_ = c.SetReadDeadline(deadline)
 	for time.Now().Before(deadline) {
 		n, err := c.Read(buf)
@@ -75,10 +94,10 @@ func TestKickEndsStreamAndVoice(t *testing.T) {
 			continue // timeout or stale ICMP refusal: keep waiting out the window
 		}
 		if p, perr := voice.ParsePacket(buf[:n]); perr == nil && p.Type == voice.PacketTypeKeepalive {
-			t.Errorf("kicked Blue1's keepalive was ACKed")
-			break
+			return true
 		}
 	}
+	return false
 }
 
 // A7: a re-tune re-routes within 1 s.
@@ -122,10 +141,16 @@ func TestRetuneReroutesWithinOneSecond(t *testing.T) {
 		t.Fatalf("Blue1 received nothing on 251.0 before the re-tune")
 	}
 	blue1.tune(m2)
-	if got := blue1.recv(blue1.coalitionAddr, f2, time.Second); len(got) == 0 {
+	start := time.Now()
+	got := blue1.recv(blue1.coalitionAddr, f2, time.Second)
+	if len(got) == 0 {
 		t.Errorf("Blue1 received nothing on 252.0 within 1s of re-tuning")
 	}
-	// The sniffing window above ended 1 s after the re-tune: 251.0 is silent now.
+	// recv returns after its whole window, so this is the window length, not
+	// a first-frame latency; the bound (>=1 frame within 1 s) is what is proven.
+	t.Logf("re-tune: %d frames on 252.0 in the %v window", len(got), time.Since(start).Round(time.Millisecond))
+	// The 1 s recv above also drained any stale 251.0 frames from the socket
+	// buffer; the silence check below depends on that.
 	if got := blue1.recv(blue1.coalitionAddr, f1, 500*time.Millisecond); len(got) != 0 {
 		t.Errorf("Blue1 still received %d frames on 251.0 after the re-tune", len(got))
 	}
