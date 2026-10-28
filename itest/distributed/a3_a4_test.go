@@ -5,6 +5,7 @@ package distributed
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"strings"
 	"testing"
 	"time"
@@ -47,6 +48,12 @@ func TestHelloAcksOnlyOnOwnNode(t *testing.T) {
 	if !b.hello(top.Addr(own), 2*time.Second) {
 		t.Fatalf("HELLO to own node %s (%s) not ACKed within 2s", own, top.Addr(own))
 	}
+	// Snapshot the cumulative log so only lines caused by this HELLO count.
+	before, err := top.LogText(foreign)
+	if err != nil {
+		t.Fatalf("LogText(%s): %v", foreign, err)
+	}
+	baseWarns := countWarnUnknownClient(before)
 	if b.hello(top.Addr(foreign), 2*time.Second) {
 		t.Fatalf("HELLO to foreign node %s (%s) was ACKed", foreign, top.Addr(foreign))
 	}
@@ -59,13 +66,13 @@ func TestHelloAcksOnlyOnOwnNode(t *testing.T) {
 		if log, err = top.LogText(foreign); err != nil {
 			t.Fatalf("LogText(%s): %v", foreign, err)
 		}
-		if warnUnknownClient(log) || time.Now().After(deadline) {
+		if countWarnUnknownClient(log) > baseWarns || time.Now().After(deadline) {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	if !warnUnknownClient(log) {
-		t.Errorf("foreign node %s log has no WARN line matching %q", foreign, "unknown client")
+	if countWarnUnknownClient(log) <= baseWarns {
+		t.Errorf("foreign node %s log gained no new WARN line matching %q", foreign, "unknown client")
 	}
 	for _, l := range strings.Split(log, "\n") {
 		if strings.Contains(l, "unknown client") && strings.Contains(l, "level=ERROR") {
@@ -74,13 +81,14 @@ func TestHelloAcksOnlyOnOwnNode(t *testing.T) {
 	}
 }
 
-func warnUnknownClient(log string) bool {
+func countWarnUnknownClient(log string) int {
+	n := 0
 	for _, l := range strings.Split(log, "\n") {
 		if strings.Contains(l, "level=WARN") && strings.Contains(l, "unknown client") {
-			return true
+			n++
 		}
 	}
-	return false
+	return n
 }
 
 func seqRange(from, to uint32) []uint32 {
@@ -115,9 +123,17 @@ func TestCoalitionVoiceIsolated(t *testing.T) {
 	if len(frames) != 25 {
 		t.Fatalf("Blue2 received %d frames, want 25", len(frames))
 	}
-	for i, p := range frames {
-		if want := framePayload(uint32(i + 1)); !bytes.Equal(p, want) {
-			t.Errorf("Blue2 frame %d payload differs from what Blue1 sent", i+1)
+	// Compare keyed by seq: UDP may reorder, so arrival order is not asserted.
+	got := map[uint32][]byte{}
+	for _, p := range frames {
+		got[binary.BigEndian.Uint32(p)] = p
+	}
+	for seq := uint32(1); seq <= 25; seq++ {
+		p, ok := got[seq]
+		if !ok {
+			t.Errorf("Blue2 missing frame seq %d", seq)
+		} else if !bytes.Equal(p, framePayload(seq)) {
+			t.Errorf("Blue2 frame seq %d payload differs from what Blue1 sent", seq)
 		}
 	}
 	if got := red1.recv(red1.coalitionAddr, f, 500*time.Millisecond); len(got) != 0 {
