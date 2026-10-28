@@ -1,7 +1,9 @@
 package srs
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
@@ -548,5 +550,105 @@ func TestJoinSnapshotIndependent(t *testing.T) {
 
 	if got := ev.Clients[id].Name; got != "Joiner" {
 		t.Fatalf("event snapshot Name = %q, want Joiner", got)
+	}
+}
+
+// forgeCost swaps the "$2a$04$" prefix of a hashPassword result for one with
+// the given cost. bcrypt.Cost only parses the header, so it is accepted.
+func forgeCost(t *testing.T, hash string, cost int) string {
+	t.Helper()
+	if !strings.HasPrefix(hash, "$2a$04$") {
+		t.Fatalf("unexpected hash prefix: %q", hash)
+	}
+	return fmt.Sprintf("$2a$%02d$", cost) + strings.TrimPrefix(hash, "$2a$04$")
+}
+
+func TestGuestLoginRejectsOverCostHash(t *testing.T) {
+	s := newGuestLoginTestServer(t)
+	var buf bytes.Buffer
+	s.logger = slog.New(slog.NewTextHandler(&buf, nil))
+	ctx := testPeerContext()
+	guid := mustInit(t, s, ctx)
+
+	resp, err := s.GuestLogin(ctx, &pb.GuestLoginRequest{
+		ClientGuid: guid.String(), Name: "Victim", UnitId: "AB1",
+		Password: forgeCost(t, hashPassword(t, guestTestCoalitionPassword), 13),
+	})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if resp.GetSuccess() {
+		t.Fatal("expected rejection")
+	}
+	want := "Invalid password hash: bcrypt cost 13 exceeds the server maximum of 12"
+	if got := resp.GetErrorMessage(); got != want {
+		t.Fatalf("message = %q, want %q", got, want)
+	}
+	if n := pendingCount(s); n != 1 {
+		t.Fatalf("pendingCount = %d, want 1", n)
+	}
+	if out := buf.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "127.0.0.1") {
+		t.Fatalf("log missing WARN/IP: %s", out)
+	}
+}
+
+func TestGuestLoginRejectsMalformedHash(t *testing.T) {
+	for _, pw := range []string{"", "not-a-hash"} {
+		t.Run("pw="+pw, func(t *testing.T) {
+			s := newGuestLoginTestServer(t)
+			ctx := testPeerContext()
+			guid := mustInit(t, s, ctx)
+			resp, err := s.GuestLogin(ctx, &pb.GuestLoginRequest{
+				ClientGuid: guid.String(), Name: "Victim", UnitId: "AB1", Password: pw,
+			})
+			if err != nil {
+				t.Fatalf("err = %v", err)
+			}
+			if got, want := resp.GetErrorMessage(), "Invalid password hash: malformed"; got != want {
+				t.Fatalf("message = %q, want %q", got, want)
+			}
+			if n := pendingCount(s); n != 1 {
+				t.Fatalf("pendingCount = %d, want 1", n)
+			}
+		})
+	}
+}
+
+func TestGuestLoginAcceptsMaxCost(t *testing.T) {
+	s := newGuestLoginTestServer(t)
+	ctx := testPeerContext()
+	guid := mustInit(t, s, ctx)
+	h, err := bcrypt.GenerateFromPassword([]byte(guestTestCoalitionPassword), 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := s.GuestLogin(ctx, &pb.GuestLoginRequest{
+		ClientGuid: guid.String(), Name: "Victim", UnitId: "AB1", Password: string(h),
+	})
+	if err != nil || !resp.GetSuccess() {
+		t.Fatalf("err=%v resp=%+v", err, resp)
+	}
+}
+
+// Only valid against the capped server: before the cap a cost-31 compare
+// would take about 21 hours. Never run it against pre-cap code.
+func TestGuestLoginRejectsCost31Quickly(t *testing.T) {
+	s := newGuestLoginTestServer(t)
+	ctx := testPeerContext()
+	guid := mustInit(t, s, ctx)
+	start := time.Now()
+	resp, err := s.GuestLogin(ctx, &pb.GuestLoginRequest{
+		ClientGuid: guid.String(), Name: "Victim", UnitId: "AB1",
+		Password: forgeCost(t, hashPassword(t, guestTestCoalitionPassword), 31),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d >= time.Second {
+		t.Fatalf("took %v", d)
+	}
+	want := "Invalid password hash: bcrypt cost 31 exceeds the server maximum of 12"
+	if got := resp.GetErrorMessage(); got != want {
+		t.Fatalf("message = %q, want %q", got, want)
 	}
 }
