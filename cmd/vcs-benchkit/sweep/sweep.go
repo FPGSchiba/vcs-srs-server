@@ -19,8 +19,9 @@ const (
 	// bracketed the knee. N is the last valid passing step (0 if none): the
 	// knee is at least N but was not reached (design 6.4, D14).
 	GeneratorBound
-	// TimeBound: every step up to N_max passed. N is N_max (0 when N_max
-	// allows no step): the knee is at least N_max.
+	// TimeBound: no breach was seen. Either every step up to N_max passed
+	// (N is N_max, 0 when N_max allows no step), or the leg's budget stopped
+	// the doubling early (N is the last pass, see Stop): the knee is at least N.
 	TimeBound
 	// BelowRange: even the smallest bisected size breached. N is that
 	// smallest breached size; the knee is below it. This is not in the
