@@ -652,3 +652,63 @@ func TestGuestLoginRejectsCost31Quickly(t *testing.T) {
 		t.Fatalf("message = %q, want %q", got, want)
 	}
 }
+
+// TestGuestLoginComparesOutsideSettingsLock proves the bcrypt compare does not
+// run under settingsState.RLock: a queued writer would otherwise stall behind a
+// slow login and, via RWMutex semantics, block every new reader.
+func TestGuestLoginComparesOutsideSettingsLock(t *testing.T) {
+	s := newGuestLoginTestServer(t)
+	ctx := testPeerContext()
+	guid := mustInit(t, s, ctx)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	orig := comparePassword
+	comparePassword = func(hash, plain string) bool {
+		once.Do(func() { close(entered) })
+		<-release
+		return orig(hash, plain)
+	}
+	t.Cleanup(func() { comparePassword = orig })
+
+	var resp *pb.GuestLoginResponse
+	var loginErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		resp, loginErr = s.GuestLogin(ctx, &pb.GuestLoginRequest{
+			ClientGuid: guid.String(), Name: "Victim", UnitId: "AB1",
+			Password: hashPassword(t, guestTestCoalitionPassword),
+		})
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("comparePassword was never called")
+	}
+
+	locked := make(chan struct{})
+	go func() {
+		s.settingsState.Lock()
+		close(locked)
+	}()
+
+	select {
+	case <-locked:
+		s.settingsState.Unlock()
+		close(release)
+		<-done
+		if loginErr != nil || !resp.GetSuccess() {
+			t.Fatalf("err=%v resp=%+v", loginErr, resp)
+		}
+	case <-time.After(100 * time.Millisecond):
+		close(release)
+		<-locked
+		s.settingsState.Unlock()
+		<-done
+		t.Fatal("settingsState.Lock() blocked behind the password compare; compare must run outside the RLock")
+	}
+}

@@ -71,6 +71,10 @@ type AuthenticatingClient struct {
 	IP string
 }
 
+// comparePassword is a seam so tests can observe where the bcrypt compare runs.
+// Only tests reassign it.
+var comparePassword = utils.CheckPasswordHash
+
 func NewAuthServer(serverState *state.ServerState, settingsState *state.SettingsState, logger *slog.Logger, distributionState *state.DistributionState, eventBus *events.EventBus) *AuthServer {
 	s := &AuthServer{
 		serverState:           serverState,
@@ -488,18 +492,20 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.GuestLoginReque
 			LoginResult: &pb.GuestLoginResponse_ErrorMessage{ErrorMessage: "Invalid password hash: " + err.Error()}}, nil
 	}
 
-	// Check Password > Select coalition
+	// Check Password > Select coalition. Snapshot under the lock and compare outside it:
+	// bcrypt is slow and a queued settings writer would otherwise block every new reader.
 	s.settingsState.RLock()
+	coalitions := append([]state.Coalition(nil), s.settingsState.Coalitions...)
+	s.settingsState.RUnlock()
 	var selectedCoalition state.Coalition
 	var coalitionFound bool
-	for _, coalition := range s.settingsState.Coalitions {
-		if utils.CheckPasswordHash(request.Password, coalition.Password) { // Password comes in hashed and we have the plaintext
+	for _, coalition := range coalitions {
+		if comparePassword(request.Password, coalition.Password) { // Password comes in hashed and we have the plaintext
 			selectedCoalition = coalition
 			coalitionFound = true
 			break
 		}
 	}
-	s.settingsState.RUnlock()
 
 	if !coalitionFound {
 		return &pb.GuestLoginResponse{
