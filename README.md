@@ -6,12 +6,13 @@ This is the official server for the [Vanguard Communication System](). It is a d
 
 ## Installation
 
-Important: This project uses the [Wails](https://v3alpha.wails.io/) framework, so you need to install it first. You can find the installation instructions on the [Wails website](https://v3alpha.wails.io/getting-started/installation/).
-Be aware that Wails3 is currently in alpha, so you need to install the Wails3 CLI. You can do this by running:
+Important: This project uses the [Wails v3](https://github.com/wailsapp/wails) framework. The `wails3` CLI must match the Wails version in `go.mod`, so install it with:
 
 ```bash
-go install -v github.com/wailsapp/wails/v3/cmd/wails3@latest
+go install "github.com/wailsapp/wails/v3/cmd/wails3@$(go list -m -f '{{.Version}}' github.com/wailsapp/wails/v3)"
 ```
+
+Linux GUI builds need `libgtk-4-dev` and `libwebkitgtk-6.0-dev` (the Wails v3 default GTK4 + WebKitGTK 6.0 stack).
 
 ### Note about Wails3
 

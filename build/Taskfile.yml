@@ -71,7 +71,7 @@ tasks:
     deps:
       - task: install:frontend:deps
     cmds:
-      - npm run dev -- --port {{.VITE_PORT}} --strictPort
+      - npm run dev -- --port {{.VITE_PORT}} --strictPort --host 127.0.0.1
 
   update:build-assets:
     summary: Updates the build assets
