@@ -315,8 +315,9 @@ func (b *Bot) SetN(ctx context.Context, n int) (Joins, error) {
 }
 
 // Hold runs one hold of d and returns its report. The report is requested
-// right behind the hold, so it arrives when the hold has ended. A join failure
-// seen here (the first hold absorbs the first ramp) is an error.
+// right behind the hold, so it arrives when the hold has ended. The first hold
+// absorbs the first ramp: a v1 join-failure error line seen here is an error,
+// while a v2 joins line is only stored for LastJoins (the caller checks it).
 func (b *Bot) Hold(ctx context.Context, d time.Duration, label string) (Step, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
