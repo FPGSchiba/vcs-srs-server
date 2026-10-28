@@ -61,4 +61,12 @@ describe('ClientListPage', () => {
             expect(screen.getByText(/You are attempting to kick a client/)).toBeInTheDocument()
         )
     })
+
+    it('skips undefined entries in the Clients map', async () => {
+        vi.mocked(GetClients).mockResolvedValue({ Clients: { ...mockClients.Clients, 'client-3': undefined } } as never)
+        render(<ClientListPage />)
+        await waitFor(() => expect(screen.getByText(/Pilot One/)).toBeTruthy())
+        expect(screen.getByText(/Pilot Two/)).toBeTruthy()
+        expect(screen.getAllByRole('button', { name: 'Ban' })).toHaveLength(2)
+    })
 })
