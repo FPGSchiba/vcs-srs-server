@@ -173,9 +173,12 @@ func TestStopDuringKickDoesNotDeadlock(t *testing.T) {
 	waitFor(t, 2*time.Second, func() bool { _, ok := s.GetClientIPFromId(id); return !ok }, "kick applied")
 }
 
-// A LEFT delta can reach the kick handler (DisconnectClient) while Listen is
-// still publishing the control client; the handler must read the client
-// under the server lock. Run with -race.
+// A kick can reach the kick handler (DisconnectClient) as the very first
+// control message, right after Listen publishes the control client. The
+// handler reads v.controlClient without the server lock; what orders that
+// read after the write is that Listen publishes the client before
+// ConnectControlServer starts the supervisor goroutine the handler runs on
+// (happens-before through the goroutine start), not a lock. Run with -race.
 func TestEarlyKickDoesNotRaceControlClientPublish(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		f := &recordingControl{}

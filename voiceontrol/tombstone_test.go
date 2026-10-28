@@ -84,10 +84,20 @@ func TestTombstoneExpires(t *testing.T) {
 	if got := sortedCopy(resp.AssignedCoalitions); slices.Equal(got, []string{"Blue", "Green"}) {
 		t.Fatalf("a node returning after the grace got its old coalitions back (%v)", got)
 	}
+}
+
+// Expired tombstones of other node IDs are swept on any registration, so the
+// map stays bounded even when a gone node never comes back.
+func TestExpiredTombstoneOfAnotherNodeIsSwept(t *testing.T) {
+	s, clk := tombstoneServer(t)
+	deregisterViaStream(t, s, "a")
+	clk.add(121 * time.Second)
+
+	register(t, s, &pb.RegisterVoiceServerRequest{ServerId: "c", ServerAddress: "10.0.0.2", UdpPort: 5002})
 	s.mu.RLock()
-	n := len(s.recentlyGone)
+	_, left := s.recentlyGone["a"]
 	s.mu.RUnlock()
-	if n != 0 {
-		t.Fatalf("%d tombstones left after registration, want 0 (lazy expiry)", n)
+	if left {
+		t.Fatal("node a's expired tombstone survived another node's registration (lazy expiry)")
 	}
 }

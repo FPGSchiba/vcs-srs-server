@@ -60,16 +60,21 @@ func TestNodeFeedIgnoresLogFlood(t *testing.T) {
 	for i := 0; i < 500; i++ {
 		s.eventBus.Publish(events.Event{Name: events.LogEntry, Data: "log line"})
 	}
+	// Published while Send is still stalled and after the flood: a feed that
+	// buffered the logs would have no room left for it.
+	other := uuid.New()
+	s.eventBus.Publish(joinedEvent(other, "Blue"))
 	time.Sleep(50 * time.Millisecond)
 	release()
 
-	other := uuid.New()
-	s.eventBus.Publish(joinedEvent(other, "Blue"))
-	eventually(t, 2*time.Second, func() bool { return hasDelta(st, other, pb.ClientDelta_JOINED) }, "JOINED delta after the log flood")
+	eventually(t, 2*time.Second, func() bool { return hasDelta(st, other, pb.ClientDelta_JOINED) }, "JOINED delta published during the log flood")
 	select {
 	case err := <-errc:
 		t.Fatalf("the feed ended on a log flood: %v", err)
 	default:
+	}
+	if got := s.eventBus.Stats().Overflows; got != 0 {
+		t.Fatalf("event bus recorded %d overflows during a log flood, want 0", got)
 	}
 }
 
