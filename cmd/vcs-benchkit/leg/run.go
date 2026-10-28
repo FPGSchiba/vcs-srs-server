@@ -185,6 +185,23 @@ func readUlimitN() (int, error) {
 	return strconv.Atoi(s)
 }
 
+// BuildPins is the CPU plan of a leg. The S arm is standalone on ONE vCPU, the
+// first of the server set, with GOMAXPROCS 1 and therefore two shards (design
+// 6.3). The calibration reflector gets the whole server set and the load
+// generator its own set. The sets must be valid and disjoint.
+func BuildPins(serverSet, genSet string) (map[string]PinRecord, error) {
+	if err := disjoint(serverSet, genSet); err != nil {
+		return nil, err
+	}
+	serverCPUs, _ := CPUList(serverSet)
+	genCPUs, _ := CPUList(genSet)
+	return map[string]PinRecord{
+		"server":    {CPUs: strconv.Itoa(serverCPUs[0]), GOMAXPROCS: 1, Shards: topology.ShardCount(1)},
+		"reflector": {CPUs: serverSet, GOMAXPROCS: len(serverCPUs)},
+		"generator": {CPUs: genSet, GOMAXPROCS: len(genCPUs)},
+	}, nil
+}
+
 // Manifest records everything needed to read a leg's numbers later.
 type Manifest struct {
 	Schema       string `json:"schema"`
@@ -289,18 +306,17 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	}
 	serverCPUs, _ := CPUList(o.ServerSet)
 	genCPUs, _ := CPUList(o.GenSet)
-	// S arm: standalone on ONE vCPU (design 6.3): GOMAXPROCS 1, so 2 shards.
-	serverPin := strconv.Itoa(serverCPUs[0])
+	pins, err := BuildPins(o.ServerSet, o.GenSet)
+	if err != nil {
+		return err
+	}
+	serverPin := pins["server"].CPUs
 
 	m := &Manifest{
 		Schema: "leg-manifest/1", Label: Label, Payload: PayloadLabel, JoinLabel: JoinLabel, NotMeasured: NotMeasured,
 		Arm: o.Arms, Scenario: o.Scenario, Seed: o.Seed, Q6: o.Q6, Topology: o.Topology,
 		ServerSHA: o.ServerSHA, ClientSHA: o.ClientSHA, KitGoVersion: runtime.Version(),
-		Pins: map[string]PinRecord{
-			"server":    {CPUs: serverPin, GOMAXPROCS: 1, Shards: topology.ShardCount(1)},
-			"reflector": {CPUs: o.ServerSet, GOMAXPROCS: len(serverCPUs)},
-			"generator": {CPUs: o.GenSet, GOMAXPROCS: len(genCPUs)},
-		},
+		Pins: pins,
 		PredictedKnee: o.PredictedKnee, JoinRate: o.JoinRate, Budget: o.Budget.String(),
 		Durations: map[string]string{
 			"warmup": o.Warmup.String(), "hold": o.Hold.String(), "confirm": o.Confirm.String(),

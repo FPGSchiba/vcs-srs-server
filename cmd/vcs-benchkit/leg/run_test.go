@@ -105,3 +105,35 @@ func TestSweepCap(t *testing.T) {
 		t.Errorf("tiny budget cap = %d", got)
 	}
 }
+
+// The S arm is one vCPU with GOMAXPROCS 1 and two shards, whatever the size of
+// the server set (Q6: server 0,1 / generator 2,3). The reflector gets the whole
+// server set.
+func TestBuildPinsPutsTheServerOnTheFirstCPUOfTheSet(t *testing.T) {
+	pins, err := BuildPins("0,1", "2,3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := pins["server"]; got.CPUs != "0" || got.GOMAXPROCS != 1 || got.Shards != 2 {
+		t.Errorf("server pin = %+v, want cpus 0, gomaxprocs 1, 2 shards", got)
+	}
+	if got := pins["reflector"]; got.CPUs != "0,1" || got.GOMAXPROCS != 2 {
+		t.Errorf("reflector pin = %+v, want the whole server set", got)
+	}
+	if got := pins["generator"]; got.CPUs != "2,3" || got.GOMAXPROCS != 2 {
+		t.Errorf("generator pin = %+v", got)
+	}
+	// A set that does not start at 0 still pins to its own first CPU.
+	pins, err = BuildPins("4-5", "6-7")
+	if err != nil || pins["server"].CPUs != "4" {
+		t.Fatalf("pins = %+v err = %v", pins, err)
+	}
+}
+
+func TestBuildPinsRejectsOverlapAndBadSets(t *testing.T) {
+	for _, c := range [][2]string{{"0,1", "1,2"}, {"", "2"}, {"0", ""}, {"x", "2"}} {
+		if _, err := BuildPins(c[0], c[1]); err == nil {
+			t.Errorf("BuildPins(%q, %q) must fail", c[0], c[1])
+		}
+	}
+}

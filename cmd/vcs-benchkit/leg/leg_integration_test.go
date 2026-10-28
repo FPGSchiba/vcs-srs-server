@@ -5,6 +5,7 @@ package leg
 import (
 	"context"
 	"encoding/csv"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -48,6 +49,19 @@ func TestLegSmoke(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(out, f)); err != nil {
 			t.Errorf("missing %s: %v", f, err)
 		}
+	}
+	mb, err := os.ReadFile(filepath.Join(out, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var man struct {
+		Pins map[string]PinRecord `json:"pins"`
+	}
+	if err := json.Unmarshal(mb, &man); err != nil {
+		t.Fatal(err)
+	}
+	if got := man.Pins["server"]; got.CPUs != "0" || got.GOMAXPROCS != 1 || got.Shards != 2 {
+		t.Errorf("manifest server pin = %+v, want cpus 0 (the first of the server set), gomaxprocs 1, 2 shards", got)
 	}
 	fh, err := os.Open(filepath.Join(out, "knees.csv"))
 	if err != nil {
