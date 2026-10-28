@@ -225,7 +225,7 @@ Verification: `go build -tags headless ./...`, `go vet -tags headless ./...`, `g
 | Registration reports the real server version instead of `"0.1.0"`. | Nobody reads it today |
 | Reconnect: one loop; no heartbeat multiplication; retries if the control node was down at start-up (R-1); **retries forever**, WARN at most once a minute (D2). | Operators (logs); control-side heartbeat rate |
 | Control node: a blipping node is not deregistered by its own old stream (D4) and keeps its coalitions, whether its record is still present (D5) or was deregistered within the last 120 s (D8). | Clients on that node; operators |
-| Control node: a node whose feed falls behind gets its stream ended and resyncs, instead of silently diverging (D7). | Operators (one WARN); voice routing correctness |
+| Control node: a node whose feed falls behind gets its stream ended and is deregistered, instead of silently diverging; a live node re-registers, gets its coalitions back through the 120 s tombstone and resyncs, and a dead node stops holding its coalitions (D7, D8). | Operators (one WARN); voice routing correctness |
 | Stopping a distributed voice server ends its control registration (R-4). | Operators (distribution view) |
 
 **Opus geometry (CLAUDE.md):** not touched. The server never decodes; it forwards `packet.Payload` bytes unchanged at the sender's cadence (20 ms). Only fan-out scheduling changes (inline per shard instead of a goroutine per recipient; header serialised once). No frame is re-timed, merged or split.
@@ -236,9 +236,9 @@ Verification: `go build -tags headless ./...`, `go vet -tags headless ./...`, `g
 
 ## 8. Cross-track contracts
 
-- **SV1 → SV4 (kept, D6):** `SetKickHandler` stays a field set once before `ConnectControlServer`, under `kickMu`; no reconnect path clears or re-sets it (test 15). `applyControlMessage`'s `KickClient` and `LEFT` handling is unchanged and still called outside the state lock, now on the supervisor goroutine. `DropVoiceSession` (`service.go:734-765`) is unchanged; with R-2/D7 it may briefly target a node whose stream is being replaced or detached (a nil stream is skipped; a send error is logged only, as SV1 designed, and the next stream's snapshot lacks the removed client).
+- **SV1 → SV4 (kept, D6):** `SetKickHandler` stays a field set once before `ConnectControlServer`, under `kickMu`; no reconnect path clears or re-sets it (test 15). `applyControlMessage`'s `KickClient` and `LEFT` handling is unchanged and still called outside the state lock, now on the supervisor goroutine. `DropVoiceSession` (`service.go:734-765`) is unchanged; with R-2/D7 it may briefly target a node whose stream is being replaced or deregistered (a nil stream is skipped; a send error is logged only, as SV1 designed, and the next stream's snapshot lacks the removed client).
 - **SV2 → SV4 (D7):** SV4 consumes SV2's filtered overflow-aware subscription and SV2's slow-subscriber status code. SV4 does not edit `events/*`. Ordering: **SV4's branch is cut from (or rebased onto) `origin/main` after SV2's PR merges.** Tasks that do not touch the feed may be implemented earlier on a branch from `dcce3ad` only if the orchestrator says so; the feed task then waits for the rebase. SV2's publish-waits-for-state-events change is safe with `rebalance` publishing under `s.mu` (SV2 design §3.2).
-- **Lock order:** voice node: the kick handler (`DisconnectClient`) takes `v.Lock`; `Stop()` never holds `v.Lock` while waiting on the control client. Control side: `s.mu` then `serverState`, as SV1 established. `deregisterNodeIf` and the overflow detach take only `s.mu`.
+- **Lock order:** voice node: the kick handler (`DisconnectClient`) takes `v.Lock`; `Stop()` never holds `v.Lock` while waiting on the control client. Control side: `s.mu` then `serverState`, as SV1 established. `deregisterNodeIf` (also used on overflow) takes only `s.mu`.
 - **CL1:** none. Only packet ordering changes on the client wire; the client's jitter buffer tolerates either.
 - **UP (Wave 4):** touches `go.mod` and workflows, none of SV4's files.
 - **DOC / manual checklist:** §13 below.
