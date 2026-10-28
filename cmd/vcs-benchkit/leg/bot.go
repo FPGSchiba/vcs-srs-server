@@ -72,7 +72,18 @@ type Step struct {
 type botLine struct {
 	step Step
 	err  error
+	// joins is a decoded v2 `joins` line.
+	joins *Joins
+	// joinErr is a v1 error line whose text is a join failure (data, not a
+	// fatal bot error).
+	joinErr string
 }
+
+// joinFailureError carries a join-failure text out of wait. It is an error to
+// every caller except SetN, which turns it into Joins.
+type joinFailureError struct{ text string }
+
+func (e *joinFailureError) Error() string { return e.text }
 
 // Bot drives a running `vcs-loadbot run` over its NDJSON stdin/stdout.
 //
@@ -82,17 +93,28 @@ type botLine struct {
 // report line comes back only when the ramp is done), but only once a hold
 // has run. Before that, SetN is fire-and-forget and the first Hold absorbs the
 // ramp: give that Hold a context that allows for it.
+//
+// A join failure is data, not an abort: a v2 bot writes a `joins` line and
+// carries on, and a v1 bot's join-failure error line (it then exits) is turned
+// into the same Joins by SetN.
 type Bot struct {
 	mu   sync.Mutex
 	w    io.Writer
 	held bool
 	seq  int
+	n    int // bots alive as far as the kit knows (the next SetN's "had")
 
 	lines chan botLine
+
+	jmu       sync.Mutex
+	lastJoins *Joins
 }
 
 // NewBot starts reading r. The caller owns the process behind w and r.
-func NewBot(w io.Writer, r io.Reader) *Bot {
+// onProgress receives every `progress` line synchronously on the reader
+// goroutine, so it must be quick; a panic in it is recovered. nil means no
+// relay.
+func NewBot(w io.Writer, r io.Reader, onProgress func(Progress)) *Bot {
 	b := &Bot{w: w, lines: make(chan botLine, 16)}
 	go func() {
 		defer close(b.lines)
@@ -113,7 +135,12 @@ func NewBot(w io.Writer, r io.Reader) *Bot {
 			}
 			switch head.Type {
 			case "error":
-				b.lines <- botLine{err: fmt.Errorf("loadbot: %s", head.Error)}
+				text := "loadbot: " + head.Error
+				if IsJoinFailureText(text) {
+					b.lines <- botLine{joinErr: text}
+				} else {
+					b.lines <- botLine{err: errors.New(text)}
+				}
 			case "step":
 				var s Step
 				if err := json.Unmarshal(raw, &s); err != nil {
@@ -121,10 +148,53 @@ func NewBot(w io.Writer, r io.Reader) *Bot {
 					continue
 				}
 				b.lines <- botLine{step: s}
+			case "joins":
+				var j Joins
+				if err := json.Unmarshal(raw, &j); err != nil {
+					b.lines <- botLine{err: fmt.Errorf("loadbot: bad joins line: %w", err)}
+					continue
+				}
+				j.Source = JoinsSourceV2
+				b.setLastJoins(j)
+				b.lines <- botLine{joins: &j}
+			case "progress":
+				if onProgress == nil {
+					continue
+				}
+				var p Progress
+				if err := json.Unmarshal(raw, &p); err != nil {
+					continue // informational: an unreadable one is not worth a failure
+				}
+				relayProgress(onProgress, p)
 			}
 		}
 	}()
 	return b
+}
+
+// relayProgress calls fn and swallows a panic: a logging bug must not kill the
+// reader, which would look like the bot exiting.
+func relayProgress(fn func(Progress), p Progress) {
+	defer func() { _ = recover() }()
+	fn(p)
+}
+
+func (b *Bot) setLastJoins(j Joins) {
+	b.jmu.Lock()
+	b.lastJoins = &j
+	b.jmu.Unlock()
+}
+
+// LastJoins returns the most recent `joins` line read from the bot. SetN
+// before the first hold is fire-and-forget, so the line for that ramp arrives
+// during the first Hold and is read here afterwards.
+func (b *Bot) LastJoins() (Joins, bool) {
+	b.jmu.Lock()
+	defer b.jmu.Unlock()
+	if b.lastJoins == nil {
+		return Joins{}, false
+	}
+	return *b.lastJoins, true
 }
 
 func truncate(s string, n int) string {
@@ -154,53 +224,99 @@ func (b *Bot) writeFailed(werr error) error {
 		if ok && l.err != nil {
 			return l.err
 		}
+		if ok && l.joinErr != "" {
+			return &joinFailureError{text: l.joinErr}
+		}
 	case <-time.After(250 * time.Millisecond):
 	}
 	return fmt.Errorf("loadbot: write command: %w", werr)
 }
 
 // wait returns the step line labelled label. Any error line from the bot, the
-// bot closing its output, or ctx ending is an error.
-func (b *Bot) wait(ctx context.Context, label string) (Step, error) {
+// bot closing its output, or ctx ending is an error. A join-failure error line
+// is a *joinFailureError. The v2 joins line seen on the way is returned too.
+func (b *Bot) wait(ctx context.Context, label string) (Step, *Joins, error) {
+	var joins *Joins
 	for {
 		select {
 		case <-ctx.Done():
-			return Step{}, ctx.Err()
+			return Step{}, joins, ctx.Err()
 		case l, ok := <-b.lines:
 			if !ok {
-				return Step{}, errors.New("loadbot: exited before answering")
+				return Step{}, joins, errors.New("loadbot: exited before answering")
 			}
 			if l.err != nil {
-				return Step{}, l.err
+				return Step{}, joins, l.err
+			}
+			if l.joinErr != "" {
+				return Step{}, joins, &joinFailureError{text: l.joinErr}
+			}
+			if l.joins != nil {
+				joins = l.joins
+				continue
 			}
 			if l.step.Step == label {
-				return l.step, nil
+				return l.step, joins, nil
 			}
 		}
 	}
 }
 
 // SetN grows the bot count to n. See Bot for when it blocks.
-func (b *Bot) SetN(ctx context.Context, n int) error {
+//
+// A join failure is returned as Joins with a nil error. After the sync report
+// the result is the v2 `joins` line, or, for a v1 bot, the join failure
+// recovered from its error line (BotExited is then set), or Source "none".
+// Before the first hold there is nothing to wait for and the result is
+// Source "pending". Any other bot error, a closed bot and a cancelled ctx stay
+// errors.
+func (b *Bot) SetN(ctx context.Context, n int) (Joins, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	had := b.n
+	asJoins := func(err error) (Joins, bool) {
+		var je *joinFailureError
+		if errors.As(err, &je) {
+			return JoinsFromV1Error(n, had, je.text), true
+		}
+		return Joins{}, false
+	}
 	if err := b.send(map[string]int{"set_n": n}); err != nil {
-		return err
+		if j, ok := asJoins(err); ok {
+			return j, nil
+		}
+		return Joins{}, err
 	}
 	if !b.held {
-		return nil
+		b.n = n
+		return Joins{Source: JoinsSourcePending, Requested: n, Had: had}, nil
 	}
 	b.seq++
 	label := fmt.Sprintf("sync-%d", b.seq)
 	if err := b.send(map[string]string{"report": label}); err != nil {
-		return err
+		if j, ok := asJoins(err); ok {
+			return j, nil
+		}
+		return Joins{}, err
 	}
-	_, err := b.wait(ctx, label)
-	return err
+	_, joins, err := b.wait(ctx, label)
+	if err != nil {
+		if j, ok := asJoins(err); ok {
+			return j, nil
+		}
+		return Joins{}, err
+	}
+	if joins != nil {
+		b.n = joins.N
+		return *joins, nil
+	}
+	b.n = n
+	return Joins{Source: JoinsSourceNone, Requested: n, Had: had, N: n, Joined: n - had}, nil
 }
 
 // Hold runs one hold of d and returns its report. The report is requested
-// right behind the hold, so it arrives when the hold has ended.
+// right behind the hold, so it arrives when the hold has ended. A join failure
+// seen here (the first hold absorbs the first ramp) is an error.
 func (b *Bot) Hold(ctx context.Context, d time.Duration, label string) (Step, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -210,7 +326,7 @@ func (b *Bot) Hold(ctx context.Context, d time.Duration, label string) (Step, er
 	if err := b.send(map[string]string{"report": label}); err != nil {
 		return Step{}, err
 	}
-	st, err := b.wait(ctx, label)
+	st, _, err := b.wait(ctx, label)
 	if err == nil {
 		b.held = true
 	}

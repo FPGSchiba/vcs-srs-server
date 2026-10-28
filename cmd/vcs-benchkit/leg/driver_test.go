@@ -68,12 +68,12 @@ func (w *fakeWorld) Start(ctx context.Context) (System, error) {
 	return &fakeSystem{w: w}, nil
 }
 
-func (s *fakeSystem) SetN(ctx context.Context, n int) error {
+func (s *fakeSystem) SetN(ctx context.Context, n int) (Joins, error) {
 	if n < s.n {
-		return errors.New("fake: set_n cannot decrease")
+		return Joins{}, errors.New("fake: set_n cannot decrease")
 	}
 	s.n = n
-	return nil
+	return Joins{}, nil
 }
 
 func (s *fakeSystem) Hold(ctx context.Context, d time.Duration, label string) (Step, error) {

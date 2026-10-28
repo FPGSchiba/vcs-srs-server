@@ -114,7 +114,7 @@ func (e *hostEnv) Start(ctx context.Context) (System, error) {
 	}
 	s := &hostSystem{
 		env: e, top: top, cmd: cmd, stdin: stdin, logf: logf,
-		bot:  NewBot(stdin, stdout),
+		bot:  NewBot(stdin, stdout, nil),
 		done: make(chan struct{}),
 		sampler: &procSampler{
 			serverPID: top.PIDs()[topology.Standalone], genPID: cmd.Process.Pid,
@@ -141,7 +141,7 @@ type hostSystem struct {
 	holds int
 }
 
-func (s *hostSystem) SetN(ctx context.Context, n int) error { return s.bot.SetN(ctx, n) }
+func (s *hostSystem) SetN(ctx context.Context, n int) (Joins, error) { return s.bot.SetN(ctx, n) }
 
 // Hold bounds each call: the hold itself, its 200 ms drain and a margin. The
 // first hold also absorbs the first ramp, which is as long as the bots need.

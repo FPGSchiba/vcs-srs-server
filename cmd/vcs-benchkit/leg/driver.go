@@ -15,7 +15,8 @@ import (
 type Generator interface {
 	// SetN grows the bot count; it returns once the ramp has finished (after
 	// the first hold; before it the first Hold absorbs the ramp).
-	SetN(ctx context.Context, n int) error
+	// A join failure is data (Joins.JoinFailures > 0), not an error.
+	SetN(ctx context.Context, n int) (Joins, error)
 	// Hold runs one hold and returns its report.
 	Hold(ctx context.Context, d time.Duration, label string) (Step, error)
 }
@@ -149,7 +150,7 @@ func (d *Driver) boot(ctx context.Context) error {
 	d.sys = sys
 	d.out.Starts++
 	d.joined = 0
-	if err := sys.SetN(ctx, 2); err != nil {
+	if _, err := sys.SetN(ctx, 2); err != nil {
 		return fmt.Errorf("pre-flight: %w", err)
 	}
 	// The first hold absorbs the ramp and the first HELLOs.
@@ -189,7 +190,7 @@ func (d *Driver) ensure(ctx context.Context, n int) error {
 	}
 	t0 := d.cfg.Clock.Now()
 	add := n - d.joined
-	if err := d.sys.SetN(ctx, n); err != nil {
+	if _, err := d.sys.SetN(ctx, n); err != nil {
 		return fmt.Errorf("set_n %d: %w", n, err)
 	}
 	d.joined = n
