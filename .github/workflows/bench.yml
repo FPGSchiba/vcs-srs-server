@@ -379,18 +379,25 @@ jobs:
           REPEAT: ${{ matrix.repeat }}
           SCENARIO: ${{ matrix.scenario }}
         run: |
-          knees="results/${REPEAT}-${SCENARIO}/knees.csv"
+          dir="results/${REPEAT}-${SCENARIO}"
+          md="$dir/results.md"
+          knees="$dir/knees.csv"
           {
             echo "### Leg ${REPEAT} ${SCENARIO}"
             echo
-            if [ -f "$knees" ]; then
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -f "$md" ]; then
+            # The same table the leg already printed to the run log.
+            cat "$md" >> "$GITHUB_STEP_SUMMARY"
+          elif [ -f "$knees" ]; then
+            {
               echo '```'
               cat "$knees"
               echo '```'
-            else
-              echo "No knees.csv: this leg did not finish. Partial files, if any, are in the leg artifact."
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No knees.csv: this leg did not finish. Partial files, if any, are in the leg artifact." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       # The directory name carries <repeat>-<scenario>, so merge-multiple in
       # aggregate keeps every leg's files apart.
@@ -440,14 +447,27 @@ jobs:
             echo "::warning::aggregating $legs of $IN_REPEATS legs (run job result: $RUN_RESULT); the statistics cover the surviving legs only"
             echo "PARTIAL: $legs of $IN_REPEATS legs aggregated (run job result: $RUN_RESULT)" >> "$GITHUB_STEP_SUMMARY"
           fi
-          bin/vcs-benchkit aggregate --in results --out "$OUT"
-          {
-            echo "### Aggregate (median, min, max across repeats)"
-            echo
-            echo '```'
-            cat "$OUT/aggregate.csv"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          # aggregate prints its table to this log; capture its status so the
+          # summary is written even when it fails, then fail the step with it.
+          status=0
+          bin/vcs-benchkit aggregate --in results --out "$OUT" || status=$?
+          if [ -f "$OUT/aggregate.md" ]; then
+            {
+              echo "### Aggregate (all legs)"
+              echo
+            } >> "$GITHUB_STEP_SUMMARY"
+            cat "$OUT/aggregate.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f "$OUT/aggregate.csv" ]; then
+            {
+              echo "### Aggregate (median, min, max across repeats)"
+              echo
+              echo '```'
+              cat "$OUT/aggregate.csv"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$status"
 
       - name: Upload aggregate
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
