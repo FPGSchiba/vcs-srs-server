@@ -19,7 +19,7 @@
 
 This is the server repo's copy of the plan. The design spec lives in the **client** repo at `docs/superpowers/specs/2026-10-28-phase-6-9-up-wails-ga-upgrade-design.md`; the scratchpad `design-UP.md` references below are the draft it was committed from. Part 1 (client) is executed and recorded in the client repo; its checkboxes are left as written here. Part 2 checkboxes are ticked as executed on branch `chore/cleanup-up` (base `origin/main` `09f9180`).
 
-- **Approvals at execution time (the user, 2026-10-28):** the design ("Looks good to me."), execution through a subagent-driven workflow, the conditional Dependabot `ignore` for `@wailsio/runtime` in both repos ("Yes, ignore it", so S1b ran), and one branch dispatch each of the client release build and `wails-check` during the PR step. The "Needs the user" items 1 and 2 below are therefore resolved; the Gates table rows marked "not approved" / "not covered" are superseded by these answers.
+- **Approvals at execution time (the user, 2026-10-28):** the design ("Looks good to me."), execution through a subagent-driven workflow, the conditional Dependabot `ignore` for `@wailsio/runtime` in both repos ("Yes, ignore it", so S1b ran), and one branch dispatch each of the client release build and `wails-check` during the PR step ("(a) Release build dispatch, (b) Wails-check dispatch"). These answers resolve "Needs the user" item 1 and the execution half of item 2, and supersede the Gates table's "not approved" row for the Dependabot `ignore`. They do **not** cover the push/open-PR half of item 2 (S6), nor item 3's first `wails-check` dispatch after merge (the approved dispatch is on the branch, before merge); both remain for the user to confirm.
 - **S2** gained a follow-up refactor commit (the undefined-entry filter hoisted out of JSX), **S3** a review-nit commit, and **S1b** a comment fix dropping the client-only test name.
 - **S5 Step 1 result (2026-10-28, Windows, local):**
   - generate (3× protoc, gqlgen), headless build/vet, Linux cross-build: exit 0; `go test -race -tags headless`: 10 packages `ok`;
@@ -30,6 +30,8 @@ This is the server repo's copy of the plan. The design spec lives in the **clien
   - script tests (`assert-go-toolchain`, `go-deps-update`, `wails-update-check`): pass;
   - `diff -r` of the bindings against the baseline: only the map types (`{ [_ in string]?: T }`), `LastUpdate: string` (default `"0001-01-01T00:00:00.000Z"`), `bindings/time` gone and `bindings/events/index.ts` added.
   - Local deviation: protoc on the executing machine was `libprotoc 36.0`, not 36.2 (CI pins 36.2). Generation and every Go step succeeded with it.
+- The `$S/...` baseline files the plan refers to (e.g. `$S/up-srv-tsc-<stage>.txt`, `$S/up-srv-bindings-before`) lived in a transient session scratchpad and are not recoverable; the numbers recorded above (tsc 112, govulncheck 10 / 21 -> 6, the bindings diff summary) are the durable record.
+- Running the full suite on Windows leaves two non-content side effects that must not be committed: gqlgen rewrites `graphql/schema.resolvers.go` with LF line endings (undo with `git checkout -- graphql/schema.resolvers.go`), and vitest creates an untracked `frontend/coverage/`. Both were reverted before the S5 commit.
 - Nothing here is hardware-verified. The manual list at the end of Part 2 is unrun.
 
 ## Global Constraints
