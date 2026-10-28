@@ -374,32 +374,44 @@ jobs:
             --client-sha "$(jq -r .client_sha bin/build.json)" \
             --q6 "A: server 2 vCPU, bots 2 vCPU (user, 2026-10-28)"
 
+      # A failed leg still writes steps.csv, calibration.csv and the manifest
+      # for inspection, so the summary and the upload run unless cancelled.
       - name: Summary
+        if: ${{ !cancelled() }}
         env:
           REPEAT: ${{ matrix.repeat }}
           SCENARIO: ${{ matrix.scenario }}
         run: |
+          knees="results/${REPEAT}-${SCENARIO}/knees.csv"
           {
             echo "### Leg ${REPEAT} ${SCENARIO}"
             echo
-            echo '```'
-            cat "results/${REPEAT}-${SCENARIO}/knees.csv"
-            echo '```'
+            if [ -f "$knees" ]; then
+              echo '```'
+              cat "$knees"
+              echo '```'
+            else
+              echo "No knees.csv: this leg did not finish. Partial files, if any, are in the leg artifact."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       # The directory name carries <repeat>-<scenario>, so merge-multiple in
       # aggregate keeps every leg's files apart.
       - name: Upload leg results
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: results-${{ matrix.repeat }}-${{ matrix.scenario }}
           path: results
-          if-no-files-found: error
+          if-no-files-found: warn
 
   # No sanitiser and no publish yet: both arrive with S5.
   aggregate:
     name: Aggregate
     needs: run
+    # Runs after failed legs too, so the surviving legs still aggregate. It is
+    # skipped when run itself was skipped (probe_only, or a failed build/micro).
+    if: ${{ !cancelled() && needs.run.result != 'skipped' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -421,8 +433,16 @@ jobs:
       - name: Aggregate
         env:
           OUT: bench-results-${{ github.run_id }}
+          IN_REPEATS: ${{ inputs.repeats }}
+          RUN_RESULT: ${{ needs.run.result }}
         run: |
           chmod +x bin/vcs-benchkit
+          # v1 has one scenario, so the expected leg count is `repeats`.
+          legs="$(find results -name knees.csv 2>/dev/null | wc -l)"
+          if [ "$legs" -ne "$IN_REPEATS" ]; then
+            echo "::warning::aggregating $legs of $IN_REPEATS legs (run job result: $RUN_RESULT); the statistics cover the surviving legs only"
+            echo "PARTIAL: $legs of $IN_REPEATS legs aggregated (run job result: $RUN_RESULT)" >> "$GITHUB_STEP_SUMMARY"
+          fi
           bin/vcs-benchkit aggregate --in results --out "$OUT"
           {
             echo "### Aggregate (median, min, max across repeats)"
