@@ -119,6 +119,82 @@ Flags go straight to the binary, for example `bin/vcs-server-headless --mode con
 - `--mode standalone|control|voice`: headless only. Default `standalone`.
 - `--global`: headless only, and only with `--mode voice`. Run as the global-frequency voice node. Default `false`.
 
+## Client connections
+
+What a client (the VCS client or another SRS client) needs to reach this server.
+
+### Ports
+
+| Listener | Config key | Default | Modes | Serves |
+|---|---|---|---|---|
+| Client gRPC (TCP) | `servers.control` | `0.0.0.0:5002` (the Docker and deploy configs use `14446`) | standalone, control | `SRSService`, `AuthService`, `grpc.health.v1`, gRPC reflection |
+| Voice (UDP) | `servers.voice` | `0.0.0.0:5002` | standalone, voice | voice packets |
+| Admin HTTP (TCP) | `servers.http` | `0.0.0.0:80` | standalone, control | GraphQL at `POST /api/v1/graphql`, protected by `api.key` in the `X-API-Key` header; an empty `api.key` disables it with HTTP 503 |
+| VoiceControl gRPC (TCP) | `voiceControl.listenHost` / `voiceControl.port` | `0.0.0.0:14448` | control | voice nodes only, always TLS; never clients |
+
+TCP 5002 and UDP 5002 do not clash. The client gRPC port accepts keepalive pings no more often than every 60 s; a client that pings more often is sent GOAWAY.
+
+### Voice address
+
+`SyncClient` returns `coalition_voice_addr` and `global_voice_addr`.
+
+- **Standalone:** both are empty, because no voice node registers, so clients derive the address themselves. The VCS client uses `[voice] port` only together with `[voice] host`; with no host it uses the server URL's host and port 5002. If you change `servers.voice.port` on a standalone server, every VCS client must set both `[voice] host` and `[voice] port`.
+- **Distributed:** each voice node registers its `voiceControl.publicAddr`, either `host:port` (the port wins, e.g. a NAT mapping) or a bare host (the port comes from `servers.voice.port`). An empty value, `0.0.0.0` / `::`, a missing host or a bad port refuses registration. The control node hands `host:port` to clients, so it must be a name or address clients can reach, not a Docker service name.
+
+A voice binding that receives no packets is removed after 60–90 s.
+
+### Client-facing TLS
+
+```yaml
+clientTLS:
+  certificateFile: /certs/srs-cert.pem
+  privateKeyFile:  /certs/srs-private-key.pem
+  serverName:      vcs.example.net
+```
+
+`clientTLS` is a top-level block, separate from `voiceControl`, so an admin settings save cannot erase it.
+
+- **Block omitted:** the client port serves plaintext and the server logs a WARN at startup. The VCS client refuses plaintext for any host that is not loopback.
+- **Only one of the two files set:** the client port stays down, and the error names the missing field. The process and the admin HTTP port stay up.
+- **Key file absent:** the server generates a self-signed RSA-2048 certificate, valid for 365 days and not a CA, with the SANs `localhost`, `127.0.0.1`, `::1` and `serverName` (an IP SAN if `serverName` is an IP). Both files are written with mode 0600, reused on later starts, and never renewed.
+- **Certificate present, key absent:** both are regenerated and the existing certificate is **overwritten**.
+- **Key present, certificate absent:** the client port stays down with an error.
+- **Your own certificate:** as of commit `df8d9f3` the key must be a PKCS#1 RSA key (`-----BEGIN RSA PRIVATE KEY-----`). PKCS#8 keys (`-----BEGIN PRIVATE KEY-----`) are refused, and ECDSA keys cannot be used at all. Convert an RSA key with OpenSSL 3: `openssl rsa -in key.pem -traditional -out key-pkcs1.pem`. OpenSSL 1.1.1 has no `-traditional` and already writes PKCS#1: `openssl rsa -in key.pem -out key-pkcs1.pem`. With any other tool, check that the output starts with `-----BEGIN RSA PRIVATE KEY-----`.
+
+Clients verify the hostname they dial against the certificate. With a self-signed certificate, copy only the certificate (never the key) to each client and point the VCS client's `tls_ca_file` at it. A failed handshake is logged at WARN; when the client spoke plaintext, the log line says so.
+
+### Client version floor
+
+`InitAuth` refuses a client whose reported version is below `srs.MinClientVersion` (`v0.1.0`), compared as semver. The leading `v` is optional, and an empty or invalid version is refused with `Unsupported client version "<version>"; this server requires v0.1.0 or newer`. Raise the floor only in a deliberate PR, and tell the client repository (the VCS client reports `0.1.0`).
+
+### Login
+
+- `InitAuth` also refuses a client whose supported distribution modes do not include the server's. The VCS client advertises STANDALONE only, so **it cannot log into a control-mode server today** (client ROADMAP, Phase 9).
+- Defaults: `security.enableGuestAuth: true`, `security.enablePluginAuth: false`.
+- `GuestLogin`: the name is 1–32 bytes and the unit ID matches `^[A-Z0-9]{2,4}$`. The password field carries a bcrypt hash of the coalition password, made by the client; the server compares it with each coalition's plaintext password and the first match wins.
+- The server accepts a bcrypt cost of at most 12. A hash with a higher cost, or a value that is not a bcrypt hash, is refused with a message starting `Invalid password hash` and logged at WARN. Clients must hash at cost 12 or lower (Go's `bcrypt.DefaultCost` is 10).
+- AuthService refusals are `Success: false` responses, not gRPC errors.
+- Pending logins (an `InitAuth` not yet redeemed) live 5 min, re-armed by each login step, and are swept every 60 s. At most 10,000 exist in total and 32 per client IP; over either cap, `InitAuth` answers with a "busy" / "too many pending logins" message.
+
+### Session lifecycle
+
+| The client sees | Meaning |
+|---|---|
+| `Unauthenticated "session not found for <method>: log in again"` (any RPC) or `Unauthenticated "session not found: log in again"` (`SubscribeToUpdates`) | The session is gone: log in again. |
+| `Unauthenticated "authentication error for <method>: …"` | The token is bad, malformed or expired: log in again. |
+| `PermissionDenied` | The token's role is too low for this method. |
+| `Internal "token verification unavailable"` | The server cannot verify tokens right now. The session is not lost. |
+| Update stream ends with `Unauthenticated "session ended: <reason>"`, where the reason is `disconnected`, `kicked`, `banned`, `stale` or `stream lost` | The server removed the session. A kick or ban first sends a final `SERVER_ACTION` on the stream. |
+| Update stream ends with `Aborted "superseded by a newer subscription"` | A newer `SubscribeToUpdates` for the same session replaced this stream. Do not resubscribe. |
+| Update stream ends with `ResourceExhausted "update stream fell behind: resubscribe and call SyncClient"` | The stream overflowed; the session is intact. Resubscribe, then call `SyncClient`. |
+
+- **Grace:** a session without an update stream survives 120 s, counted from the later of the stream's end and its last unary RPC. The reaper runs every 15 s, so removal happens 120–135 s after that. Any RPC, including `Ping`, resets the clock.
+- **Stale:** a session with a live stream but no RPC for 10 min is removed (`session ended: stale`).
+- **Subscription ack:** once a subscription is registered, the server sends empty response headers. A client that resubscribes waits for them before calling `SyncClient`.
+- A `SERVER_ACTION` is delivered only to the client it targets.
+
+The full contract (C1–C17) is in [SV1 §11](docs/superpowers/specs/2026-10-27-phase-6-9-sv1-session-liveness-design.md#11-cross-track-contracts) and [SV2 §9](docs/superpowers/specs/2026-10-27-phase-6-9-sv2-state-event-correctness-design.md#9-cross-track-contracts).
+
 ## Improvements
 
 * Use a Go Module for the Protobuf files / Generated Go code
