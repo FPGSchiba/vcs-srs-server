@@ -118,9 +118,9 @@ tasks:
     deps:
       - task: common:go:mod:tidy
     cmds:
-      - go build {{.BUILD_FLAGS}} -o {{.OUTPUT}} -tags headless
+      - go build {{.BUILD_FLAGS}} -o {{.OUTPUT}}
     vars:
-      BUILD_FLAGS: '{{if eq .PRODUCTION "true"}}-tags production,headless -trimpath -buildvcs=false -ldflags="-w -s"{{else}}-buildvcs=false -gcflags=all="-l"{{end}}'
+      BUILD_FLAGS: '{{if eq .PRODUCTION "true"}}-tags production,headless -trimpath -buildvcs=false -ldflags="-w -s"{{else}}-tags headless -buildvcs=false -gcflags=all="-l"{{end}}'
       DEFAULT_OUTPUT: '{{.BIN_DIR}}/{{.APP_NAME}}-headless'
       OUTPUT: '{{ .OUTPUT | default .DEFAULT_OUTPUT }}'
     env:
