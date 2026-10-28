@@ -3,6 +3,7 @@ package topology
 import (
 	"reflect"
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -47,6 +48,21 @@ func TestIsBindError(t *testing.T) {
 	} {
 		if IsBindError(s) {
 			t.Errorf("IsBindError(%q) = true, want false", s)
+		}
+	}
+}
+
+func TestStreamEstablishedQuotedID(t *testing.T) {
+	log := `msg="Stream established with voice node" serverId="id 3"
+msg="Stream established with voice node" serverId="id4"
+`
+	got := StreamEstablished(log)
+	if !got["id4"] {
+		t.Errorf("quoted id4 not captured: %v", got)
+	}
+	for k := range got {
+		if strings.Contains(k, `"`) {
+			t.Errorf("captured id retains a quote: %q", k)
 		}
 	}
 }

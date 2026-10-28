@@ -34,7 +34,15 @@ func TestDistributedReady(t *testing.T) {
 		{"ok", status([]string{"Red"}, []string{"Blue"}, g, true), ""},
 		{"empty-b", status([]string{"Blue", "Red"}, nil, g, true), "non-empty"},
 		{"overlap", status([]string{"Blue", "Red"}, []string{"Blue"}, g, true), "disjoint"},
-		{"global-missing", status([]string{"Red"}, []string{"Blue"}, g, false), "global"},
+		{"global-missing", status([]string{"Red"}, []string{"Blue"}, g, false), "global node"},
+		{"wanted-nonglobal-reported-global", func() DistributionStatus {
+			st := status([]string{"Red"}, []string{"Blue"}, g, true)
+			st.Nodes[0].IsGlobal = true
+			return st
+		}(), "reported global"},
+		{"union-mismatch", status([]string{"Red"}, []string{"Green"}, g, true), "union"},
+		{"nodeA-missing", DistributionStatus{GlobalAddr: g, Nodes: status(nil, []string{"Blue"}, g, true).Nodes[1:]}, "not present"},
+		{"nodeB-missing", DistributionStatus{GlobalAddr: g, Nodes: append(status([]string{"Red"}, nil, g, true).Nodes[:1], status(nil, nil, g, true).Nodes[2])}, "not present"},
 		{"globalAddr-mismatch", status([]string{"Red"}, []string{"Blue"}, "127.0.0.1:1", true), "globalAddr"},
 	}
 	for _, tc := range tests {
@@ -50,6 +58,15 @@ func TestDistributedReady(t *testing.T) {
 				t.Fatalf("want error containing %q, got %v", tc.want, err)
 			}
 		})
+	}
+}
+
+func TestDistributedReadyPartialWant(t *testing.T) {
+	st := status([]string{"Red"}, []string{"Blue"}, wantAddrs[Global], true)
+	partial := map[Role]string{NodeA: wantAddrs[NodeA], Global: wantAddrs[Global]}
+	err := DistributedReady(st, partial, []string{"Blue", "Red"})
+	if err == nil || !strings.Contains(err.Error(), "want must name") {
+		t.Fatalf("want error containing %q, got %v", "want must name", err)
 	}
 }
 

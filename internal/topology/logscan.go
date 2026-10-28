@@ -55,14 +55,18 @@ func IsBindError(log string) bool {
 	return false
 }
 
-var streamRe = regexp.MustCompile(`msg="Stream established with voice node" serverId=(\S+)`)
+var streamRe = regexp.MustCompile(`msg="Stream established with voice node" serverId=(?:"([^"]*)"|(\S+))`)
 
 // StreamEstablished returns the node ids that control logged a
 // "Stream established with voice node" line for.
 func StreamEstablished(log string) map[string]bool {
 	out := map[string]bool{}
 	for _, m := range streamRe.FindAllStringSubmatch(log, -1) {
-		out[m[1]] = true
+		id := m[1]
+		if id == "" {
+			id = m[2]
+		}
+		out[id] = true
 	}
 	return out
 }

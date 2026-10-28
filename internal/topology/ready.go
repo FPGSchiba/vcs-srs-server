@@ -35,8 +35,15 @@ func nodeByAddr(st DistributionStatus, addr string) (NodeStatus, bool) {
 // DistributedReady returns nil iff the distribution has settled: both
 // non-global wanted nodes are present with disjoint, non-empty coalition
 // sets whose union is coalitions, and the global node is present and
-// reported as GlobalAddr. Otherwise the error names the first unmet clause.
+// reported as GlobalAddr. want must name both NodeA and NodeB; a partial
+// want is an error rather than a silent skip of the coalition clauses.
+// Otherwise the error names the first unmet clause.
 func DistributedReady(st DistributionStatus, want map[Role]string, coalitions []string) error {
+	for _, r := range []Role{NodeA, NodeB} {
+		if _, ok := want[r]; !ok {
+			return fmt.Errorf("want must name both %s and %s, missing %s", NodeA, NodeB, r)
+		}
+	}
 	var sets [][]string
 	for _, r := range []Role{NodeA, NodeB} {
 		addr, ok := want[r]
