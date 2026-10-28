@@ -198,12 +198,13 @@ func coalitionPassword(t *testing.T, name string) string {
 	return ""
 }
 
-// tune sets radios 1..n to the given frequencies (MHz), all enabled.
+// tune sets radios 1..n to the given frequencies, all enabled. The wire carries
+// MHz (state.IsListeningOnFrequency compares against packet kHz / 1000).
 func (b *bot) tune(freqsMHz ...float32) {
 	b.t.Helper()
 	radios := make([]*pb.Radio, len(freqsMHz))
 	for i, f := range freqsMHz {
-		radios[i] = &pb.Radio{Id: uint32(i + 1), Name: "R" + strconv.Itoa(i+1), Frequency: f * 1e6, Enabled: true}
+		radios[i] = &pb.Radio{Id: uint32(i + 1), Name: "R" + strconv.Itoa(i+1), Frequency: f, Enabled: true}
 	}
 	ctx, cancel := context.WithTimeout(b.ctx, 5*time.Second)
 	defer cancel()
