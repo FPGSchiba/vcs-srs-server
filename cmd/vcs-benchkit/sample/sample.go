@@ -82,7 +82,15 @@ func isCPUName(s string) bool {
 // ParseSSDrops reads `ss -uamp` output and returns, per local "addr:port", the
 // d<n> value of the skmem line (the socket's drop counter, ss(8)). Sockets
 // sharing a local address are summed. A socket whose skmem has no d<n> is
-// listed with 0. The header line, and a leading Netid column, are tolerated.
+// listed with 0. The header line, a leading Netid column, and skmem either on
+// its own continuation line or on the socket line itself are tolerated.
+//
+// An EMPTY map means the output was unparseable, not that there were zero
+// drops: a caller must treat a missing key for a socket it expects (for example
+// a bot socket, D14) as an error or as an invalid step, never as 0.
+//
+// The d<n> value is an unsigned 32-bit kernel counter; diff two samples with
+// DropDelta, not plain subtraction.
 func ParseSSDrops(out []byte) map[string]uint64 {
 	res := map[string]uint64{}
 	var local string
@@ -101,6 +109,11 @@ func ParseSSDrops(out []byte) map[string]uint64 {
 		if local != "" {
 			if _, ok := res[local]; !ok {
 				res[local] = 0
+			}
+			// Some ss versions print skmem on the socket line itself.
+			if i := strings.Index(line, "skmem:("); i >= 0 {
+				res[local] += skmemDrops(line[i+len("skmem:("):])
+				local = ""
 			}
 		}
 	}
@@ -135,4 +148,11 @@ func skmemDrops(s string) uint64 {
 		}
 	}
 	return 0
+}
+
+// DropDelta is the number of drops between two ParseSSDrops samples of one
+// socket. d<n> is an unsigned 32-bit counter in the kernel, so a cur below prev
+// is a wrap, not a decrease.
+func DropDelta(prev, cur uint64) uint64 {
+	return uint64(uint32(cur) - uint32(prev))
 }

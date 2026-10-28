@@ -1,13 +1,19 @@
 package sample
 
 import (
+	"math"
 	"reflect"
 	"strings"
 	"testing"
 )
 
-// Fixtures follow the formats in proc_pid_stat(5), proc_stat(5) and ss(8) as
-// emitted by a Linux 7.0 kernel. Two of the comm fields contain ") (".
+// Fixtures are SYNTHETIC: hand-written from proc_pid_stat(5), proc_stat(5) and
+// ss(8), not captured from a runner. These tests prove the parsers match the
+// man-page formats, not what ubuntu-24.04 actually emits. ss is the risky one:
+// its column spacing, skmem line placement and Netid column vary by version.
+// TODO: replace with captures from a probe run (the first S-arm run should save
+// raw /proc/<pid>/stat, /proc/stat and `ss -uamp` output as an artifact) before
+// the D13 gate. One comm field contains ") (".
 
 const pidStatPlain = "4242 (vcs-server) S 1 4242 4242 0 -1 4194560 12000 0 0 0 1500 320 0 0 20 0 9 0 777 123456789 5000 18446744073709551615 1 1 0 0 0 0 0 0 0 0 0 0 17 1 0 0 0 0 0\n"
 
@@ -135,5 +141,30 @@ func TestParseSSDropsMissingDropField(t *testing.T) {
 func TestParseSSDropsGarbage(t *testing.T) {
 	if got := ParseSSDrops([]byte("not ss output\n\n")); len(got) != 0 {
 		t.Fatalf("got %v", got)
+	}
+}
+
+func TestParseSSDropsSingleLine(t *testing.T) {
+	// Some ss versions print skmem on the socket line itself.
+	in := "UNCONN 0 0 127.0.0.1:41000 0.0.0.0:* users:((\"b\",pid=1,fd=3)) skmem:(r0,rb1,t0,tb1,f0,w0,o0,bl0,d5)\n" +
+		"UNCONN 0 0 127.0.0.1:41001 0.0.0.0:* skmem:(r0,rb1,t0,tb1,f0,w0,o0,bl0,d0)\n"
+	got := ParseSSDrops([]byte(in))
+	want := map[string]uint64{"127.0.0.1:41000": 5, "127.0.0.1:41001": 0}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v want %v", got, want)
+	}
+}
+
+func TestDropDelta(t *testing.T) {
+	cases := []struct{ prev, cur, want uint64 }{
+		{10, 25, 15},
+		{7, 7, 0},
+		{math.MaxUint32 - 2, 3, 6}, // d<n> is a 32-bit counter and wrapped
+		{math.MaxUint32, 0, 1},
+	}
+	for _, c := range cases {
+		if got := DropDelta(c.prev, c.cur); got != c.want {
+			t.Fatalf("DropDelta(%d,%d)=%d want %d", c.prev, c.cur, got, c.want)
+		}
 	}
 }
