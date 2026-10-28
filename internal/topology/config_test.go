@@ -103,14 +103,35 @@ func floatsEq(a, b []float32) bool {
 
 func TestRenderConfigNeverWildcard(t *testing.T) {
 	for name, pc := range rows() {
-		b, err := RenderConfig(pc)
-		if err != nil {
-			t.Fatal(err)
-		}
-		s := string(b)
-		if strings.Contains(s, "0.0.0.0") || strings.Contains(s, "port: 80\n") || strings.Contains(s, "port: 80 ") {
-			t.Errorf("%s renders a wildcard host or port 80:\n%s", name, s)
-		}
+		t.Run(name, func(t *testing.T) {
+			b, err := RenderConfig(pc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var st state.SettingsState
+			if err := yaml.Unmarshal(b, &st); err != nil {
+				t.Fatalf("unmarshal: %v\n%s", err, b)
+			}
+			for label, s := range map[string]state.ServerSetting{
+				"http": st.Servers.HTTP, "control": st.Servers.Control, "voice": st.Servers.Voice,
+			} {
+				if s.Host != "127.0.0.1" {
+					t.Errorf("%s host = %q, want 127.0.0.1", label, s.Host)
+				}
+				if s.Port < 1024 {
+					t.Errorf("%s port = %d, want >= 1024", label, s.Port)
+				}
+			}
+			if st.VoiceControl.ListenHost != "127.0.0.1" {
+				t.Errorf("voiceControl listenHost = %q, want 127.0.0.1", st.VoiceControl.ListenHost)
+			}
+			if st.VoiceControl.Port < 1024 {
+				t.Errorf("voiceControl port = %d, want >= 1024", st.VoiceControl.Port)
+			}
+			if strings.Contains(string(b), "0.0.0.0") {
+				t.Errorf("renders a wildcard host:\n%s", b)
+			}
+		})
 	}
 }
 
