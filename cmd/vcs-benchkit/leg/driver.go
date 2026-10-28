@@ -95,6 +95,18 @@ type Row struct {
 	Data   sweep.StepData
 	// SettleSeconds is the time from the end of the ramp to the measured hold.
 	SettleSeconds float64
+	// Joins is the load bot's account of this step's ramp: how many bots it
+	// tried to add, how many failed to join and at which stage. The zero value
+	// means the ramp added nothing or the bot is v1 and reported no failure.
+	Joins Joins
+	// RampWindow is what the kit's samplers measured over the ramp (zero when
+	// the step did not ramp). RampLogs is the server's log delta over it.
+	RampWindow Window
+	RampLogs   LogCounts
+	// FailedAckedByServer is how many of the failed bots' GUIDs the server
+	// logged an "Accepted voice HELLO" for during the ramp: the server saw the
+	// HELLO that the bot never saw answered. -1 = unknown (no GUIDs reported).
+	FailedAckedByServer int
 }
 
 // Outcome is everything one arm produced.
@@ -115,6 +127,10 @@ type Driver struct {
 
 	sys    System
 	joined int
+	// rebuild is set after a join failure: the server and bot are no longer
+	// trusted, so the next step boots fresh. rebuildAt is the failing N.
+	rebuild   bool
+	rebuildAt int
 	rate   float64
 	start  time.Time
 	out    Outcome
@@ -150,8 +166,10 @@ func (d *Driver) boot(ctx context.Context) error {
 	d.sys = sys
 	d.out.Starts++
 	d.joined = 0
-	if _, err := sys.SetN(ctx, 2); err != nil {
+	if j, err := sys.SetN(ctx, 2); err != nil {
 		return fmt.Errorf("pre-flight: %w", err)
+	} else if j.JoinFailures > 0 {
+		return fmt.Errorf("pre-flight: join failures: %s", joinFailureSummary(j))
 	}
 	// The first hold absorbs the ramp and the first HELLOs.
 	hctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
@@ -174,24 +192,68 @@ func (d *Driver) closeSys() {
 	}
 }
 
+// ramp is what one ensure call measured around its SetN.
+type ramp struct {
+	Joins  Joins
+	Window Window
+	Logs   LogCounts
+	// FailedAcked is Row.FailedAckedByServer for this ramp.
+	FailedAcked int
+	// Ran is false when no SetN was needed.
+	Ran bool
+}
+
+// joinFailureSummary is the one line a fatal join failure and a log line carry:
+// the counts and the first failure in the bot's own words.
+func joinFailureSummary(j Joins) string {
+	s := fmt.Sprintf("%d of %d new bots failed", j.JoinFailures, max(0, j.Requested-j.Had))
+	if len(j.Failed) > 0 {
+		f := j.Failed[0]
+		s += fmt.Sprintf(": bot %d %s: %s", f.Bot, f.Stage, f.Error)
+	}
+	return s
+}
+
 // ensure makes the bot count exactly n. Bots only grow, so a smaller n needs
 // a fresh server and load bot (which also gives the step a server that was not
-// just driven past its knee).
-func (d *Driver) ensure(ctx context.Context, n int) error {
-	if n < d.joined {
+// just driven past its knee), and so does the step after a join failure. A join
+// failure is returned in ramp.Joins, not as an error: the caller decides.
+func (d *Driver) ensure(ctx context.Context, n int) (ramp, error) {
+	var r ramp
+	switch {
+	case d.rebuild:
+		d.note("rebuilt the server and load bot after join failures at %d bots", d.rebuildAt)
+		d.rebuild = false
+		d.closeSys()
+		if err := d.boot(ctx); err != nil {
+			return r, err
+		}
+	case n < d.joined:
 		d.note("rebuilt the server and load bot to go from %d down to %d bots", d.joined, n)
 		d.closeSys()
 		if err := d.boot(ctx); err != nil {
-			return err
+			return r, err
 		}
 	}
 	if n == d.joined {
-		return nil
+		return r, nil
 	}
 	t0 := d.cfg.Clock.Now()
 	add := n - d.joined
-	if _, err := d.sys.SetN(ctx, n); err != nil {
-		return fmt.Errorf("set_n %d: %w", n, err)
+	before, _ := d.sys.LogText()
+	end := d.sys.BeginSample()
+	j, err := d.sys.SetN(ctx, n)
+	win := end()
+	if err != nil {
+		return r, fmt.Errorf("set_n %d: %w", n, err)
+	}
+	after, _ := d.sys.LogText()
+	r = ramp{Joins: j, Window: win, Ran: true, FailedAcked: -1,
+		Logs: CountLog(after).Sub(CountLog(before))}
+	if j.JoinFailures > 0 {
+		r.FailedAcked = FailedAcked(before, after, j.Failed)
+		d.rebuild, d.rebuildAt = true, n
+		return r, nil
 	}
 	d.joined = n
 	// Learn the real join rate once the ramp is long enough to trust, so the
@@ -199,7 +261,7 @@ func (d *Driver) ensure(ctx context.Context, n int) error {
 	if el := d.cfg.Clock.Now().Sub(t0).Seconds(); add >= 50 && el > 0 {
 		d.rate = float64(add) / el
 	}
-	return nil
+	return r, nil
 }
 
 // settle probes with short holds until the step is quiescent (design 6.4.3).
@@ -241,9 +303,27 @@ func (d *Driver) settle(ctx context.Context, rampEnd time.Time) (ok bool, reason
 
 // measure runs one step at n bots: ramp, settle, then the measured hold.
 func (d *Driver) measure(ctx context.Context, kind string, n int, hold time.Duration, label string) (Row, error) {
-	row := Row{Kind: kind, Seq: len(d.out.Rows) + 1, N: n}
-	if err := d.ensure(ctx, n); err != nil {
+	row := Row{Kind: kind, Seq: len(d.out.Rows) + 1, N: n, FailedAckedByServer: -1}
+	rp, err := d.ensure(ctx, n)
+	if err != nil {
 		return row, err
+	}
+	row.Joins, row.RampWindow, row.RampLogs, row.FailedAckedByServer = rp.Joins, rp.Window, rp.Logs, rp.FailedAcked
+	if rp.Joins.JoinFailures > 0 {
+		// The ramp is this step's outcome: no settle, no hold. A join failure
+		// is a server breach unless the generator itself was the limit.
+		nan := math.NaN()
+		by := map[string]uint64{}
+		for k, v := range rp.Joins.FailuresByStage {
+			by[k] = uint64(v)
+		}
+		row.Data = sweep.StepData{
+			N: n, LossRatio: nan, LateLossRatio: nan, ServerCPU: nan, GenCPU: nan,
+			JoinFailures: uint64(rp.Joins.JoinFailures), JoinAttempted: max(0, rp.Joins.Requested-rp.Joins.Had),
+			JoinStages: by, HelloTriesMax: rp.Joins.HelloTriesMax, RampGenCPU: rp.Window.GenCPU,
+		}
+		row.Outcome, row.Reasons = sweep.Classify(row.Data, d.cfg.Bounds)
+		return row, nil
 	}
 	rampEnd := d.cfg.Clock.Now()
 	ok, reason, probeRex, err := d.settle(ctx, rampEnd)
@@ -330,8 +410,10 @@ func (d *Driver) Run(ctx context.Context) (*Outcome, error) {
 
 	// Warm-up: ~10 % of the predicted knee, discarded.
 	warmN := max(2, d.cfg.Predicted/10)
-	if err := d.ensure(ctx, warmN); err != nil {
+	if rp, err := d.ensure(ctx, warmN); err != nil {
 		return &d.out, err
+	} else if rp.Joins.JoinFailures > 0 {
+		return &d.out, fmt.Errorf("warm-up: join failures at %d bots: %s", warmN, joinFailureSummary(rp.Joins))
 	}
 	if _, err := d.sys.Hold(ctx, d.cfg.Warmup, "warmup"); err != nil {
 		return &d.out, fmt.Errorf("warm-up: %w", err)

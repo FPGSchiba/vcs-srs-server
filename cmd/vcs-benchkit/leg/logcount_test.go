@@ -30,3 +30,33 @@ func TestLogCountsSub(t *testing.T) {
 		t.Fatalf("Sub = %+v", got)
 	}
 }
+
+func TestCountLogHelloOutcomes(t *testing.T) {
+	log := `msg="Accepted voice HELLO" sender_id=a
+msg="Accepted voice HELLO" sender_id=b
+msg="Rejected voice HELLO" reason=x
+`
+	got := CountLog(log)
+	if got.HelloAccepted != 2 || got.HelloRejected != 1 {
+		t.Fatalf("CountLog = %+v", got)
+	}
+	if d := got.Sub(CountLog("msg=\"Accepted voice HELLO\" sender_id=a\n")); d.HelloAccepted != 1 || d.HelloRejected != 1 {
+		t.Fatalf("Sub = %+v", d)
+	}
+}
+
+func TestFailedAcked(t *testing.T) {
+	before := "msg=\"Accepted voice HELLO\" sender_id=g1\n"
+	after := before + "msg=\"Accepted voice HELLO\" sender_id=g2\nmsg=\"Rejected voice HELLO\" sender_id=g3\n"
+	failed := []JoinFailure{{GUID: "g1"}, {GUID: "g2"}, {GUID: "g3"}}
+	// g1 was accepted before the ramp, g3 was rejected: only g2 counts.
+	if got := FailedAcked(before, after, failed); got != 1 {
+		t.Errorf("FailedAcked = %d, want 1", got)
+	}
+	if got := FailedAcked("", "", []JoinFailure{{Bot: 3}}); got != -1 {
+		t.Errorf("no GUIDs = %d, want -1", got)
+	}
+	if got := FailedAcked("", "", failed); got != 0 {
+		t.Errorf("empty log = %d, want 0", got)
+	}
+}

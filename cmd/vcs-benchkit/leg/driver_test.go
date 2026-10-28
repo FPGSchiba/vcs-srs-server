@@ -40,6 +40,11 @@ type fakeWorld struct {
 	samplerErr string     // Window.Err of every window
 	deadStart  bool       // pre-flight hold delivers no frames
 	startErr   error
+	joinFailN  int // SetN reports the run-40752831443 handshake failure for n >= joinFailN (0 = never)
+	joinsV2    bool    // report the failure as a v2 joins line (2 failures) instead of a v1 error
+	rampGenCPU float64 // generator CPU of a ramp window whose SetN had join failures (0 = the usual 0.2)
+	failedGUID string  // GUID carried by the v2 failed entries
+	logs       string  // server log text returned by LogText
 	updates    uint64
 	// stepHook and winHook let a test shape one report or one sampler window
 	// independently of the other (n is the bot count of the system).
@@ -54,8 +59,9 @@ type fakeHold struct {
 }
 
 type fakeSystem struct {
-	w *fakeWorld
-	n int
+	w          *fakeWorld
+	n          int
+	failedRamp bool // the last SetN had join failures
 }
 
 func (w *fakeWorld) Start(ctx context.Context) (System, error) {
@@ -69,6 +75,23 @@ func (w *fakeWorld) Start(ctx context.Context) (System, error) {
 }
 
 func (s *fakeSystem) SetN(ctx context.Context, n int) (Joins, error) {
+	s.failedRamp = false
+	if s.w.joinFailN > 0 && n >= s.w.joinFailN {
+		s.failedRamp = true
+		if s.w.joinsV2 {
+			by := map[string]int{"control": 0, "radio": 0, "voice_dial": 0, "hello": 2}
+			return Joins{
+				Schema: JoinsSchema, Requested: n, Had: s.n, N: s.n + (n - s.n - 2), Joined: n - s.n - 2,
+				JoinFailures: 2, FailuresByStage: by, HelloTriesHist: make([]int, helloHistLen), HelloTriesMax: 5,
+				Failed: []JoinFailure{
+					{Bot: 1553, GUID: s.w.failedGUID, Stage: "hello", Tries: 5, Error: "no HELLO_ACK after 5 tries"},
+					{Bot: 1669, GUID: "ffffffff-0000-0000-0000-000000000000", Stage: "hello", Tries: 5, Error: "no HELLO_ACK after 5 tries"},
+				},
+				Source: JoinsSourceV2,
+			}, nil
+		}
+		return JoinsFromV1Error(n, s.n, "loadbot: bot 1669: hello: no HELLO_ACK after 5 tries"), nil
+	}
 	if n < s.n {
 		return Joins{}, errors.New("fake: set_n cannot decrease")
 	}
@@ -101,13 +124,16 @@ func (s *fakeSystem) Hold(ctx context.Context, d time.Duration, label string) (S
 	return st, nil
 }
 
-func (s *fakeSystem) LogText() (string, error) { return "", nil }
+func (s *fakeSystem) LogText() (string, error) { return s.w.logs, nil }
 func (s *fakeSystem) BeginSample() func() Window {
 	n := s.n
 	return func() Window {
 		w := Window{ServerCPU: 0.3, GenCPU: 0.2, Seconds: 40, Err: s.w.samplerErr}
 		if s.w.genBoundN > 0 && n >= s.w.genBoundN {
 			w.GenCPU = 0.95
+		}
+		if s.failedRamp && s.w.rampGenCPU > 0 {
+			w.GenCPU = s.w.rampGenCPU
 		}
 		if s.w.winHook != nil {
 			s.w.winHook(n, &w)
@@ -546,5 +572,159 @@ func TestOverBudgetReservesBothTailRamps(t *testing.T) {
 	// tail ramp the total is ~364 s (fits 400 s); with both it is ~484 s.
 	if !d.overBudget(100, 2700) {
 		t.Fatal("overBudget ignored the overload's own ramp after a rebuilt confirm")
+	}
+}
+
+// Run 40752831443: a voice handshake failure inside a ramp aborted the whole
+// arm. It must instead be that step's recorded outcome (a server breach).
+func TestDriverJoinFailureIsAStepOutcome(t *testing.T) {
+	w := &fakeWorld{kneeN: 1 << 30, joinFailN: 150}
+	out, err := NewDriver(w, testConfig()).Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run aborted on a join failure: %v", err)
+	}
+	var failed *Row
+	sweeps := 0
+	for i := range out.Rows {
+		r := &out.Rows[i]
+		if r.Kind != "sweep" {
+			continue
+		}
+		sweeps++
+		if r.N >= 150 && failed == nil {
+			failed = r
+		}
+	}
+	if failed == nil {
+		t.Fatalf("no sweep row at or above the failing N: %+v", out.Rows)
+	}
+	if failed.Outcome != sweep.Breach {
+		t.Errorf("row at %d: outcome = %v, want Breach", failed.N, failed.Outcome)
+	}
+	if len(failed.Reasons) == 0 || !strings.HasPrefix(failed.Reasons[0], "join failure") {
+		t.Errorf("reasons = %v, want a reason with the prefix \"join failure\"", failed.Reasons)
+	}
+	if sweeps < 3 {
+		t.Errorf("sweep rows = %d: the bisection did not run after the join failure", sweeps)
+	}
+	if out.Result.Kind != sweep.KneeFound {
+		t.Errorf("result = %v, want a knee", out.Result)
+	}
+}
+
+func sweepRowAtOrAbove(out *Outcome, n int) *Row {
+	for i := range out.Rows {
+		if r := &out.Rows[i]; r.Kind == "sweep" && r.N >= n {
+			return r
+		}
+	}
+	return nil
+}
+
+func TestDriverJoinFailureV2KeepsCounts(t *testing.T) {
+	w := &fakeWorld{kneeN: 1 << 30, joinFailN: 150, joinsV2: true, failedGUID: "0b6f3c1e-8f0a-4c1d-9a51-1f2d3c4b5a69"}
+	out, err := NewDriver(w, testConfig()).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := sweepRowAtOrAbove(out, 150)
+	if r == nil {
+		t.Fatalf("no failing row: %+v", out.Rows)
+	}
+	if r.Held {
+		t.Error("a join-failure step must not reach its hold")
+	}
+	if r.Joins.JoinFailures != 2 || r.Joins.FailuresByStage["hello"] != 2 {
+		t.Errorf("Joins = %+v", r.Joins)
+	}
+	if r.Outcome != sweep.Breach || len(r.Reasons) == 0 || !strings.Contains(r.Reasons[0], "join failure: 2 of") {
+		t.Errorf("outcome %v reasons %v", r.Outcome, r.Reasons)
+	}
+	if r.FailedAckedByServer != 0 {
+		t.Errorf("FailedAckedByServer = %d, want 0 (GUIDs present, empty log)", r.FailedAckedByServer)
+	}
+}
+
+func TestDriverJoinFailureCountsFailedGUIDsAckedByServer(t *testing.T) {
+	g := "0b6f3c1e-8f0a-4c1d-9a51-1f2d3c4b5a69"
+	w := &fakeWorld{kneeN: 1 << 30, joinFailN: 150, joinsV2: true, failedGUID: g,
+		logs: "level=INFO msg=\"Accepted voice HELLO\" sender_id=" + g + " addr=1.2.3.4:5\n"}
+	out, err := NewDriver(w, testConfig()).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := sweepRowAtOrAbove(out, 150)
+	if r == nil {
+		t.Fatal("no failing row")
+	}
+	// The fake's log never grows, so the ramp delta is empty: 0 of 2 acked.
+	if r.FailedAckedByServer != 0 {
+		t.Errorf("FailedAckedByServer = %d, want 0", r.FailedAckedByServer)
+	}
+}
+
+func TestDriverJoinFailureWithHotGeneratorIsInvalid(t *testing.T) {
+	w := &fakeWorld{kneeN: 1 << 30, joinFailN: 150, rampGenCPU: 0.95}
+	out, err := NewDriver(w, testConfig()).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := sweepRowAtOrAbove(out, 150)
+	if r == nil || r.Outcome != sweep.Invalid {
+		t.Fatalf("row = %+v, want Invalid", r)
+	}
+	if out.Result.Kind != sweep.GeneratorBound {
+		t.Errorf("result = %v, want generator-bound", out.Result)
+	}
+}
+
+func TestDriverRebuildsAfterJoinFailure(t *testing.T) {
+	w := &fakeWorld{kneeN: 1 << 30, joinFailN: 150}
+	out, err := NewDriver(w, testConfig()).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Starts < 2 {
+		t.Errorf("starts = %d, want a rebuild", out.Starts)
+	}
+	found := false
+	for _, n := range out.Notes {
+		if strings.Contains(n, "rebuilt the server and load bot after join failures at") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("notes = %v", out.Notes)
+	}
+}
+
+func TestDriverJoinFailureAtOverloadIsRecorded(t *testing.T) {
+	// The sweep passes everywhere below 1500; the 2x overload step fails to join.
+	w := &fakeWorld{kneeN: 1 << 30, joinFailN: 1500}
+	cfg := testConfig()
+	cfg.NMax = 1000
+	out, err := NewDriver(w, cfg).Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run aborted: %v", err)
+	}
+	last := out.Rows[len(out.Rows)-1]
+	if last.Kind != "overload" || last.Outcome != sweep.Breach {
+		t.Fatalf("last row = %s %v, want overload breach", last.Kind, last.Outcome)
+	}
+}
+
+func TestDriverJoinFailureInWarmupIsFatal(t *testing.T) {
+	w := &fakeWorld{kneeN: 1 << 30, joinFailN: 40}
+	_, err := NewDriver(w, testConfig()).Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "warm-up: join failures") || !strings.Contains(err.Error(), "no HELLO_ACK after 5 tries") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestDriverPreflightJoinFailureIsFatal(t *testing.T) {
+	w := &fakeWorld{kneeN: 1 << 30, joinFailN: 2}
+	_, err := NewDriver(w, testConfig()).Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "pre-flight: join failures") {
+		t.Fatalf("err = %v", err)
 	}
 }
