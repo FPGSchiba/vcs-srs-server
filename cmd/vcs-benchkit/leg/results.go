@@ -45,7 +45,7 @@ type Calibration struct {
 
 	// StoppedAt is the step N that could not complete, 0 when calibration ran
 	// every step. StoppedBots is the bots up when it stopped, -1 when the bot
-	// did not say (a v1 bot). StopReason is the bot's own words.
+	// did not say (a v1 bot). StopReason is the bot's own words, prefixed "inferred: " for a v1 bot, whose stop step and reason the kit guesses.
 	StoppedAt   int
 	StoppedBots int
 	StopReason  string

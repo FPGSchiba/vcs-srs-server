@@ -194,10 +194,12 @@ func RunCalibration(ctx context.Context, c CalConfig) (*Calibration, error) {
 		res.StoppedAt, res.StoppedBots, res.StopReason = stop.N, stop.Bots, reason
 	case runErr != nil:
 		res.StoppedAt = nextStepAbove(c.Steps, steps[len(steps)-1].N)
-		res.StopReason = reason
-		if res.StopReason == "" {
-			res.StopReason = runErr.Error()
+		if reason == "" {
+			reason = runErr.Error()
 		}
+		// A v1 bot never says which step failed or why it exited: both are
+		// the kit's inference, so the text must not read as measured.
+		res.StopReason = "inferred: " + reason
 	}
 	return res, nil
 }

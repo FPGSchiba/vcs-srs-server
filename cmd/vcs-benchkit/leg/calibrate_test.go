@@ -168,8 +168,8 @@ func TestRunCalibrationKeepsCompletedStepsWhenCalibrateFails(t *testing.T) {
 	if len(cal.Steps) != 3 || cal.ReceivePPS != 51150 || !cal.LowerBound {
 		t.Fatalf("cal = %+v, want 3 steps, ReceivePPS 51150, LowerBound", cal)
 	}
-	if cal.StoppedAt != 4096 || cal.StopReason != "bot 3702: no HELLO_ACK after 5 tries" {
-		t.Fatalf("StoppedAt=%d StopReason=%q", cal.StoppedAt, cal.StopReason)
+	if cal.StoppedAt != 4096 || cal.StopReason != "inferred: bot 3702: no HELLO_ACK after 5 tries" {
+		t.Fatalf("v1 stop must be marked inferred; StoppedAt=%d StopReason=%q", cal.StoppedAt, cal.StopReason)
 	}
 }
 
@@ -207,11 +207,9 @@ func TestRunCalibrationV2Stopped(t *testing.T) {
 func TestRunCalibrationNoStepIsFatal(t *testing.T) {
 	for _, mode := range []string{"v2-none", "v1-none"} {
 		_, err := runFakeCal(t, mode, CalConfig{})
-		if err == nil || !strings.Contains(err.Error(), "no step completed: ") {
-			t.Fatalf("%s: err = %v", mode, err)
-		}
-		if mode == "v2-none" && !strings.Contains(err.Error(), "bot 0: no HELLO_ACK after 5 tries") {
-			t.Fatalf("%s: err = %v lacks the stop reason", mode, err)
+		const want = "no step completed: bot 0: no HELLO_ACK after 5 tries"
+		if err == nil || err.Error() != want {
+			t.Fatalf("%s: err = %v, want exactly %q", mode, err, want)
 		}
 	}
 }
