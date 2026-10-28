@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Gate-0 runner probe: prints one JSON object (env-probe/1) describing the runner.
 # Reads only files under ${PROBE_ROOT:-}, plus ImageOS/ImageVersion and `ulimit -n`.
+# PROBE_STAT2 (test hook) overrides the file for the second steal read.
 # Never prints the hostname. Fails cleanly (no partial JSON) if a file is missing.
 # The CPU split is PROVISIONAL (Q6-A) until the user decides Q6.
 set -euo pipefail
@@ -33,9 +34,10 @@ expand() {
 }
 csv() { paste -sd, -; } # lines to comma list
 
-steal() { # prints the 8th value (steal) of the aggregate cpu line
-  local f; f="$(need "$root/proc/stat")"
-  awk '$1=="cpu"{print $9; exit}' "$f"
+steal() { # <stat file>: 8th value after the label (awk $9) of the aggregate cpu line; 0 if absent
+  local f; f="$(need "$1")"
+  local v; v="$(awk '$1=="cpu"{print $9; exit}' "$f")"
+  printf '%s' "${v:-0}"
 }
 
 kernel="$(slurp "$root/proc/sys/kernel/osrelease")"
@@ -55,6 +57,8 @@ for c in "${cpus[@]}"; do
   groups+=("$(expand "$raw" | sort -n | csv)")
 done
 mapfile -t siblings < <(printf '%s\n' "${groups[@]}" | sort -u | awk -F, '{print $1"\t"$0}' | sort -n -k1,1 | cut -f2)
+
+[ "$vcpus" -ge 2 ] || { echo "bench-probe: need >= 2 vcpus, found $vcpus" >&2; exit 1; }
 
 first="${siblings[0]}"
 IFS=',' read -ra first_cpus <<< "$first"
@@ -80,9 +84,9 @@ port_range="$(slurp "$root/proc/sys/net/ipv4/ip_local_port_range" | tr -s ' \t' 
 rmem_default="$(sc rmem_default)"; rmem_max="$(sc rmem_max)"
 wmem_default="$(sc wmem_default)"; wmem_max="$(sc wmem_max)"
 
-s0="$(steal)"
+s0="$(steal "$root/proc/stat")"
 sleep "$steal_seconds"
-s1="$(steal)"
+s1="$(steal "${PROBE_STAT2:-$root/proc/stat}")"
 steal_ticks=$((s1 - s0))
 
 siblings_json="$(printf '%s\n' "${siblings[@]}" | jq -R . | jq -s .)"

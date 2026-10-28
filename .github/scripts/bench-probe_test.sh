@@ -34,6 +34,23 @@ check smt-commas y "0,2" "1,3" true "2 hyperthreads of 1 core"
 check smt-range n "0,1" "2,3" true "2 hyperthreads of 1 core"
 check no-smt unknown "0,1" "2,3" false "2 cores"
 
+run_probe() { # <fixture> [extra env assignments...]; sets out, rc
+  local name="$1"; shift
+  set +e; out="$(env PROBE_ROOT="$fx/$name" PROBE_STEAL_SECONDS=0 "$@" bash "$script" 2>&1)"; rc=$?; set -e
+}
+
+# Non-zero steal delta: second read comes from PROBE_STAT2 (catches a wrong awk field).
+run_probe smt-commas PROBE_STAT2="$fx/stat-steal7"
+if [ "$rc" -eq 0 ] && echo "$out" | jq -e '.steal_ticks==7' >/dev/null; then pass "steal-delta"; else fail "steal-delta (rc=$rc out=$out)"; fi
+
+# Stat without a steal column: treated as 0, not an arithmetic error.
+run_probe smt-commas PROBE_STAT2="$fx/stat-nosteal"
+if [ "$rc" -eq 0 ] && echo "$out" | jq -e '.steal_ticks==0' >/dev/null; then pass "steal-missing-column"; else fail "steal-missing-column (rc=$rc out=$out)"; fi
+
+# Fewer than 2 vCPUs: explicit message, not an unbound-variable abort.
+run_probe one-cpu
+if [ "$rc" -ne 0 ] && [[ "$out" == *"bench-probe: need >= 2 vcpus"* ]]; then pass "one-cpu"; else fail "one-cpu (rc=$rc out=$out)"; fi
+
 # Missing root: clean failure, no partial JSON.
 set +e; out="$(PROBE_ROOT="$fx/does-not-exist" PROBE_STEAL_SECONDS=0 bash "$script" 2>&1)"; rc=$?; set -e
 if [ "$rc" -ne 0 ] && [[ "$out" == *"bench-probe: "*" not found"* ]] && [[ "$out" != *"{"* ]]; then
