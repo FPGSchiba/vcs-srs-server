@@ -22,6 +22,11 @@ updates:
     directory: "/frontend"
     schedule:
       interval: "weekly"
+    ignore:
+      # Moves only with go.mod's Wails (exact pin in frontend/package.json):
+      # bump both by hand. This also suppresses security PRs for it;
+      # wails-check.yml reports new releases.
+      - dependency-name: "@wailsio/runtime"
     groups:
       frontend:
         applies-to: version-updates

@@ -29,7 +29,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Excluded until track UP lands the Wails GA upgrade.
+  # Wails moves only together with @wailsio/runtime (exact pin in frontend/package.json):
+  # bump both by hand; wails-check.yml opens an issue when a newer release exists.
   GO_DEPS_EXCLUDE: github.com/wailsapp/wails/v3
   GO_BUILD_TAGS: headless
 

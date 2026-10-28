@@ -17,8 +17,9 @@
 #   would use gqlgen's own go.mod instead, and gqlgen v0.17.89 pins
 #   golang.org/x/tools v0.42.0, which fails under Go 1.27 with
 #   `internal error: package ".../gqlparser/v2/ast" without types was imported`.
-#   Our go.mod raises x/tools to v0.46.0 (the lowest that works); the `tool`
-#   directive keeps gqlgen's own deps in go.sum across `go mod tidy`.
+#   x/tools must be at least v0.46.0 (the lowest that works); Wails v3.0.0
+#   itself requires v0.49.0. The `tool` directive keeps gqlgen's own deps in
+#   go.sum across `go mod tidy`.
 #   2. Pin an explicit version otherwise, with a comment saying why it could
 #      not be derived (protoc-gen-go-grpc, protoc).
 name: Generate code

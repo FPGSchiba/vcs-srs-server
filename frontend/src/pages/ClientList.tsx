@@ -8,7 +8,7 @@ import {Events} from "@wailsio/runtime";
 import ClientEntry from "../components/ClientEntry";
 
 function ClientListPage() {
-    const [clients, setClients] = React.useState<Record<string, ClientState> | null>(null);
+    const [clients, setClients] = React.useState<Partial<Record<string, ClientState>> | null>(null);
     const [banOpen, setBanOpen] = React.useState(false);
     const [banItem, setBanItem] = React.useState<string | null>(null);
     const [banReason, setBanReason] = React.useState<string>("");
@@ -40,11 +40,16 @@ function ClientListPage() {
         });
     }, []);
 
+    // Wails v3 GA bindings type map values as optional; skip any undefined entry.
+    const entries = clients
+        ? Object.entries(clients).filter((entry): entry is [string, ClientState] => entry[1] !== undefined)
+        : [];
+
     return (
         <>
             <Paper className="clients clients-paper">
                 <Box className="clients clients-content">
-                    { clients && Object.entries(clients).map(([key, client]) => (
+                    { entries.map(([key, client]) => (
                         <ClientEntry key={key} client={client} clientId={key} handleBan={handleBan} handleKick={handleKick} />
                     ))}
                 </Box>

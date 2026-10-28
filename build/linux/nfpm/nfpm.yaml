@@ -24,9 +24,20 @@ contents:
   - src: "./build/linux/vcs-server.exe.desktop"
     dst: "/usr/share/applications/vcs-server.exe.desktop"
 
+# GTK4 + WebKitGTK 6.0, the Wails v3 GA default (v3.0.0 nfpm.yaml.tmpl).
 depends:
-  - gtk3
-  - libwebkit2gtk
+  - libgtk-4-1
+  - libwebkitgtk-6.0-4
+
+overrides:
+  rpm:
+    depends:
+      - gtk4
+      - webkitgtk6.0
+  archlinux:
+    depends:
+      - gtk4
+      - webkitgtk-6.0
 
 # replaces:
 #   - foobar
