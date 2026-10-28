@@ -40,7 +40,7 @@ type fakeWorld struct {
 	samplerErr string     // Window.Err of every window
 	deadStart  bool       // pre-flight hold delivers no frames
 	startErr   error
-	joinFailN  int // SetN reports the run-40752831443 handshake failure for n >= joinFailN (0 = never)
+	joinFailN  int     // SetN reports the run-40752831443 handshake failure for n >= joinFailN (0 = never)
 	joinsV2    bool    // report the failure as a v2 joins line (2 failures) instead of a v1 error
 	rampGenCPU float64 // generator CPU of a ramp window whose SetN had join failures (0 = the usual 0.2)
 	failedGUID string  // GUID carried by the v2 failed entries

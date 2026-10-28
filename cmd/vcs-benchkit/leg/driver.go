@@ -131,9 +131,9 @@ type Driver struct {
 	// trusted, so the next step boots fresh. rebuildAt is the failing N.
 	rebuild   bool
 	rebuildAt int
-	rate   float64
-	start  time.Time
-	out    Outcome
+	rate      float64
+	start     time.Time
+	out       Outcome
 }
 
 // NewDriver fills the defaults a zero Config leaves open.
