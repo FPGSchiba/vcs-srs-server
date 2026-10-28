@@ -1,7 +1,7 @@
 # Phase 6.9 SV4: Server voice path & distributed node (design)
 
 **Status: approved** (Q1-Q4 resolved by user decision 2026-10-27; Q5 resolved as option A, the 120 s coalition tombstone, approved by the user with the plan). Implemented on branch `chore/cleanup-sv4` from `origin/main` @ `850d984` (SV2 merged, #230).
-**Repo:** `vcs-srs-server` only. Designed against `origin/main` @ `dcce3ad` (#229, SV1 merged; SV3 and SV5 already in). Re-checked at pass 2 after `git fetch`: `origin/main` is still `dcce3ad`, so every file/line reference below is still current. SV2 has **not** merged yet (no `cleanup-sv2` branch on the remote); SV4 depends on it (§3, D7).
+**Repo:** `vcs-srs-server` only. Designed against `origin/main` @ `dcce3ad` (#229, SV1 merged; SV3 and SV5 already in). Re-checked at pass 2 after `git fetch`: `origin/main` is still `dcce3ad`, so every file/line reference below is still current. SV2 had not merged at design time; it has since merged (#230, `850d984`), and SV4 is cut from that commit (§3, D7).
 **Wave:** 3. Runs after SV2 (one item, D7, consumes SV2's bus API), alongside CL1 (client only).
 **Findings:** SRV-11, SRV-12, SRV-13. All three were `not-checked` in the scan, so all are re-verified below. Re-verification also found five adjacent defects that SRV-11/SRV-12 cannot be fixed without (R-1 to R-5). SV2 handed over a sixth item (D7: the voice-node feed's silent event drop).
 **Gate:** server-behaviour. Nothing here changes a `.proto`, `go.mod`/`go.sum` or CI.
@@ -140,7 +140,7 @@ Close():   cancel ctx (sync.Once), wait for run to exit, conn.Close(). Idempoten
 ### Control side (`voiceontrol/service.go`)
 
 - **R-2 (D4):** `EstablishStream` already holds the `*registeredNode` it attached to. Stream-end and send-error deregistration become `deregisterNodeIf(serverID string, node *registeredNode)`, deleting only if `s.nodes[serverID] == node` (and clearing `globalNodeAddr` only then). Mirrors SV1's `removeClientIf`.
-- **R-3 (D5):** in `RegisterVoiceServer`, if `s.nodes[req.ServerId]` exists, is non-global and the request is non-global, the new record takes a **copy** of the old record's coalitions, the old record is not counted as "taken" (it is replaced, not consulted), `assignCoalitions` is not run, and `rebalance(true)` still runs (it is a no-op for a node at or under target). `pendingMoves` naming it stay valid (same ID). This applies only while the old record is still present; see Q5 for the case where the control node deregistered first.
+- **R-3 (D5):** in `RegisterVoiceServer`, if `s.nodes[req.ServerId]` exists, is non-global and the request is non-global, the new record takes a **copy** of the old record's coalitions, the old record is not counted as "taken" (it is replaced, not consulted), `assignCoalitions` is not run, and `rebalance(true)` still runs (it is a no-op for a node at or under target). `pendingMoves` naming it stay valid (same ID). This applies only while the old record is still present; the case where the control node deregistered first is covered by D8's 120 s tombstone (Q5 resolved as A).
 - **D7 (from SV2):** `EstablishStream` replaces `Subscribe("*")` with SV2's filtered, overflow-aware subscription for exactly `ClientsChanged`, `RadioClientsChanged`, `ServerAction`, `CoalitionsChanged` (logs, notifications, admin and voice-node events no longer occupy the buffer), size 256 (W7). On overflow the handler: detaches its stream from the record only if it still owns it (`node.stream == stream` under `s.mu` → `nil`), does **not** deregister (so the node's same-ID re-registration hits D5's carry-over), logs one WARN `"Voice node feed fell behind, ending stream"` with `serverId` and the drop count, and returns a status error with the same code SV2 merged for its slow-subscriber status (`codes.ResourceExhausted` if SV2's recommendation stood; the node does not branch on the code — every `Recv` error restarts the session). The exact SV2 API names are read from the merged `events/bus.go` (design-SV2 §3.1 shape: `SubscribeNames(size, names...) *Subscription` with `C`, `Overflow()`, `Dropped()`, removed via `Unsubscribe`).
 - **Race fixes in the same handler (W11):** `buildStateSnapshot`/`buildClientDelta` take a copy of `node.coalitions` (and `node.isGlobal`) under `s.mu.RLock()` instead of reading the live slice; `buildClientDelta` copies `client.Coalition` before `serverState.RUnlock()`. No behaviour change.
 
@@ -224,7 +224,7 @@ Verification: `go build -tags headless ./...`, `go vet -tags headless ./...`, `g
 | A distributed voice node with no usable `publicAddr` **fails to start** with `VoiceStatus.Error` and the admin notification (D3). | Operators |
 | Registration reports the real server version instead of `"0.1.0"`. | Nobody reads it today |
 | Reconnect: one loop; no heartbeat multiplication; retries if the control node was down at start-up (R-1); **retries forever**, WARN at most once a minute (D2). | Operators (logs); control-side heartbeat rate |
-| Control node: a blipping node is not deregistered by its own old stream (D4) and keeps its coalitions when its record is still present (D5; see Q5). | Clients on that node; operators |
+| Control node: a blipping node is not deregistered by its own old stream (D4) and keeps its coalitions, whether its record is still present (D5) or was deregistered within the last 120 s (D8). | Clients on that node; operators |
 | Control node: a node whose feed falls behind gets its stream ended and resyncs, instead of silently diverging (D7). | Operators (one WARN); voice routing correctness |
 | Stopping a distributed voice server ends its control registration (R-4). | Operators (distribution view) |
 
@@ -247,7 +247,7 @@ Verification: `go build -tags headless ./...`, `go vet -tags headless ./...`, `g
 
 ## 9. Approval-gate items
 
-- **server-behaviour:** the overload drop policy (D1, decided); refusing to start without a usable `publicAddr` (D3, decided); retry-forever (D2, decided); control-side re-registration semantics (D4/D5, decided); ending a lagging node feed (D7, decided in SV2 Q4); Q5 (open). Each is still marked GATE in the plan so the user approves the task before it runs.
+- **server-behaviour:** the overload drop policy (D1, decided); refusing to start without a usable `publicAddr` (D3, decided); retry-forever (D2, decided); control-side re-registration semantics (D4/D5, decided); ending a lagging node feed (D7, decided in SV2 Q4); Q5 (resolved as A, D8). Each is still marked GATE in the plan so the user approves the task before it runs.
 - **cross-repo / cross-track:** the dependency on SV2's merged API (D7).
 - No dependency, proto, CI or file-deletion changes. `bufconn` and `hash/fnv` are already available.
 
@@ -258,7 +258,7 @@ Verification: `go build -tags headless ./...`, `go vet -tags headless ./...`, `g
 - **S1 Shard head-of-line blocking.** A slow `WriteToUDP` blocks its shard. Mitigations: N ≥ 2; the bounded queue drops rather than blocking the read loop; frames are small. A per-send deadline would need `SetWriteDeadline` on the shared conn (affects every shard), so it is not done.
 - **S2 HELLO on the shard.** Constant-time compare plus a map write; its gRPC report stays asynchronous with a timeout.
 - **S3 Reconnect test flakiness.** All timing through injected intervals/backoff, polling to a deadline, `-count=20` before the PR.
-- **S4 D5 only covers a live record.** If the control node sees the old stream end and deregisters before the node re-registers (likely when the transport itself died, since both ends notice at similar times and the node waits ≥0.8 s of backoff), the node is new to the control node and goes through `assignCoalitions` + `rebalance` as today. Q5 decides whether to close that.
+- **S4 D5 only covers a live record.** If the control node sees the old stream end and deregisters before the node re-registers (likely when the transport itself died, since both ends notice at similar times and the node waits ≥0.8 s of backoff), the node is new to the control node and goes through `assignCoalitions` + `rebalance` as today. Closed by D8 (Q5 = A): a same-ID re-registration within 120 s gets back the coalitions no live node owns (limit in §11).
 - **S5 Go stdlib UDP concurrency.** Concurrent `WriteToUDP` on one `UDPConn` is safe; today's code already relies on it.
 - **S6 SV2 slips.** D7 cannot land before SV2. If SV2 is delayed, SV4 can merge without the feed task only with the user's approval (it would leave the lossy feed in place).
 - **S7 Retry forever is quiet by design.** An operator relying on the old "gives up after ~30 min" ERROR now sees a WARN per minute instead. Accepted by D2.
