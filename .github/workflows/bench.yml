@@ -155,14 +155,11 @@ jobs:
       - name: Assert client Go toolchain
         run: bash .github/scripts/assert-go-toolchain.sh .client/go.mod
 
-      - name: Install buf
-        run: go install github.com/bufbuild/buf/cmd/buf@v1.47.2
-
+      # buf v1.47.2 (G-TOOL). `go run pkg@version` checks the module against
+      # sum.golang.org, the same pattern test.yml uses for govulncheck (S8545).
       - name: Generate client protobuf
         working-directory: .client
-        run: |
-          export PATH="$PATH:$(go env GOPATH)/bin"
-          buf generate
+        run: go run github.com/bufbuild/buf/cmd/buf@v1.47.2 generate
 
       - name: Build loadbot
         working-directory: .client
