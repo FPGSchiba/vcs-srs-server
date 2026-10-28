@@ -29,10 +29,7 @@ Use the command:
 wails3 dev
 ```
 
-Or
-```bash
-wails3 task run
-```
+`wails3 dev` builds and runs the GUI with live reload, using `./build/config.yml`.
 
 This will start the server in standalone mode with a GUI. The GUI will allow you to manage the server and configure settings.
 
@@ -45,6 +42,8 @@ wails3 task headless-standalone
 ```
 
 This will start the server without a GUI, allowing you to run it in the background or on a server without a graphical interface. Also it does not need any dependencies related to the GUI, so it is more lightweight and faster to start.
+
+Each `headless-*` task first builds `bin/vcs-server-headless` (`bin/vcs-server-headless.exe` on Windows), then starts it with `--mode=standalone`, `--mode=control` or `--mode=voice`. The process runs until you stop it.
 
 ### Distributed Control Server Mode
 
@@ -70,29 +69,55 @@ Git currently ignores the runtime config. So copy the `example.config.yaml` to `
 
 The config file is also editable through the Server GUI.
 
-### Building Protobuf files
+If the file named by `--config` does not exist, the server writes one with defaults: no coalitions, the admin HTTP port on 80, the client gRPC and voice ports on 5002, and placeholder token-key paths (`/path/to/ecdsa_key.pem`) that you must change.
 
-To build a `*.proto` file, you need to install the `protoc` compiler and the Go plugin for it. You can do this by running:
+### Code generation
+
+The protobuf packages (`srspb/`, `voicecontrolpb/`, `vcsauthpb/`) and the GraphQL code (`graphql/generated/`) are generated, not checked in. Every `wails3 task` build generates them first; that step also runs `go mod tidy`. To generate them by hand, as CI does (`.github/actions/generate/action.yml`), install:
+
+- `protoc` 36.2 (the version CI and the `Dockerfile` pin);
+- `protoc-gen-go` at the `google.golang.org/protobuf` version in `go.mod`, and `protoc-gen-go-grpc` v1.6.2;
+- Node 22, for the GUI frontend only.
 
 ```bash
+go install google.golang.org/protobuf/cmd/protoc-gen-go@$(go list -m -f '{{.Version}}' google.golang.org/protobuf)
+go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
+```
+
+Then, from the repository root (protoc fails if an output directory is missing, hence `mkdir -p`):
+
+```bash
+mkdir -p srspb voicecontrolpb vcsauthpb
 protoc --go_out=./srspb --go_opt=paths=source_relative --go-grpc_out=./srspb --go-grpc_opt=paths=source_relative srs.proto
+protoc --go_out=./voicecontrolpb --go_opt=paths=source_relative --go-grpc_out=./voicecontrolpb --go-grpc_opt=paths=source_relative control.proto
+protoc --go_out=./vcsauthpb --go_opt=paths=source_relative --go-grpc_out=./vcsauthpb --go-grpc_opt=paths=source_relative vcs-auth-plugin.proto
+go run github.com/99designs/gqlgen generate
 ```
 
 ## Building
 
-To build a redistributable, production mode package, use `wails build`.
+- **GUI:** `wails3 build` builds `bin/vcs-server` (`bin/vcs-server.exe` on Windows). It also rewrites `build/windows/icons.ico`, `build/darwin/icons.icns` and `frontend/package-lock.json`; do not commit those changes by accident. Linux and macOS GUI builds need the packages from [Installation](#installation).
+- **Headless, via the Taskfile:** `wails3 task <os>:build:headless`, where `<os>` is `windows`, `linux` or `darwin`. Add `PRODUCTION=true` for a release build. The output is `bin/vcs-server-headless`.
+- **Headless, without Wails:** after [code generation](#code-generation), `go build -tags headless -o bin/vcs-server-headless .`
+- **Checks CI runs:** `go vet -tags headless ./...` and `go test -race -count=1 -tags headless ./...`.
+
+Releases ship only the Docker image (`Dockerfile`, built with `-tags production,headless`). There is no GUI release artifact.
 
 ## Running
 
-The built application can be found in the `build/bin` directory. You can run it by executing the binary file.
+Binaries are written to `bin/`. `wails3 task run` starts the binary already built for your OS; it does not build. On Windows it passes `--autostart`; on Linux and macOS it does not. You can also start a binary directly with the flags below.
 
 ### Flags
-You can pass flags to the application by using the `--` separator. The following Flags are available:
-- `--config /path/to/config.yaml` - Path to the config file. Default is `./config.yaml`
-- `--autostart` - If the servers should be started automatically. Default is `false`
-- `--banned /path/to/banned.json` - Path to the banned users file. Default is `banned_clients.json`
-- `--log-folder /path/to/logs` - Path to the log folder. Default is `log`
-- `--file-log` - If the logs should be written to a file. Default is `true`~~
+
+Flags go straight to the binary, for example `bin/vcs-server-headless --mode control --config /etc/vcs/control.yaml`:
+
+- `--config /path/to/config.yaml`: the config file. Default `config.yaml`.
+- `--banned /path/to/banned.json`: the banned clients file. Default `banned_clients.json`.
+- `--log-folder /path/to/logs`: the log folder. Default `log`.
+- `--file-log`: also write logs to `<log-folder>/vcs-server-log.jsonl`. Default `true`; turn it off with `--file-log=false`.
+- `--autostart`: GUI only. Start the servers when the app starts. Default `false`. The headless binary always starts them.
+- `--mode standalone|control|voice`: headless only. Default `standalone`.
+- `--global`: headless only, and only with `--mode voice`. Run as the global-frequency voice node. Default `false`.
 
 ## Improvements
 
