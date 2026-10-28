@@ -145,6 +145,9 @@ type hostSystem struct {
 
 func (s *hostSystem) SetN(ctx context.Context, n int) (Joins, error) { return s.bot.SetN(ctx, n) }
 
+// LastJoins is the bot's most recent joins line (lastJoiner).
+func (s *hostSystem) LastJoins() (Joins, bool) { return s.bot.LastJoins() }
+
 // Hold bounds each call: the hold itself, its 200 ms drain and a margin. The
 // first hold also absorbs the first ramp, which is as long as the bots need.
 func (s *hostSystem) Hold(ctx context.Context, d time.Duration, label string) (Step, error) {

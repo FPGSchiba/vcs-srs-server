@@ -51,6 +51,10 @@ type fakeWorld struct {
 	// independently of the other (n is the bot count of the system).
 	stepHook func(n int, label string, st *Step)
 	winHook  func(n int, w *Window)
+	// pendingPreflightFail models a v2 bot whose pre-flight ramp (fire-and-forget,
+	// before the first hold) lost bot 1: SetN says pending, the pre-flight hold
+	// sees no frame, and the joins line is only visible through LastJoins.
+	pendingPreflightFail bool
 }
 
 type fakeHold struct {
@@ -77,6 +81,10 @@ func (w *fakeWorld) Start(ctx context.Context) (System, error) {
 
 func (s *fakeSystem) SetN(ctx context.Context, n int) (Joins, error) {
 	s.failedRamp = false
+	if s.w.pendingPreflightFail && s.n == 0 {
+		s.n = n
+		return Joins{Source: JoinsSourcePending, Requested: n}, nil
+	}
 	if s.w.joinFailN > 0 && n >= s.w.joinFailN {
 		s.failedRamp = true
 		if s.w.joinsV2 {
@@ -109,7 +117,7 @@ func (s *fakeSystem) Hold(ctx context.Context, d time.Duration, label string) (S
 	}
 	st := Step{Type: "step", Step: label, N: s.n, Valid: true,
 		Unique: 990, Expected: 1000, Updates: map[string]uint64{"CLIENT_JOIN": 3 + s.w.updates}}
-	if s.w.deadStart && label == "preflight" {
+	if (s.w.deadStart || s.w.pendingPreflightFail) && label == "preflight" {
 		st.Unique = 0
 	}
 	if s.n > s.w.kneeN {
@@ -123,6 +131,14 @@ func (s *fakeSystem) Hold(ctx context.Context, d time.Duration, label string) (S
 		s.w.stepHook(s.n, label, &st)
 	}
 	return st, nil
+}
+
+// LastJoins reports the pre-flight ramp's joins line of pendingPreflightFail.
+func (s *fakeSystem) LastJoins() (Joins, bool) {
+	if !s.w.pendingPreflightFail {
+		return Joins{}, false
+	}
+	return JoinsFromV1Error(2, 0, "loadbot: bot 1: hello: no HELLO_ACK after 5 tries"), true
 }
 
 func (s *fakeSystem) LogText() (string, error) {
@@ -731,6 +747,17 @@ func TestDriverPreflightJoinFailureIsFatal(t *testing.T) {
 	w := &fakeWorld{kneeN: 1 << 30, joinFailN: 2}
 	_, err := NewDriver(w, testConfig()).Run(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "pre-flight: join failures") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// A v2 bot's pre-flight ramp is fire-and-forget, so its join failure arrives
+// as a joins line during the pre-flight hold. The error must carry the bot's
+// words, not only "no voice frame reached the listener".
+func TestDriverPreflightPendingJoinFailureIsFatal(t *testing.T) {
+	w := &fakeWorld{kneeN: 1 << 30, pendingPreflightFail: true}
+	_, err := NewDriver(w, testConfig()).Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "pre-flight: join failures") || !strings.Contains(err.Error(), "no HELLO_ACK after 5 tries") {
 		t.Fatalf("err = %v", err)
 	}
 }

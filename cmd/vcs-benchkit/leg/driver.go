@@ -62,6 +62,12 @@ type System interface {
 	Close() error
 }
 
+// lastJoiner is the optional System method that returns the last `joins` line
+// the bot wrote (see Bot.LastJoins).
+type lastJoiner interface {
+	LastJoins() (Joins, bool)
+}
+
 // Env starts a fresh system: a new server topology and a new load bot with
 // no bots joined.
 type Env interface {
@@ -205,6 +211,13 @@ func (d *Driver) boot(ctx context.Context) error {
 	st, err := sys.Hold(hctx, 2*time.Second, "preflight")
 	if err != nil {
 		return fmt.Errorf("pre-flight: %w", err)
+	}
+	// The pre-flight SetN was fire-and-forget, so a v2 bot's joins line for it
+	// arrived during that hold: report its failures in the bot's own words.
+	if lj, ok := sys.(lastJoiner); ok {
+		if j, ok := lj.LastJoins(); ok && j.JoinFailures > 0 {
+			return fmt.Errorf("pre-flight: join failures: %s", joinFailureSummary(j))
+		}
 	}
 	if st.Unique == 0 {
 		return errors.New("pre-flight: login succeeded but no voice frame reached the listener (the shards are not relaying)")
