@@ -59,6 +59,11 @@ func Settled(samples []SettleSample, now time.Time) (bool, string) {
 }
 
 func settledReason(samples []SettleSample, last SettleSample, elapsed time.Duration, now time.Time) (bool, string) {
+	// With nothing observed, "no counter grew" would hold vacuously and a
+	// mis-wired sampler would pass the gate, letting the ramp leak into the hold.
+	if len(last.UpdatesRx) == 0 {
+		return false, "no full-store bots sampled"
+	}
 	if elapsed < SettleFloor {
 		return false, fmt.Sprintf("ramp ended %s ago, need %s", elapsed.Round(time.Millisecond), SettleFloor)
 	}

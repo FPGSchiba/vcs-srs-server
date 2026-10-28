@@ -16,6 +16,10 @@ func TestPreflight(t *testing.T) {
 	}{
 		// Default Linux range 32768..60999 is 28232 ports; 2*15000 = 30000 > 28232.
 		{"default range, upper 15000 fails on ports", [2]int{32768, 60999}, 1 << 20, 15000, "port range"},
+		// Usable ceiling on the default range is 28232/2 = 14116 bots; the plan's
+		// "15000 passes" example contradicts the design 6.4.1 rule and is wrong.
+		{"default range, ceiling 14116 passes", [2]int{32768, 60999}, 1 << 20, 14116, ""},
+		{"default range, 14117 fails", [2]int{32768, 60999}, 1 << 20, 14117, "port range"},
 		{"default range, upper 14000 passes", [2]int{32768, 60999}, 1 << 20, 14000, ""},
 		{"exactly at the port bound passes", [2]int{1, 2000}, 1 << 20, 1000, ""},
 		{"one over the port bound fails", [2]int{1, 1999}, 1 << 20, 1000, "port range"},
@@ -139,6 +143,7 @@ func TestSettled(t *testing.T) {
 		{"quiescent 2 s after the 5 s floor", samples(re, sp{4 * s, 0, []uint64{5, 5}}, sp{5 * s, 0, []uint64{5, 5}}, sp{7 * s, 0, []uint64{5, 5}}), 7 * s, true, ""},
 		{"growth older than the window is ignored", samples(re, sp{5 * s, 0, []uint64{1}}, sp{6 * s, 0, []uint64{9}}, sp{8 * s, 0, []uint64{9}}, sp{9 * s, 0, []uint64{9}}), 9 * s, true, ""},
 		{"not enough history for the 2 s window", samples(re, sp{6 * s, 0, []uint64{9}}, sp{7 * s, 0, []uint64{9}}), 7 * s, false, "history"},
+		{"no full-store bots sampled is not quiescent", samples(re, sp{5 * s, 0, nil}, sp{6 * s, 0, nil}, sp{8 * s, 0, nil}), 8 * s, false, "no full-store bots sampled"},
 		{"bot set changed is growth", samples(re, sp{5 * s, 0, []uint64{9}}, sp{8 * s, 0, []uint64{9, 0}}), 8 * s, false, "growing"},
 		{"cannot settle after 60 s", samples(re, sp{58 * s, 0, []uint64{1}}, sp{61 * s, 0, []uint64{2}}), 61 * s, false, "invalid: cannot settle"},
 		{"settled just before the bound still passes", samples(re, sp{56 * s, 0, []uint64{3}}, sp{59 * s, 0, []uint64{3}}), 59 * s, true, ""},

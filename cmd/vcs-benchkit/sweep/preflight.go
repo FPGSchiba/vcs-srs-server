@@ -35,6 +35,9 @@ const (
 // each kind: it fails when 2*upperBound exceeds the range size (the design's
 // stated rule, deliberately conservative). The descriptor rule is
 // 2*upperBound*2 + 256 > ulimitN.
+//
+// On the default Linux range 32768..60999 (28232 ports) the usable ceiling is
+// 14116 bots, not 15000: callers must not assume a 15000-bot upper bound fits.
 func Preflight(portRange [2]int, ulimitN, upperBound int) error {
 	if upperBound <= 0 {
 		return fmt.Errorf("preflight: upper bound %d must be positive", upperBound)
