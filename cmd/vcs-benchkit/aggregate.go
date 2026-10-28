@@ -84,6 +84,8 @@ func copyTree(src, dst string) error {
 // each) into aggregate.csv, and copies every leg under <out>/legs.
 // A censored leg (generator-bound, time-bound, below range) contributes its
 // bound as n and sets censored=true, so the statistics are lower bounds then.
+// A leg whose knee failed its confirm step keeps result_kind=knee; it sets
+// unconfirmed=true instead, so the flag is not buried in the results text.
 func runAggregate(args []string, stderr io.Writer) error {
 	fl := flag.NewFlagSet("aggregate", flag.ContinueOnError)
 	fl.SetOutput(stderr)
@@ -136,7 +138,7 @@ func runAggregate(args []string, stderr io.Writer) error {
 	}
 	defer f.Close()
 	cw := csv.NewWriter(f)
-	if err := cw.Write([]string{"arm", "scenario", "repeats", "median_n", "min_n", "max_n", "censored", "results", "predicted_knee", "topology", "label"}); err != nil {
+	if err := cw.Write([]string{"arm", "scenario", "repeats", "median_n", "min_n", "max_n", "censored", "unconfirmed", "results", "predicted_knee", "topology", "label"}); err != nil {
 		return err
 	}
 	for _, k := range keys {
@@ -145,13 +147,16 @@ func runAggregate(args []string, stderr io.Writer) error {
 		var ns []int
 		var results []string
 		topos := map[string]bool{}
-		censored := false
+		censored, unconfirmed := false, false
 		for _, l := range g {
 			ns = append(ns, l.n)
 			results = append(results, l.result)
 			topos[l.topology] = true
 			if l.kind != "knee" {
 				censored = true
+			}
+			if strings.Contains(l.result, "unconfirmed") {
+				unconfirmed = true
 			}
 		}
 		sort.Ints(ns)
@@ -167,7 +172,7 @@ func runAggregate(args []string, stderr io.Writer) error {
 		if err := cw.Write([]string{
 			g[0].arm, g[0].scenario, strconv.Itoa(len(g)),
 			strconv.Itoa(medianInt(ns)), strconv.Itoa(ns[0]), strconv.Itoa(ns[len(ns)-1]),
-			strconv.FormatBool(censored), strings.Join(results, "; "), g[0].predicted, topo, label,
+			strconv.FormatBool(censored), strconv.FormatBool(unconfirmed), strings.Join(results, "; "), g[0].predicted, topo, label,
 		}); err != nil {
 			return err
 		}

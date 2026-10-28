@@ -123,3 +123,25 @@ func TestAggregateMixedTopologyIsNamed(t *testing.T) {
 		t.Fatalf("topology = %q", got)
 	}
 }
+
+func TestAggregateFlagsUnconfirmedKnee(t *testing.T) {
+	in, out := t.TempDir(), t.TempDir()
+	writeLeg(t, in, "1-x", "S", "one-big-net", "knee 2400", "knee", "2400", "t")
+	writeLeg(t, in, "2-x", "S", "one-big-net", "knee 2800 (unconfirmed: the confirm step did not pass)", "knee", "2800", "t")
+	if err := runAggregate([]string{"--in", in, "--out", out}, os.Stderr); err != nil {
+		t.Fatal(err)
+	}
+	r := readAgg(t, out)[0]
+	if r["unconfirmed"] != "true" || r["censored"] != "false" {
+		t.Fatalf("an unconfirmed knee must set unconfirmed, not censored: %v", r)
+	}
+
+	in2, out2 := t.TempDir(), t.TempDir()
+	writeLeg(t, in2, "1-x", "S", "one-big-net", "knee 2400", "knee", "2400", "t")
+	if err := runAggregate([]string{"--in", in2, "--out", out2}, os.Stderr); err != nil {
+		t.Fatal(err)
+	}
+	if got := readAgg(t, out2)[0]["unconfirmed"]; got != "false" {
+		t.Fatalf("unconfirmed = %q, want false", got)
+	}
+}
