@@ -71,6 +71,29 @@ func TestJoinsValidateRejectsBrokenInvariants(t *testing.T) {
 	if bad.Validate() == nil {
 		t.Fatal("short hist must fail")
 	}
+	bad = j
+	bad.FailedTruncated = true
+	if bad.Validate() == nil {
+		t.Fatal("failed_truncated with join_failures <= 32 must fail")
+	}
+	bad = j
+	bad.Failed = make([]JoinFailure, 33)
+	if bad.Validate() == nil {
+		t.Fatal("more than 32 failed entries must fail")
+	}
+	big := Joins{
+		Schema: JoinsSchema, Requested: 100, Had: 0, N: 60, Joined: 60, JoinFailures: 40,
+		FailuresByStage: map[string]int{"control": 0, "radio": 0, "voice_dial": 0, "hello": 40},
+		HelloTriesHist:  []int{0, 60, 0, 0, 0, 0},
+		Failed:          make([]JoinFailure, 32),
+	}
+	if big.Validate() == nil {
+		t.Fatal("join_failures > 32 without failed_truncated must fail")
+	}
+	big.FailedTruncated = true
+	if err := big.Validate(); err != nil {
+		t.Fatalf("truncated 40 failures with 32 entries is valid: %v", err)
+	}
 }
 
 func TestParseProgressFixtures(t *testing.T) {
@@ -179,5 +202,18 @@ func TestJoinsFromV1Error(t *testing.T) {
 	d := JoinsFromV1Error(10, 5, "bot 8: dial voice: boom")
 	if d.Failed[0].Stage != "voice_dial" {
 		t.Fatalf("%+v", d)
+	}
+
+	// I-1: Error is the cause without the "bot N: <stage>:" prefix, v1 too.
+	for _, tc := range []struct{ got, want string }{
+		{got.Failed[0].Error, "no HELLO_ACK after 5 tries"},
+		{c.Failed[0].Error, "rpc error: code = DeadlineExceeded desc = x"},
+		{r.Failed[0].Error, "rpc error: code = Unavailable desc = x"},
+		{d.Failed[0].Error, "boom"},
+		{JoinsFromV1Error(10, 5, "bot 9: rpc error: x").Failed[0].Error, "rpc error: x"},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("Error = %q, want %q", tc.got, tc.want)
+		}
 	}
 }

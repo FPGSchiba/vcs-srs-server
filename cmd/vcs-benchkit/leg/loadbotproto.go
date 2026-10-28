@@ -66,8 +66,11 @@ type Joins struct {
 // joinStages are the four keys failures_by_stage always carries.
 var joinStages = []string{"control", "radio", "voice_dial", "hello"}
 
-// helloLadderLen is len(DefaultHelloLadder)+1, the length of hello_tries_hist.
+// helloHistLen is len(DefaultHelloLadder)+1, the length of hello_tries_hist.
 const helloHistLen = 6
+
+// maxFailedEntries is the cap on Joins.Failed (I-1).
+const maxFailedEntries = 32
 
 // Validate checks the I-1 invariants of a v2 joins line.
 func (j Joins) Validate() error {
@@ -104,6 +107,12 @@ func (j Joins) Validate() error {
 	}
 	if hs != j.Joined {
 		return fmt.Errorf("joins: hello_tries_hist sums to %d, joined is %d", hs, j.Joined)
+	}
+	if len(j.Failed) > maxFailedEntries {
+		return fmt.Errorf("joins: failed has %d entries, at most %d", len(j.Failed), maxFailedEntries)
+	}
+	if want := j.JoinFailures > maxFailedEntries; j.FailedTruncated != want {
+		return fmt.Errorf("joins: failed_truncated is %v, want %v for join_failures %d", j.FailedTruncated, want, j.JoinFailures)
 	}
 	return nil
 }
@@ -178,6 +187,14 @@ func JoinsFromV1Error(requested, had int, text string) Joins {
 	case strings.Contains(t, ": update radio: "):
 		stage = "radio"
 	}
+	// I-1: Error is the cause, without the "bot N: <stage>:" prefix.
+	cause := joinFailureRE.ReplaceAllString(t, "")
+	for _, p := range []string{"hello: ", "dial voice: ", "update radio: "} {
+		if stage != "control" && strings.HasPrefix(cause, p) {
+			cause = strings.TrimPrefix(cause, p)
+			break
+		}
+	}
 	tries := 0
 	if strings.Contains(t, "no HELLO_ACK after 5 tries") {
 		tries = 5
@@ -196,7 +213,7 @@ func JoinsFromV1Error(requested, had int, text string) Joins {
 		FailuresByStage: by,
 		HelloTriesHist:  make([]int, helloHistLen),
 		HelloTriesMax:   tries,
-		Failed:          []JoinFailure{{Bot: bot, Stage: stage, Tries: tries, Error: t}},
+		Failed:          []JoinFailure{{Bot: bot, Stage: stage, Tries: tries, Error: cause}},
 		Source:          JoinsSourceV1Error,
 		BotExited:       true,
 	}
