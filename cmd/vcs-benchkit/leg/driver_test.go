@@ -41,6 +41,10 @@ type fakeWorld struct {
 	deadStart  bool       // pre-flight hold delivers no frames
 	startErr   error
 	updates    uint64
+	// stepHook and winHook let a test shape one report or one sampler window
+	// independently of the other (n is the bot count of the system).
+	stepHook func(n int, label string, st *Step)
+	winHook  func(n int, w *Window)
 }
 
 type fakeHold struct {
@@ -91,6 +95,9 @@ func (s *fakeSystem) Hold(ctx context.Context, d time.Duration, label string) (S
 		st.Violations = []string{"rx lag p99 9ms above 2ms"}
 		st.Valid = false
 	}
+	if s.w.stepHook != nil {
+		s.w.stepHook(s.n, label, &st)
+	}
 	return st, nil
 }
 
@@ -101,6 +108,9 @@ func (s *fakeSystem) BeginSample() func() Window {
 		w := Window{ServerCPU: 0.3, GenCPU: 0.2, Seconds: 40, Err: s.w.samplerErr}
 		if s.w.genBoundN > 0 && n >= s.w.genBoundN {
 			w.GenCPU = 0.95
+		}
+		if s.w.winHook != nil {
+			s.w.winHook(n, &w)
 		}
 		return w
 	}
@@ -301,5 +311,101 @@ func TestDriverSamplerFailureInvalidatesTheStep(t *testing.T) {
 	}
 	if out.Result.Kind != sweep.GeneratorBound {
 		t.Errorf("result = %v", out.Result)
+	}
+}
+
+// sweepRow returns the first sweep row measured at n.
+func sweepRow(t *testing.T, out *Outcome, n int) Row {
+	t.Helper()
+	for _, r := range out.Rows {
+		if r.Kind == "sweep" && r.N == n {
+			return r
+		}
+	}
+	t.Fatalf("no sweep row at %d bots: %+v", n, out.Rows)
+	return Row{}
+}
+
+// The fake bot used to set violations and a hot generator CPU together, so
+// either wire could be dropped from measure() unnoticed. These tests drive each
+// wire alone through the driver (D14, risk R1).
+
+func TestDriverBotViolationsAloneInvalidateTheStep(t *testing.T) {
+	w := &fakeWorld{kneeN: 1 << 30,
+		stepHook: func(n int, label string, st *Step) {
+			if n >= 400 && strings.HasPrefix(label, "step-") {
+				st.Violations = []string{"rx lag p99 9ms above 2ms"}
+			}
+		}}
+	out, err := NewDriver(w, testConfig()).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := sweepRow(t, out, 400)
+	if r.Outcome != sweep.Invalid || !strings.Contains(strings.Join(r.Reasons, ";"), "rx lag p99") {
+		t.Fatalf("row = %+v, want invalid with the bot's violation", r)
+	}
+	if out.Result.Kind != sweep.GeneratorBound || out.Result.N != 200 {
+		t.Fatalf("result = %v, want generator-bound at 200", out.Result)
+	}
+}
+
+func TestDriverHotGeneratorCPUAloneInvalidatesTheStep(t *testing.T) {
+	w := &fakeWorld{kneeN: 1 << 30,
+		winHook: func(n int, win *Window) {
+			if n >= 400 {
+				win.GenCPU = 0.95
+			}
+		}}
+	out, err := NewDriver(w, testConfig()).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := sweepRow(t, out, 400)
+	if r.Outcome != sweep.Invalid || !strings.Contains(strings.Join(r.Reasons, ";"), "generator cpu") {
+		t.Fatalf("row = %+v, want invalid on generator cpu", r)
+	}
+	if out.Result.Kind != sweep.GeneratorBound || out.Result.N != 200 {
+		t.Fatalf("result = %v, want generator-bound at 200", out.Result)
+	}
+}
+
+func TestDriverServerCPUOverBoundIsABreach(t *testing.T) {
+	w := &fakeWorld{kneeN: 1 << 30,
+		winHook: func(n int, win *Window) {
+			if n >= 400 {
+				win.ServerCPU = 0.9
+			}
+		}}
+	out, err := NewDriver(w, testConfig()).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := sweepRow(t, out, 400)
+	if r.Outcome != sweep.Breach || !strings.Contains(strings.Join(r.Reasons, ";"), "server process cpu") {
+		t.Fatalf("row = %+v, want a server-cpu breach", r)
+	}
+	if out.Result.Kind != sweep.KneeFound || out.Result.N >= 400 {
+		t.Fatalf("result = %v, want a knee below 400", out.Result)
+	}
+}
+
+func TestDriverResourceExhaustedInTheHoldIsABreach(t *testing.T) {
+	w := &fakeWorld{kneeN: 1 << 30,
+		stepHook: func(n int, label string, st *Step) {
+			if n >= 400 && strings.HasPrefix(label, "step-") {
+				st.ResourceExhausted.Hold = 3
+			}
+		}}
+	out, err := NewDriver(w, testConfig()).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := sweepRow(t, out, 400)
+	if r.Outcome != sweep.Breach || !strings.Contains(strings.Join(r.Reasons, ";"), "ResourceExhausted") {
+		t.Fatalf("row = %+v, want a ResourceExhausted breach", r)
+	}
+	if out.Result.Kind != sweep.KneeFound || out.Result.N >= 400 {
+		t.Fatalf("result = %v, want a knee below 400", out.Result)
 	}
 }
