@@ -483,7 +483,7 @@ func (s *AuthServer) GuestLogin(ctx context.Context, request *pb.GuestLoginReque
 	// The hash is client-supplied and its bcrypt cost is attacker-controlled: cap it
 	// so a hostile cost cannot exhaust CPU (the C# peer uses exactly cost 12).
 	if err := utils.CheckHashCost(request.Password); err != nil {
-		s.logger.Warn("Rejected guest login: password hash refused", "IP", peerAddress, "ClientGuid", clientGuid, "error", err)
+		s.logger.Warn("Rejected guest login: password hash refused", "IP", peerAddress, "ClientGuid", clientGuid, "Error", err)
 		return &pb.GuestLoginResponse{Success: false,
 			LoginResult: &pb.GuestLoginResponse_ErrorMessage{ErrorMessage: "Invalid password hash: " + err.Error()}}, nil
 	}
