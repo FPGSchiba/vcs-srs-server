@@ -357,6 +357,12 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	if err != nil {
 		return fail(fmt.Errorf("calibration: %w", err))
 	}
+	var calNotes []string
+	if cal.StoppedAt > 0 {
+		note := fmt.Sprintf("calibration stopped at N=%d: %s", cal.StoppedAt, cal.StopReason)
+		calNotes = append(calNotes, note)
+		logf("%s; receive capacity %.0f pps (lower bound %v) from %d completed steps", note, cal.ReceivePPS, cal.LowerBound, len(cal.Steps))
+	}
 	if err := writeFile(o.OutDir, "calibration.csv", func(w io.Writer) error { return WriteCalibrationCSV(w, cal, o.Topology) }); err != nil {
 		return fail(err)
 	}
@@ -392,7 +398,7 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 		Bounds: sweep.DefaultBounds,
 	})
 	out, runErr := d.Run(ctx)
-	m.Starts, m.Notes, m.ServerErrors = out.Starts, out.Notes, env.errorsSeen()
+	m.Starts, m.Notes, m.ServerErrors = out.Starts, append(calNotes, out.Notes...), env.errorsSeen()
 	if runErr == nil {
 		m.Result = out.Result.String()
 		if out.Unconfirmed {

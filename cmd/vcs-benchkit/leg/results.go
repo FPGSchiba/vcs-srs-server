@@ -28,6 +28,11 @@ type CalStep struct {
 	EgressPPS  float64  `json:"egress_pps"`
 	Valid      bool     `json:"valid"`
 	Violations []string `json:"violations"`
+	// v2 bot only; zero when the bot did not report them.
+	Bots          int     `json:"bots"`
+	ExpectedPPS   float64 `json:"expected_pps"`
+	HelloTriesMax int     `json:"hello_tries_max"`
+	HelloRetried  int     `json:"hello_retried"`
 }
 
 // Calibration is the generator's receive-side calibration of one leg.
@@ -37,12 +42,21 @@ type Calibration struct {
 	LowerBound          bool
 	ReflectorSendErrors uint64
 	Senders             int
+
+	// StoppedAt is the step N that could not complete, 0 when calibration ran
+	// every step. StoppedBots is the bots up when it stopped, -1 when the bot
+	// did not say (a v1 bot). StopReason is the bot's own words.
+	StoppedAt   int
+	StoppedBots int
+	StopReason  string
+	// Reflector counters of a v2 reflector; nil for a v1 one.
+	ReflectorQueueFull   *uint64
+	ReflectorWriteErrors *uint64
 }
 
-// ParseCalibrate reads `vcs-loadbot calibrate` stdout: one calibration line per
-// step and a final receive_capacity line, which must be present.
-func ParseCalibrate(out []byte) (steps []CalStep, pps float64, lowerBound bool, err error) {
-	haveCap := false
+// parseCalibrateLines reads `vcs-loadbot calibrate` stdout: calibration steps,
+// the optional receive_capacity line and the optional calibration_stopped line.
+func parseCalibrateLines(out []byte) (steps []CalStep, pps float64, lowerBound, haveCap bool, stop *CalStopped, err error) {
 	for _, raw := range bytes.Split(out, []byte("\n")) {
 		if len(bytes.TrimSpace(raw)) == 0 {
 			continue
@@ -53,38 +67,70 @@ func ParseCalibrate(out []byte) (steps []CalStep, pps float64, lowerBound bool, 
 			LowerBound bool    `json:"lower_bound"`
 		}
 		if err := json.Unmarshal(raw, &head); err != nil {
-			return nil, 0, false, fmt.Errorf("calibrate output: %w", err)
+			return nil, 0, false, false, nil, fmt.Errorf("calibrate output: %w", err)
 		}
 		switch head.Type {
 		case "calibration":
 			var s CalStep
 			if err := json.Unmarshal(raw, &s); err != nil {
-				return nil, 0, false, fmt.Errorf("calibrate output: %w", err)
+				return nil, 0, false, false, nil, fmt.Errorf("calibrate output: %w", err)
 			}
 			steps = append(steps, s)
+		case "calibration_stopped":
+			var st CalStopped
+			if err := json.Unmarshal(raw, &st); err != nil {
+				return nil, 0, false, false, nil, fmt.Errorf("calibrate output: %w", err)
+			}
+			stop = &st
 		case "receive_capacity":
 			pps, lowerBound, haveCap = head.PPS, head.LowerBound, true
 		}
 	}
+	return steps, pps, lowerBound, haveCap, stop, nil
+}
+
+// ParseCalibrate reads `vcs-loadbot calibrate` stdout. A missing
+// receive_capacity line is tolerated when at least one step completed (a bot
+// that died mid-calibration): the capacity is then the largest valid step and a
+// lower bound. No completed step at all is an error.
+func ParseCalibrate(out []byte) (steps []CalStep, pps float64, lowerBound bool, err error) {
+	steps, pps, lowerBound, haveCap, _, err := parseCalibrateLines(out)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	if len(steps) == 0 {
+		return nil, 0, false, fmt.Errorf("calibrate output has no completed step")
+	}
 	if !haveCap {
-		return steps, 0, false, fmt.Errorf("calibrate output has no receive_capacity line")
+		pps, lowerBound = 0, true
+		for _, s := range steps {
+			if s.Valid && s.EgressPPS > pps {
+				pps = s.EgressPPS
+			}
+		}
 	}
 	return steps, pps, lowerBound, nil
+}
+
+// ParseReflectorStatsFull reads both the v1 and the v2 reflector_stats line.
+func ParseReflectorStatsFull(out []byte) (ReflectorStats, error) {
+	for _, raw := range bytes.Split(out, []byte("\n")) {
+		var s ReflectorStats
+		var head struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(raw, &head) == nil && head.Type == "reflector_stats" && json.Unmarshal(raw, &s) == nil {
+			return s, nil
+		}
+	}
+	return ReflectorStats{}, fmt.Errorf("reflector output has no reflector_stats line")
 }
 
 // ParseReflectorStats returns the reflector's send-error count from its final
 // reflector_stats line.
 func ParseReflectorStats(out []byte) (uint64, error) {
-	for _, raw := range bytes.Split(out, []byte("\n")) {
-		var s struct {
-			Type       string `json:"type"`
-			SendErrors uint64 `json:"send_errors"`
-		}
-		if json.Unmarshal(raw, &s) == nil && s.Type == "reflector_stats" {
-			return s.SendErrors, nil
-		}
-	}
-	return 0, fmt.Errorf("reflector output has no reflector_stats line")
+	s, err := ParseReflectorStatsFull(out)
+	return s.SendErrors, err
 }
 
 // cell renders a float; NaN (unmeasured) is an empty cell, never a number.
@@ -266,6 +312,14 @@ func WriteCalibrationCSV(w io.Writer, c *Calibration, topology string) error {
 	for _, s := range c.Steps {
 		if err := cw.Write([]string{
 			"step", strconv.Itoa(s.N), cell(s.EgressPPS), strconv.FormatBool(s.Valid), strings.Join(s.Violations, "; "), "",
+			"", "", topology, Label, PayloadLabel,
+		}); err != nil {
+			return err
+		}
+	}
+	if c.StoppedAt > 0 {
+		if err := cw.Write([]string{
+			"stopped", strconv.Itoa(c.StoppedAt), "", "", c.StopReason, "",
 			"", "", topology, Label, PayloadLabel,
 		}); err != nil {
 			return err

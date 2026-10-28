@@ -2,10 +2,12 @@ package leg
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -45,9 +47,56 @@ func fakeLoadbot(args []string) int {
 				break
 			}
 		}
+		if os.Getenv("BENCHKIT_FAKE_REFL") == "v2" {
+			b, err := os.ReadFile("testdata/loadbot/v2-reflector-stats.json")
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "fake reflect: fixture:", err)
+				return 2
+			}
+			os.Stdout.Write(b)
+			return 0
+		}
 		fmt.Println(`{"type":"reflector_stats","send_errors":4,"senders":2}`)
 		return 0
 	case "calibrate":
+		if os.Getenv("BENCHKIT_FAKE_CAL") == "v1-die" {
+			// v1 bot at 62f5cf7 (run 40752831443): completed steps on stdout,
+			// the reason on stderr, exit 1.
+			out, err := os.ReadFile("testdata/loadbot/v1-calibrate-stdout.ndjson")
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "fake calibrate: fixture:", err)
+				return 2
+			}
+			msg, err := os.ReadFile("testdata/loadbot/v1-calibrate-stderr.txt")
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "fake calibrate: fixture:", err)
+				return 2
+			}
+			os.Stdout.Write(out)
+			os.Stderr.Write(msg)
+			return 1
+		}
+		switch os.Getenv("BENCHKIT_FAKE_CAL") {
+		case "v2-stop", "v2-stream":
+			b, err := os.ReadFile("testdata/loadbot/v2-calibrate.ndjson")
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "fake calibrate: fixture:", err)
+				return 2
+			}
+			for _, l := range bytes.Split(bytes.TrimRight(b, "\n"), []byte("\n")) {
+				fmt.Printf("%s\n", l)
+				if os.Getenv("BENCHKIT_FAKE_CAL") == "v2-stream" {
+					time.Sleep(200 * time.Millisecond)
+				}
+			}
+			return 0
+		case "v1-none":
+			fmt.Fprintln(os.Stderr, "vcs-loadbot: calibrate: bot 0: no HELLO_ACK after 5 tries")
+			return 1
+		case "v2-none":
+			fmt.Println(`{"type":"calibration_stopped","n":64,"bots":0,"stage":"hello","bot":0,"tries":5,"reason":"bot 0: no HELLO_ACK after 5 tries"}`)
+			return 1
+		}
 		if flagVal(args, "--reflector") != "127.0.0.1:45678" || flagVal(args, "--allow") != "127.0.0.1:45678" ||
 			flagVal(args, "--steps") != "64,128" || flagVal(args, "--hold") != "3" || flagVal(args, "--seed") != "7" {
 			fmt.Fprintln(os.Stderr, "fake calibrate: bad flags", args)
@@ -96,5 +145,133 @@ func TestRunCalibrationBadFlagsFail(t *testing.T) {
 	_, err := RunCalibration(ctx, CalConfig{LoadbotBin: exe, Seed: 8, Steps: "64,128", Hold: 3 * time.Second})
 	if err == nil || !strings.Contains(err.Error(), "calibrate") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// Run 40752831443, leg 1: calibration died at the 4096 step after three steps
+// had completed, and the kit threw all of them away.
+func TestRunCalibrationKeepsCompletedStepsWhenCalibrateFails(t *testing.T) {
+	t.Setenv("LEG_FAKE_LOADBOT", "1")
+	t.Setenv("BENCHKIT_FAKE_CAL", "v1-die")
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cal, err := RunCalibration(ctx, CalConfig{
+		LoadbotBin: exe, Seed: 7, Steps: "64,1024,2048,4096", Hold: 3 * time.Second, Senders: 1, StderrDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("calibration aborted instead of ending at the last good step: %v", err)
+	}
+	if len(cal.Steps) != 3 || cal.ReceivePPS != 51150 || !cal.LowerBound {
+		t.Fatalf("cal = %+v, want 3 steps, ReceivePPS 51150, LowerBound", cal)
+	}
+	if cal.StoppedAt != 4096 || cal.StopReason != "bot 3702: no HELLO_ACK after 5 tries" {
+		t.Fatalf("StoppedAt=%d StopReason=%q", cal.StoppedAt, cal.StopReason)
+	}
+}
+
+func runFakeCal(t *testing.T, mode string, cfg CalConfig) (*Calibration, error) {
+	t.Helper()
+	t.Setenv("LEG_FAKE_LOADBOT", "1")
+	t.Setenv("BENCHKIT_FAKE_CAL", mode)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cfg.LoadbotBin, cfg.Seed, cfg.Hold, cfg.Senders = exe, 7, 3*time.Second, 1
+	if cfg.Steps == "" {
+		cfg.Steps = "64,1024,2048,4096"
+	}
+	if cfg.StderrDir == "" {
+		cfg.StderrDir = t.TempDir()
+	}
+	return RunCalibration(ctx, cfg)
+}
+
+func TestRunCalibrationV2Stopped(t *testing.T) {
+	cal, err := runFakeCal(t, "v2-stop", CalConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cal.StoppedAt != 4096 || cal.StoppedBots != 3702 || cal.StopReason != "bot 3702: no HELLO_ACK after 5 tries" ||
+		cal.ReceivePPS != 51150 || !cal.LowerBound || len(cal.Steps) != 3 {
+		t.Fatalf("cal = %+v", cal)
+	}
+}
+
+func TestRunCalibrationNoStepIsFatal(t *testing.T) {
+	for _, mode := range []string{"v2-none", "v1-none"} {
+		_, err := runFakeCal(t, mode, CalConfig{})
+		if err == nil || !strings.Contains(err.Error(), "no step completed: ") {
+			t.Fatalf("%s: err = %v", mode, err)
+		}
+		if mode == "v2-none" && !strings.Contains(err.Error(), "bot 0: no HELLO_ACK after 5 tries") {
+			t.Fatalf("%s: err = %v lacks the stop reason", mode, err)
+		}
+	}
+}
+
+func TestRunCalibrationStreamsProgress(t *testing.T) {
+	var mu sync.Mutex
+	var times []time.Time
+	var kinds []string
+	_, err := runFakeCal(t, "v2-stream", CalConfig{OnLine: func(kind string, raw []byte) {
+		mu.Lock()
+		defer mu.Unlock()
+		times = append(times, time.Now())
+		kinds = append(kinds, kind)
+		if len(raw) == 0 || raw[len(raw)-1] == '\n' {
+			t.Errorf("raw line %q must be one line without the newline", raw)
+		}
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(times) < 7 {
+		t.Fatalf("OnLine got %d lines (%v), want all 7", len(times), kinds)
+	}
+	if d := times[len(times)-1].Sub(times[0]); d < 150*time.Millisecond {
+		t.Fatalf("first-to-last line gap %s: lines were delivered at the end, not streamed", d)
+	}
+	if kinds[1] != "calibration" || kinds[0] != "progress" {
+		t.Fatalf("kinds = %v", kinds)
+	}
+}
+
+func TestRunCalibrationReadsSplitReflectorStats(t *testing.T) {
+	v1, err := runFakeCal(t, "v2-stop", CalConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v1.ReflectorSendErrors != 4 || v1.ReflectorQueueFull != nil || v1.ReflectorWriteErrors != nil {
+		t.Fatalf("v1 stats: %+v", v1)
+	}
+	t.Setenv("BENCHKIT_FAKE_REFL", "v2")
+	v2, err := runFakeCal(t, "v2-stop", CalConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v2.ReflectorSendErrors != 3364676 || v2.ReflectorQueueFull == nil || *v2.ReflectorQueueFull != 3364000 ||
+		v2.ReflectorWriteErrors == nil || *v2.ReflectorWriteErrors != 676 {
+		t.Fatalf("v2 stats: %+v", v2)
+	}
+}
+
+func TestParseCalibrateTolerant(t *testing.T) {
+	out := []byte(`{"type":"calibration","n":64,"egress_pps":3150,"valid":true}
+{"type":"calibration","n":128,"egress_pps":9000,"valid":false}
+{"type":"calibration","n":256,"egress_pps":6000,"valid":true}
+`)
+	steps, pps, lb, err := ParseCalibrate(out)
+	if err != nil || len(steps) != 3 || pps != 6000 || !lb {
+		t.Fatalf("steps=%d pps=%v lb=%v err=%v", len(steps), pps, lb, err)
+	}
+	if _, _, _, err := ParseCalibrate([]byte(`{"type":"calibration_stopped","n":64}`)); err == nil {
+		t.Fatal("no completed step must be an error")
 	}
 }

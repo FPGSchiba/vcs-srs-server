@@ -102,3 +102,25 @@ func TestWriteStepsCSVAppendsJoinColumns(t *testing.T) {
 		t.Errorf("leading columns changed: %v", recs[1][:5])
 	}
 }
+
+func TestWriteCalibrationCSVStoppedRow(t *testing.T) {
+	cal := &Calibration{
+		Steps:      []CalStep{{N: 64, EgressPPS: 3150, Valid: true}},
+		ReceivePPS: 3150, LowerBound: true, Senders: 2,
+		StoppedAt: 4096, StopReason: "bot 3702: no HELLO_ACK after 5 tries",
+	}
+	var b bytes.Buffer
+	if err := WriteCalibrationCSV(&b, cal, "one-big-net"); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := csv.NewReader(&b).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 4 || recs[2][0] != "stopped" || recs[3][0] != "receive_capacity" {
+		t.Fatalf("rows = %v, want header, step, stopped, receive_capacity", recs)
+	}
+	if recs[2][1] != "4096" || recs[2][4] != "bot 3702: no HELLO_ACK after 5 tries" {
+		t.Fatalf("stopped row = %v", recs[2])
+	}
+}
