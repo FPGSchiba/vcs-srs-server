@@ -1,7 +1,9 @@
 package srs
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
@@ -548,5 +550,165 @@ func TestJoinSnapshotIndependent(t *testing.T) {
 
 	if got := ev.Clients[id].Name; got != "Joiner" {
 		t.Fatalf("event snapshot Name = %q, want Joiner", got)
+	}
+}
+
+// forgeCost swaps the "$2a$04$" prefix of a hashPassword result for one with
+// the given cost. bcrypt.Cost only parses the header, so it is accepted.
+func forgeCost(t *testing.T, hash string, cost int) string {
+	t.Helper()
+	if !strings.HasPrefix(hash, "$2a$04$") {
+		t.Fatalf("unexpected hash prefix: %q", hash)
+	}
+	return fmt.Sprintf("$2a$%02d$", cost) + strings.TrimPrefix(hash, "$2a$04$")
+}
+
+func TestGuestLoginRejectsOverCostHash(t *testing.T) {
+	s := newGuestLoginTestServer(t)
+	var buf bytes.Buffer
+	s.logger = slog.New(slog.NewTextHandler(&buf, nil))
+	ctx := testPeerContext()
+	guid := mustInit(t, s, ctx)
+
+	resp, err := s.GuestLogin(ctx, &pb.GuestLoginRequest{
+		ClientGuid: guid.String(), Name: "Victim", UnitId: "AB1",
+		Password: forgeCost(t, hashPassword(t, guestTestCoalitionPassword), 13),
+	})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if resp.GetSuccess() {
+		t.Fatal("expected rejection")
+	}
+	want := "Invalid password hash: bcrypt cost 13 exceeds the server maximum of 12"
+	if got := resp.GetErrorMessage(); got != want {
+		t.Fatalf("message = %q, want %q", got, want)
+	}
+	if n := pendingCount(s); n != 1 {
+		t.Fatalf("pendingCount = %d, want 1", n)
+	}
+	if out := buf.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "127.0.0.1") {
+		t.Fatalf("log missing WARN/IP: %s", out)
+	}
+}
+
+func TestGuestLoginRejectsMalformedHash(t *testing.T) {
+	for _, pw := range []string{"", "not-a-hash"} {
+		t.Run("pw="+pw, func(t *testing.T) {
+			s := newGuestLoginTestServer(t)
+			ctx := testPeerContext()
+			guid := mustInit(t, s, ctx)
+			resp, err := s.GuestLogin(ctx, &pb.GuestLoginRequest{
+				ClientGuid: guid.String(), Name: "Victim", UnitId: "AB1", Password: pw,
+			})
+			if err != nil {
+				t.Fatalf("err = %v", err)
+			}
+			if got, want := resp.GetErrorMessage(), "Invalid password hash: malformed"; got != want {
+				t.Fatalf("message = %q, want %q", got, want)
+			}
+			if n := pendingCount(s); n != 1 {
+				t.Fatalf("pendingCount = %d, want 1", n)
+			}
+		})
+	}
+}
+
+func TestGuestLoginAcceptsMaxCost(t *testing.T) {
+	s := newGuestLoginTestServer(t)
+	ctx := testPeerContext()
+	guid := mustInit(t, s, ctx)
+	h, err := bcrypt.GenerateFromPassword([]byte(guestTestCoalitionPassword), 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := s.GuestLogin(ctx, &pb.GuestLoginRequest{
+		ClientGuid: guid.String(), Name: "Victim", UnitId: "AB1", Password: string(h),
+	})
+	if err != nil || !resp.GetSuccess() {
+		t.Fatalf("err=%v resp=%+v", err, resp)
+	}
+}
+
+// Only valid against the capped server: before the cap a cost-31 compare
+// would take about 21 hours. Never run it against pre-cap code.
+func TestGuestLoginRejectsCost31Quickly(t *testing.T) {
+	s := newGuestLoginTestServer(t)
+	ctx := testPeerContext()
+	guid := mustInit(t, s, ctx)
+	start := time.Now()
+	resp, err := s.GuestLogin(ctx, &pb.GuestLoginRequest{
+		ClientGuid: guid.String(), Name: "Victim", UnitId: "AB1",
+		Password: forgeCost(t, hashPassword(t, guestTestCoalitionPassword), 31),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d >= time.Second {
+		t.Fatalf("took %v", d)
+	}
+	want := "Invalid password hash: bcrypt cost 31 exceeds the server maximum of 12"
+	if got := resp.GetErrorMessage(); got != want {
+		t.Fatalf("message = %q, want %q", got, want)
+	}
+}
+
+// TestGuestLoginComparesOutsideSettingsLock proves the bcrypt compare does not
+// run under settingsState.RLock: a queued writer would otherwise stall behind a
+// slow login and, via RWMutex semantics, block every new reader.
+func TestGuestLoginComparesOutsideSettingsLock(t *testing.T) {
+	s := newGuestLoginTestServer(t)
+	ctx := testPeerContext()
+	guid := mustInit(t, s, ctx)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	orig := comparePassword
+	comparePassword = func(hash, plain string) bool {
+		once.Do(func() { close(entered) })
+		<-release
+		return orig(hash, plain)
+	}
+	t.Cleanup(func() { comparePassword = orig })
+
+	var resp *pb.GuestLoginResponse
+	var loginErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		resp, loginErr = s.GuestLogin(ctx, &pb.GuestLoginRequest{
+			ClientGuid: guid.String(), Name: "Victim", UnitId: "AB1",
+			Password: hashPassword(t, guestTestCoalitionPassword),
+		})
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("comparePassword was never called")
+	}
+
+	locked := make(chan struct{})
+	go func() {
+		s.settingsState.Lock()
+		close(locked)
+	}()
+
+	select {
+	case <-locked:
+		s.settingsState.Unlock()
+		close(release)
+		<-done
+		if loginErr != nil || !resp.GetSuccess() {
+			t.Fatalf("err=%v resp=%+v", loginErr, resp)
+		}
+	case <-time.After(100 * time.Millisecond):
+		close(release)
+		<-locked
+		s.settingsState.Unlock()
+		<-done
+		t.Fatal("settingsState.Lock() blocked behind the password compare; compare must run outside the RLock")
 	}
 }

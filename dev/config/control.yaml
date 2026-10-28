@@ -9,6 +9,7 @@ servers:
     host: 0.0.0.0
     port: 5002       # not used by control mode
 
+# Dev-only docker-compose fixture (docker-compose.dev.yml mounts it read-only): throwaway passwords, never used in a deployment.
 coalitions:
   - name: Blue
     description: "Blue coalition"

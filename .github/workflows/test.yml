@@ -38,6 +38,13 @@ jobs:
       - name: Vet
         run: go vet -tags headless ./...
 
+      # Blocking (Phase 6.9 SEC D5): any reachable advisory fails the job.
+      # A new advisory can turn main red with no code change; that is the
+      # point of the gate. Covers linux + headless only (design R13).
+      # go install/run checks the module against sum.golang.org (S8545 n/a).
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -tags headless ./...
+
       - name: Test CI scripts
         run: bash .github/scripts/assert-go-toolchain_test.sh && bash .github/scripts/go-deps-update_test.sh && bash .github/scripts/wails-update-check_test.sh
 
@@ -76,7 +83,7 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: frontend
-        run: npm ci --legacy-peer-deps
+        run: npm ci --ignore-scripts --legacy-peer-deps
 
       - name: Run frontend tests
         working-directory: frontend
