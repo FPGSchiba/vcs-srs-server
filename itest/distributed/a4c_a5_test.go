@@ -162,11 +162,11 @@ func TestClientAssignmentsSingleNode_F3(t *testing.T) {
 		if !b.dialGlobal() {
 			t.Fatalf("HELLO to global node not ACKed")
 		}
-		m, _ := assignments(t, top, func(m map[string]string) bool { return m[b.guid] == globalID })
+		_, _ = assignments(t, top, func(m map[string]string) bool { return m[b.guid] == globalID })
 		// Settle, then re-check: a late report from the coalition node must
 		// not have displaced the entry (last report wins).
 		time.Sleep(300 * time.Millisecond)
-		m, _ = assignments(t, top, func(m map[string]string) bool { return true })
+		m, _ := assignments(t, top, func(m map[string]string) bool { return true })
 		if got, ok := m[b.guid]; !ok || got != globalID {
 			t.Errorf("assignment for %s = %q (present=%v), want global node %q", b.guid, got, ok, globalID)
 		}

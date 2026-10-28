@@ -46,10 +46,7 @@ func DistributedReady(st DistributionStatus, want map[Role]string, coalitions []
 	}
 	var sets [][]string
 	for _, r := range []Role{NodeA, NodeB} {
-		addr, ok := want[r]
-		if !ok {
-			continue
-		}
+		addr := want[r]
 		n, found := nodeByAddr(st, addr)
 		if !found {
 			return fmt.Errorf("%s (%s) not present in distributionStatus", r, addr)
@@ -59,31 +56,29 @@ func DistributedReady(st DistributionStatus, want map[Role]string, coalitions []
 		}
 		sets = append(sets, n.Coalitions)
 	}
-	if len(sets) == 2 {
-		for i, s := range sets {
-			if len(s) == 0 {
-				return fmt.Errorf("non-global node %d has an empty coalition set, want non-empty", i)
+	for i, s := range sets {
+		if len(s) == 0 {
+			return fmt.Errorf("non-global node %d has an empty coalition set, want non-empty", i)
+		}
+	}
+	seen := map[string]bool{}
+	for _, s := range sets {
+		for _, c := range s {
+			if seen[c] {
+				return fmt.Errorf("coalition sets are not disjoint: %q is on both nodes", c)
 			}
+			seen[c] = true
 		}
-		seen := map[string]bool{}
-		for _, s := range sets {
-			for _, c := range s {
-				if seen[c] {
-					return fmt.Errorf("coalition sets are not disjoint: %q is on both nodes", c)
-				}
-				seen[c] = true
-			}
-		}
-		var got []string
-		for c := range seen {
-			got = append(got, c)
-		}
-		exp := append([]string(nil), coalitions...)
-		sort.Strings(got)
-		sort.Strings(exp)
-		if fmt.Sprint(got) != fmt.Sprint(exp) {
-			return fmt.Errorf("coalition union %v != wanted %v", got, exp)
-		}
+	}
+	var got []string
+	for c := range seen {
+		got = append(got, c)
+	}
+	exp := append([]string(nil), coalitions...)
+	sort.Strings(got)
+	sort.Strings(exp)
+	if fmt.Sprint(got) != fmt.Sprint(exp) {
+		return fmt.Errorf("coalition union %v != wanted %v", got, exp)
 	}
 	if gaddr, ok := want[Global]; ok {
 		n, found := nodeByAddr(st, gaddr)
