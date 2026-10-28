@@ -2,13 +2,16 @@ package srs
 
 import (
 	"context"
+	"sync"
 	"testing"
+	"time"
 
 	pb "github.com/FPGSchiba/vcs-srs-server/srspb"
 	"github.com/FPGSchiba/vcs-srs-server/state"
 	vcpb "github.com/FPGSchiba/vcs-srs-server/voicecontrolpb"
 	"github.com/FPGSchiba/vcs-srs-server/voiceontrol"
 	"github.com/google/uuid"
+	"google.golang.org/grpc"
 )
 
 // newRegistryServer builds a test server wired to a real voice registry,
@@ -98,5 +101,137 @@ func TestSyncClientReturnsOwningAndGlobalNode(t *testing.T) {
 		if len(got.VoiceSecret) != 43 {
 			t.Errorf("%s: len(VoiceSecret) = %d, want 43", coalition, len(got.VoiceSecret))
 		}
+	}
+}
+
+// streamPumps holds one reader goroutine per update stream, so a timed-out
+// wait never leaves a second concurrent Recv on the same stream.
+var streamPumps sync.Map // grpc.ServerStreamingClient[pb.ServerUpdate] -> chan recvResult
+
+type recvResult struct {
+	u   *pb.ServerUpdate
+	err error
+}
+
+func pumpOf(stream grpc.ServerStreamingClient[pb.ServerUpdate]) chan recvResult {
+	fresh := make(chan recvResult, 16)
+	if got, loaded := streamPumps.LoadOrStore(stream, fresh); loaded {
+		return got.(chan recvResult)
+	}
+	go func() {
+		for {
+			u, err := stream.Recv()
+			fresh <- recvResult{u, err}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return fresh
+}
+
+// recvVoiceUpdate reads one update within the deadline and fails on timeout
+// or on any update type other than VOICE_ADDRESS_UPDATE.
+func recvVoiceUpdate(t *testing.T, stream grpc.ServerStreamingClient[pb.ServerUpdate], within time.Duration) *pb.VoiceAddressUpdate {
+	t.Helper()
+	select {
+	case r := <-pumpOf(stream):
+		if r.err != nil {
+			t.Fatalf("Recv: %v", r.err)
+		}
+		if r.u.Type != pb.ServerUpdate_VOICE_ADDRESS_UPDATE {
+			t.Fatalf("update type = %v, want VOICE_ADDRESS_UPDATE", r.u.Type)
+		}
+		return r.u.GetVoiceAddressUpdate()
+	case <-time.After(within):
+		t.Fatalf("no voice address update within %v", within)
+		return nil
+	}
+}
+
+// expectNoUpdate fails if the stream delivers anything within the window.
+func expectNoUpdate(t *testing.T, stream grpc.ServerStreamingClient[pb.ServerUpdate], within time.Duration) {
+	t.Helper()
+	select {
+	case r := <-pumpOf(stream):
+		t.Fatalf("unexpected update or end of stream: %v, %v", r.u, r.err)
+	case <-time.After(within):
+	}
+}
+
+func secretOf(t *testing.T, s *SimpleRadioServer, id uuid.UUID) string {
+	t.Helper()
+	secret, ok := s.serverState.GetVoiceSecret(id)
+	if !ok || len(secret) != 43 {
+		t.Fatalf("voice secret for %s: ok=%v len=%d", id, ok, len(secret))
+	}
+	return secret
+}
+
+func reportConnected(t *testing.T, vc *voiceontrol.VoiceControlServer, client uuid.UUID, node string) {
+	t.Helper()
+	resp, err := vc.ReportClientConnected(context.Background(), &vcpb.ClientConnectedRequest{ClientId: client.String(), ServerId: node})
+	if err != nil || !resp.Success {
+		t.Fatalf("ReportClientConnected: %v %+v", err, resp)
+	}
+}
+
+// Case 3: when a new node takes over a coalition, only subscribed clients of
+// the moved coalition get a redirect. Red is connected to A, so the count
+// path is used and Blue (count 0) is non-sticky and moves immediately.
+// RegisterVoiceServer publishes only VoiceNodeRegistered, which is not a
+// stream event, so any update here is the CoalitionReassigned branch.
+func TestRebalanceRedirectsSubscribedCoalition(t *testing.T) {
+	s, vc := newRegistryServer(t)
+	registerNode(t, vc, "A", 5002, false)
+	registerNode(t, vc, "G", 5003, true)
+	blue := addClient(s, "Blue")
+	red := addClient(s, "Red")
+	c := startGRPC(t, s)
+	blueStream := openUpdates(t, c, blue)
+	redStream := openUpdates(t, c, red)
+
+	reportConnected(t, vc, red, "A")
+	registerNode(t, vc, "B", 5004, false)
+
+	got := recvVoiceUpdate(t, blueStream, 2*time.Second)
+	if got.CoalitionVoiceAddr != "127.0.0.1:5004" || got.GlobalVoiceAddr != "127.0.0.1:5003" {
+		t.Errorf("addrs = %q / %q, want 127.0.0.1:5004 / 127.0.0.1:5003", got.CoalitionVoiceAddr, got.GlobalVoiceAddr)
+	}
+	if got.VoiceSecret != secretOf(t, s, blue) {
+		t.Errorf("VoiceSecret does not match Blue's secret")
+	}
+	expectNoUpdate(t, redStream, 300*time.Millisecond)
+}
+
+// Case 4: a sticky coalition (clients connected) is queued and flushed when
+// its last client disconnects. Red stays connected so clientNodes is not
+// empty after Blue disconnects; otherwise the fallback count over
+// serverState.Clients would keep Blue sticky.
+func TestStickyMoveFlushesOnDisconnect(t *testing.T) {
+	s, vc := newRegistryServer(t)
+	registerNode(t, vc, "A", 5002, false)
+	registerNode(t, vc, "G", 5003, true)
+	blue := addClient(s, "Blue")
+	red := addClient(s, "Red")
+	c := startGRPC(t, s)
+	blueStream := openUpdates(t, c, blue)
+	_ = openUpdates(t, c, red)
+
+	reportConnected(t, vc, blue, "A")
+	reportConnected(t, vc, red, "A")
+	registerNode(t, vc, "B", 5004, false)
+	expectNoUpdate(t, blueStream, 300*time.Millisecond)
+
+	resp, err := vc.ReportClientDisconnected(context.Background(), &vcpb.ClientDisconnectedRequest{ClientId: blue.String(), ServerId: "A"})
+	if err != nil || !resp.Acknowledged {
+		t.Fatalf("ReportClientDisconnected: %v %+v", err, resp)
+	}
+	got := recvVoiceUpdate(t, blueStream, 2*time.Second)
+	if got.CoalitionVoiceAddr != "127.0.0.1:5004" || got.GlobalVoiceAddr != "127.0.0.1:5003" {
+		t.Errorf("addrs = %q / %q, want 127.0.0.1:5004 / 127.0.0.1:5003", got.CoalitionVoiceAddr, got.GlobalVoiceAddr)
+	}
+	if got.VoiceSecret != secretOf(t, s, blue) {
+		t.Errorf("VoiceSecret does not match Blue's secret")
 	}
 }
