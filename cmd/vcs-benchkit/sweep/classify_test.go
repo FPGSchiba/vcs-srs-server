@@ -159,3 +159,70 @@ func TestDefaultLateLossBound(t *testing.T) {
 		t.Fatalf("MaxLateLossRatio = %v, want 0.01", DefaultBounds.MaxLateLossRatio)
 	}
 }
+
+func joinFailStep(cpu float64) StepData {
+	return StepData{
+		N:             2074,
+		LossRatio:     math.NaN(),
+		LateLossRatio: math.NaN(),
+		ServerCPU:     math.NaN(),
+		GenCPU:        math.NaN(),
+		JoinFailures:  2,
+		JoinAttempted: 1038,
+		JoinStages:    map[string]uint64{"hello": 2},
+		HelloTriesMax: 5,
+		RampGenCPU:    cpu,
+	}
+}
+
+func TestClassifyJoinFailure(t *testing.T) {
+	cases := []struct {
+		name string
+		cpu  float64
+		want StepOutcome
+		r0   string
+	}{
+		{"healthy generator is a breach", 0.40, Breach,
+			"join failure: 2 of 1038 new bots failed (hello 2); hello tries max 5"},
+		{"hot generator is invalid", 0.95, Invalid,
+			"generator limit during the ramp: generator cpu 95% above 85% with 2 join failures"},
+		{"unmeasured generator is invalid", math.NaN(), Invalid,
+			"invalid: generator cpu not measured during the ramp (2 join failures)"},
+		{"negative generator cpu is unmeasured", -1, Invalid,
+			"invalid: generator cpu not measured during the ramp (2 join failures)"},
+		{"exactly at the bound is a breach", 0.85, Breach,
+			"join failure: 2 of 1038 new bots failed (hello 2); hello tries max 5"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, reasons := Classify(joinFailStep(c.cpu), DefaultBounds)
+			if got != c.want {
+				t.Fatalf("outcome = %v (%v), want %v", got, reasons, c.want)
+			}
+			if len(reasons) != 1 || reasons[0] != c.r0 {
+				t.Fatalf("reasons = %q, want [%q]", reasons, c.r0)
+			}
+		})
+	}
+}
+
+func TestClassifyJoinFailureStagesOrdered(t *testing.T) {
+	s := joinFailStep(0.2)
+	s.JoinStages = map[string]uint64{"hello": 1, "control": 3, "radio": 0}
+	_, reasons := Classify(s, DefaultBounds)
+	want := "join failure: 2 of 1038 new bots failed (control 3, hello 1); hello tries max 5"
+	if len(reasons) != 1 || reasons[0] != want {
+		t.Fatalf("reasons = %q, want [%q]", reasons, want)
+	}
+}
+
+func TestClassifyJoinFailureWithoutHelloTries(t *testing.T) {
+	s := joinFailStep(0.2)
+	s.HelloTriesMax = 0
+	s.JoinStages = nil
+	_, reasons := Classify(s, DefaultBounds)
+	want := "join failure: 2 of 1038 new bots failed"
+	if len(reasons) != 1 || reasons[0] != want {
+		t.Fatalf("reasons = %q, want [%q]", reasons, want)
+	}
+}
