@@ -7,6 +7,8 @@
 # - Every artefact is relative only (ratios, knees, curves) and carries the
 #   runner topology label from that run's own probe. No absolute capacity
 #   number is a claim about any other machine.
+# - server_ref must contain the B-0 bench files and cmd/vcs-benchkit (S2 or
+#   later); an older ref fails the micro job's Predict knees step.
 # - This is v0 of three (S2/S4/S5); later inputs and jobs arrive with them.
 # - Inputs never reach run: text directly; they go through env:.
 name: Bench
@@ -18,7 +20,7 @@ on:
         type: string
         default: ''
       probe_only:
-        description: Run only the gate-0 runner probe (skips build-dependent micro job)
+        description: Skip the micro job (build and probe still run)
         type: boolean
         default: false
 
