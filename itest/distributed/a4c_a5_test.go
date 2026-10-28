@@ -4,7 +4,6 @@ package distributed
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -12,14 +11,15 @@ import (
 	"github.com/FPGSchiba/vcs-srs-server/internal/topology"
 )
 
-// binPath returns the server binary used by the shared topology.
+// binPath returns the server binary used by the shared topology. TestMain
+// resolves it (VCS_SERVER_BIN or a fresh build), so own-topology subtests
+// never skip.
 func binPath(t *testing.T) string {
 	t.Helper()
-	if b := os.Getenv("VCS_SERVER_BIN"); b != "" {
-		return b
+	if serverBin == "" {
+		t.Fatal("serverBin not set by TestMain")
 	}
-	t.Skip("own-topology subtests need VCS_SERVER_BIN")
-	return ""
+	return serverBin
 }
 
 // nodeID returns the node id the control process reports for role's address.
@@ -40,13 +40,17 @@ func nodeID(t *testing.T, tp *topology.Topology, role topology.Role) string {
 	return ""
 }
 
-// globalRelay runs the A4c flow on tp: Blue and Red dial the global node,
-// both tune to mhz, Blue sends 25 frames. It returns Red's received count.
-func globalRelay(t *testing.T, tp *topology.Topology, sendMHz float32) (blue, red int) {
+// globalRelay runs the A4c flow on tp: two Blue bots and one Red bot dial the
+// global node and tune to sendMHz; Blue 1 sends 25 frames. It returns the
+// frames received by Blue 2 (same-coalition positive control: proves the
+// bots, sockets and the global node's frame path work in this topology) and
+// by Red (the cross-coalition result under test).
+func globalRelay(t *testing.T, tp *topology.Topology, sendMHz float32) (blue2, red int) {
 	t.Helper()
 	b1 := newBotOn(t, tp, "Blue")
+	b2 := newBotOn(t, tp, "Blue")
 	r1 := newBotOn(t, tp, "Red")
-	for _, b := range []*bot{b1, r1} {
+	for _, b := range []*bot{b1, b2, r1} {
 		b.tune(sendMHz)
 		if !b.dialGlobal() {
 			t.Fatalf("%s bot HELLO to global node %s not ACKed", b.coalition, b.globalAddr)
@@ -54,7 +58,7 @@ func globalRelay(t *testing.T, tp *topology.Topology, sendMHz float32) (blue, re
 	}
 	f := freqKHz(sendMHz)
 	b1.send(b1.globalAddr, f, seqRange(1, 25)...)
-	return len(b1.recv(b1.globalAddr, f, 200*time.Millisecond)), len(r1.recv(r1.globalAddr, f, 1500*time.Millisecond))
+	return len(b2.recv(b2.globalAddr, f, 1500*time.Millisecond)), len(r1.recv(r1.globalAddr, f, 1500*time.Millisecond))
 }
 
 // A4c: whether the global node relays 249.0 across coalitions depends on the
@@ -69,7 +73,11 @@ func globalRelay(t *testing.T, tp *topology.Topology, sendMHz float32) (blue, re
 func TestGlobalNodeRelayDependsOnNodeFrequencyConfig_F2(t *testing.T) {
 	t.Run("nodeYAMLHasGlobals=false", func(t *testing.T) {
 		// Shared topology: node YAML has globalFrequencies: [].
-		if _, red := globalRelay(t, top, 249.0); red != 0 {
+		blue2, red := globalRelay(t, top, 249.0)
+		if blue2 != 25 {
+			t.Errorf("same-coalition control: Blue 2 received %d frames, want 25", blue2)
+		}
+		if red != 0 {
 			t.Errorf("Red received %d frames via global node, want 0 (F2: observed behaviour)", red)
 		}
 	})
@@ -94,11 +102,19 @@ func TestGlobalNodeRelayDependsOnNodeFrequencyConfig_F2(t *testing.T) {
 			}
 		})
 
-		if _, red := globalRelay(t, tp, 249.0); red != 25 {
+		blue2, red := globalRelay(t, tp, 249.0)
+		if blue2 != 25 {
+			t.Errorf("same-coalition control: Blue 2 received %d frames, want 25", blue2)
+		}
+		if red != 25 {
 			t.Errorf("Red received %d frames via global node, want 25", red)
 		}
 		// A coalition frequency stays isolated even on the global node.
-		if _, red := globalRelay(t, tp, 251.0); red != 0 {
+		blue2, red = globalRelay(t, tp, 251.0)
+		if blue2 != 25 {
+			t.Errorf("same-coalition control: Blue 2 received %d frames of 251.0, want 25", blue2)
+		}
+		if red != 0 {
 			t.Errorf("Red received %d frames of coalition freq 251.0 via global node, want 0", red)
 		}
 	})
@@ -147,6 +163,10 @@ func TestClientAssignmentsSingleNode_F3(t *testing.T) {
 			t.Fatalf("HELLO to global node not ACKed")
 		}
 		m, _ := assignments(t, top, func(m map[string]string) bool { return m[b.guid] == globalID })
+		// Settle, then re-check: a late report from the coalition node must
+		// not have displaced the entry (last report wins).
+		time.Sleep(300 * time.Millisecond)
+		m, _ = assignments(t, top, func(m map[string]string) bool { return true })
 		if got, ok := m[b.guid]; !ok || got != globalID {
 			t.Errorf("assignment for %s = %q (present=%v), want global node %q", b.guid, got, ok, globalID)
 		}

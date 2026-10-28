@@ -17,6 +17,10 @@ import (
 // top is the shared distributed topology (control, nodeA, nodeB, global).
 var top *topology.Topology
 
+// serverBin is the server binary the shared topology runs, set by TestMain
+// (from VCS_SERVER_BIN or a fresh build) so own-topology subtests can reuse it.
+var serverBin string
+
 // allowlist is the union of the per-test ERROR allowlists. It starts empty:
 // any level=ERROR line or race report in a server log fails the run. A line
 // is added here only with a comment citing its server source and why it is
@@ -50,6 +54,8 @@ func run(m *testing.M) int {
 			return 1
 		}
 	}
+
+	serverBin = bin
 
 	t, err := topology.Start(context.Background(), topology.Spec{
 		Binary: bin,
