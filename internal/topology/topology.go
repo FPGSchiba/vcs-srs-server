@@ -86,6 +86,11 @@ func Start(ctx context.Context, sp Spec) (*Topology, error) {
 	}
 	var last error
 	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			if cerr := ctx.Err(); cerr != nil {
+				return nil, fmt.Errorf("topology: retry abandoned: %w (first failure: %v)", cerr, last)
+			}
+		}
 		t, err := startOnce(ctx, sp)
 		if err == nil {
 			return t, nil
@@ -154,7 +159,11 @@ func startOnce(ctx context.Context, sp Spec) (top *Topology, err error) {
 	}
 
 	for i, r := range []Role{NodeA, NodeB, Global} {
-		if err = t.launch(r, t.nodeConfig(r)); err != nil {
+		var cfg ProcConfig
+		if cfg, err = t.nodeConfigOn(r, t.voicePorts[r], ""); err != nil {
+			return nil, err
+		}
+		if err = t.launch(r, cfg); err != nil {
 			return nil, err
 		}
 		want := i + 1
@@ -228,13 +237,15 @@ func (t *Topology) controlConfig() ProcConfig {
 	}
 }
 
-func (t *Topology) nodeConfig(r Role) ProcConfig {
-	return t.nodeConfigOn(r, t.voicePorts[r], "")
-}
-
-func (t *Topology) nodeConfigOn(r Role, voicePort int, serverName string) ProcConfig {
-	hp, _ := FreeTCPPort()
-	cp, _ := FreeTCPPort()
+func (t *Topology) nodeConfigOn(r Role, voicePort int, serverName string) (ProcConfig, error) {
+	hp, err := FreeTCPPort()
+	if err != nil {
+		return ProcConfig{}, err
+	}
+	cp, err := FreeTCPPort()
+	if err != nil {
+		return ProcConfig{}, err
+	}
 	return ProcConfig{
 		Role: r, HTTPPort: hp, ControlPort: cp,
 		VoicePort: voicePort, VoiceControlPort: t.vcPort,
@@ -243,7 +254,7 @@ func (t *Topology) nodeConfigOn(r Role, voicePort int, serverName string) ProcCo
 		RemoteHost: "127.0.0.1",
 		PublicAddr: net.JoinHostPort("127.0.0.1", strconv.Itoa(voicePort)),
 		ServerName: serverName,
-	}
+	}, nil
 }
 
 // spawn renders cfg into <Dir>/<name>/ and starts one process there.
@@ -450,7 +461,8 @@ func (t *Topology) LogText(role Role) (string, error) {
 }
 
 // Errors returns every disallowed ERROR or race line across the main
-// processes' logs (extra nodes are the caller's concern).
+// processes' logs. Extra nodes' logs are not scanned here or by the start-up
+// ladder; the caller reads them via the path StartExtraNode returned.
 func (t *Topology) Errors() []string {
 	t.mu.Lock()
 	roles := make([]Role, 0, len(t.procs))
@@ -474,17 +486,36 @@ func (t *Topology) Errors() []string {
 
 // StartExtraNode starts one more non-global voice node named name with the
 // given VoiceControl TLS serverName (A8: a wrong name never registers). It
-// returns an idempotent stop func and the node's log path.
+// returns an idempotent stop func and the node's log path. It fails once
+// the topology is stopped, so no process can outlive Stop.
 func (t *Topology) StartExtraNode(ctx context.Context, name string, serverName string) (stop func(), logPath string, err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
+	t.mu.Lock()
+	stopped := t.stopped
+	t.mu.Unlock()
+	if stopped {
+		return nil, "", errors.New("topology: StartExtraNode after Stop")
+	}
 	port, err := FreeUDPPort()
 	if err != nil {
 		return nil, "", err
 	}
-	p, err := t.spawn(name, Role(name), t.nodeConfigOn(Role(name), port, serverName))
+	cfg, err := t.nodeConfigOn(Role(name), port, serverName)
+	if err != nil {
+		return nil, "", err
+	}
+	p, err := t.spawn(name, Role(name), cfg)
 	if err != nil {
 		return nil, "", err
 	}
 	t.mu.Lock()
+	if t.stopped { // Stop ran while spawning: nothing else will reap p
+		t.mu.Unlock()
+		killProc(p)
+		return nil, "", errors.New("topology: Stop ran during StartExtraNode")
+	}
 	t.extra[name] = p
 	t.mu.Unlock()
 	var once sync.Once

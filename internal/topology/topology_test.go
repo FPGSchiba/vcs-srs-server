@@ -74,3 +74,68 @@ func TestStopIsIdempotent(t *testing.T) {
 		t.Fatalf("second Stop: %v", err)
 	}
 }
+
+// helperTopology is a Topology that spawns the sleeping helper process.
+func helperTopology(t *testing.T, spawned *int) *Topology {
+	t.Helper()
+	t.Setenv("GO_TOPOLOGY_HELPER", "sleep")
+	return &Topology{
+		sp: Spec{
+			Binary: os.Args[0],
+			Dir:    t.TempDir(),
+			argvHook: func(Role, []string) []string {
+				return []string{"-test.run=TestHelperProcess"}
+			},
+			procHook: func(Role, *exec.Cmd) { *spawned++ },
+		},
+		procs: map[Role]*proc{},
+		extra: map[string]*proc{},
+	}
+}
+
+func TestStopIsIdempotentWithLiveProcess(t *testing.T) {
+	var spawned int
+	top := helperTopology(t, &spawned)
+	stop, _, err := top.StartExtraNode(context.Background(), "extra", "")
+	if err != nil {
+		t.Fatalf("StartExtraNode: %v", err)
+	}
+	p := top.extra["extra"]
+	if err := top.Stop(); err != nil {
+		t.Fatalf("first Stop: %v", err)
+	}
+	if p.cmd.ProcessState == nil {
+		t.Fatal("process not reaped by first Stop")
+	}
+	if err := top.Stop(); err != nil {
+		t.Fatalf("second Stop: %v", err)
+	}
+	stop() // the returned stop func must also be safe after Stop
+	stop()
+}
+
+func TestStartExtraNodeAfterStopSpawnsNothing(t *testing.T) {
+	var spawned int
+	top := helperTopology(t, &spawned)
+	_ = top.Stop()
+	if _, _, err := top.StartExtraNode(context.Background(), "late", ""); err == nil {
+		t.Fatal("StartExtraNode succeeded after Stop")
+	}
+	if spawned != 0 {
+		t.Fatalf("spawned %d processes after Stop, want 0", spawned)
+	}
+}
+
+func TestStartExtraNodeHonoursCancelledContext(t *testing.T) {
+	var spawned int
+	top := helperTopology(t, &spawned)
+	defer top.Stop()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := top.StartExtraNode(ctx, "x", ""); err == nil {
+		t.Fatal("StartExtraNode ignored a cancelled context")
+	}
+	if spawned != 0 {
+		t.Fatalf("spawned %d processes, want 0", spawned)
+	}
+}
