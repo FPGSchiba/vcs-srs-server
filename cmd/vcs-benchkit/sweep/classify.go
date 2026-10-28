@@ -125,7 +125,9 @@ type StepData struct {
 	// HelloTriesMax is the most HELLOs any bot of the ramp sent.
 	HelloTriesMax int
 	// RampGenCPU is the kit-measured generator CPU fraction over the ramp. A
-	// negative or NaN value means not measured.
+	// negative or NaN value means not measured. The zero value reads as a
+	// healthy generator, so a driver must always set it from the ramp window
+	// (NaN or -1 when unmeasured) whenever JoinFailures may be non-zero.
 	RampGenCPU float64
 }
 

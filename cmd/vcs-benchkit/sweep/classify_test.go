@@ -28,6 +28,10 @@ func TestClassify(t *testing.T) {
 	}{
 		{"healthy step passes", func(*StepData) {}, Pass, nil},
 
+		// Without join failures the ramp generator CPU is not consulted: a hot
+		// RampGenCPU on a zero-failure step must not change the verdict.
+		{"hot RampGenCPU without join failures is ignored", func(s *StepData) { s.RampGenCPU = 0.99 }, Pass, nil},
+
 		// Loss: >= 1 % breaches.
 		{"loss just under 1 percent passes", func(s *StepData) { s.LossRatio = 0.0099 }, Pass, nil},
 		{"loss exactly 1 percent breaches", func(s *StepData) { s.LossRatio = 0.01 }, Breach, []string{"loss"}},
