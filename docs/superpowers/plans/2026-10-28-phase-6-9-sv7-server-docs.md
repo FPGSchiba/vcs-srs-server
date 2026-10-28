@@ -150,14 +150,14 @@ Every gate below was approved by the user with the design on **2026-10-28** ("Ex
 
 **Interfaces:** Produces `$S/sv7-tags.sh`. Task 10 re-runs it.
 
-- [ ] **Step 1: Write `$S/sv7-tags.sh`.** It reads the Taskfile through `wails3 task -dry`. For each `task` in `linux:build:headless darwin:build:headless linux:build darwin:build`, and each `p` in `true false`:
+- [x] **Step 1: Write `$S/sv7-tags.sh`.** It reads the Taskfile through `wails3 task -dry`. For each `task` in `linux:build:headless darwin:build:headless linux:build darwin:build`, and each `p` in `true false`:
   - `out=$(wails3 task -dry "$task" PRODUCTION=$p 2>&1)`;
   - take the last line matching `go build `;
   - collect every `-tags <value>` pair from it with `grep -oE -- '-tags [^ ]+'`;
   - print `"$task PRODUCTION=$p $(GOOS=${task%%:*} go list -e -f '{{context.BuildTags}}' <those pairs> .)"`.
 
   If no `go build` line is found, print `NO GO BUILD LINE for $task` and exit 1. That is the R5 trip-wire: if v3.0.0's `-dry` behaves unlike beta.26, stop. Do **not** fall back to hand-typed flags. The only fallback is a real build on Linux/WSL with `go version -m bin/vcs-server-headless | grep -- -tags`.
-- [ ] **Step 2: Run it (RED).** Expected, exactly:
+- [x] **Step 2: Run it (RED).** Expected, exactly:
   ```
   linux:build:headless PRODUCTION=true [headless]
   linux:build:headless PRODUCTION=false [headless]
@@ -169,14 +169,14 @@ Every gate below was approved by the user with the design on **2026-10-28** ("Ex
   darwin:build PRODUCTION=false []
   ```
   The first and third lines are the bug: `production` is dropped because the trailing `-tags headless` at `:121`/`:75` overrides the earlier `-tags production,headless`.
-- [ ] **Step 3: Edit the four lines.** Mirror `build/windows/Taskfile.yml:67, :69`:
+- [x] **Step 3: Edit the four lines.** Mirror `build/windows/Taskfile.yml:67, :69`:
   - linux `:121` and darwin `:75` become `- go build {{.BUILD_FLAGS}} -o {{.OUTPUT}}` (drop the trailing ` -tags headless`; keep the indentation);
   - linux `:123` and darwin `:79` become, character for character, the windows `:69` value: `BUILD_FLAGS: '{{if eq .PRODUCTION "true"}}-tags production,headless -trimpath -buildvcs=false -ldflags="-w -s"{{else}}-tags headless -buildvcs=false -gcflags=all="-l"{{end}}'`.
 
   Edit with the Edit tool, anchored on the `build:headless` block. Never use a blanket substitution.
-- [ ] **Step 4: Run it (GREEN).** Expected: the same table except `linux:build:headless PRODUCTION=true [production headless]` and `darwin:build:headless PRODUCTION=true [production headless]`. The GUI rows must be unchanged.
-- [ ] **Step 5: Scope check.** `git diff --stat` shows exactly `build/darwin/Taskfile.yml | 4 ++--` and `build/linux/Taskfile.yml | 4 ++--`. `git diff -U0 | grep '^@@'` shows hunks only at linux 121 and 123, and darwin 75 and 79. Then run the suite's cross-build loop: no `CROSS FAIL`.
-- [ ] **Step 6: Commit.** The message is `build: keep the production tag in linux/darwin headless release builds (SV7 Q4)`. The body says:
+- [x] **Step 4: Run it (GREEN).** Expected: the same table except `linux:build:headless PRODUCTION=true [production headless]` and `darwin:build:headless PRODUCTION=true [production headless]`. The GUI rows must be unchanged.
+- [x] **Step 5: Scope check.** `git diff --stat` shows exactly `build/darwin/Taskfile.yml | 4 ++--` and `build/linux/Taskfile.yml | 4 ++--`. `git diff -U0 | grep '^@@'` shows hunks only at linux 121 and 123, and darwin 75 and 79. Then run the suite's cross-build loop: no `CROSS FAIL`.
+- [x] **Step 6: Commit.** The message is `build: keep the production tag in linux/darwin headless release builds (SV7 Q4)`. The body says:
   - the trailing `-tags headless` overrode `-tags production,headless`;
   - it now mirrors `build/windows/Taskfile.yml:69`;
   - there is no runtime change today, because no file uses a `production` constraint (`git grep '^//go:build'`);
@@ -230,32 +230,32 @@ Every gate below was approved by the user with the design on **2026-10-28** ("Ex
 
 **Files:** Modify `README.md:17-20`, `:273`
 
-- [ ] **Step 1: Failing check.** `grep -c 'Live development section' README.md` → `1`. `grep -c 'spawns a goroutine per received datagram' README.md` → `1`.
-- [ ] **Step 2: Edit.**
+- [x] **Step 1: Failing check.** `grep -c 'Live development section' README.md` → `1`. `grep -c 'spawns a goroutine per received datagram' README.md` → `1`.
+- [x] **Step 2: Edit.**
   - Replace `:19-20` (the paragraph under `### Note about Wails3`) with:
     > Wails3 is used for the GUI and for the Taskfile that builds the different server modes. The headless server needs neither: after code generation it builds with plain `go build` (see [Building](#building)).
   - Replace the `:273` bullet with:
     > - **Flooding.** The read loop hands each datagram to one of a fixed set of shard workers, chosen by a hash of the sender ID, each with a 256-packet queue. When a shard's queue is full the packet is dropped and a rate-limited WARN is logged. There is no per-sender rate limit, so UDP flood mitigation is still not implemented in-process.
 
     (`voice/shard.go:12-27, :83-99`; `voice/server.go:190`.)
-- [ ] **Step 3: Check.** Both greps → `0`. `grep -c 'shard' README.md` → at least `1`.
-- [ ] **Step 4: Commit** `docs(readme): drop the dangling live-development reference; describe sharded voice dispatch (SV7)`.
+- [x] **Step 3: Check.** Both greps → `0`. `grep -c 'shard' README.md` → at least `1`.
+- [x] **Step 4: Commit** `docs(readme): drop the dangling live-development reference; describe sharded voice dispatch (SV7)`.
 
 ### Task 4: README Development / Building / Running / Flags (design rows 7–10)
 
 **Files:** Modify `README.md:28-36` (GUI mode), `:45-48` (headless), `:68-72` (config), `:74-96` (codegen, Building, Running, Flags)
 
-- [ ] **Step 1: Failing check.** Each of these greps returns ≥ 1 today and must return `0` afterwards: `'wails build\`'`, `'build/bin'`, `'by using the \`--\` separator'`, `'Default is \`true\`~~'`. And `grep -c 'go run github.com/99designs/gqlgen generate' README.md` → `0` today, `1` afterwards.
-- [ ] **Step 2: Edit `### Standalone GUI Mode`.** Delete `:33-36` ("Or" and `wails3 task run`). After the `wails3 dev` block, add: `` `wails3 dev` builds and runs the GUI with live reload, using `./build/config.yml`. `` (`Taskfile.yml:33`).
-- [ ] **Step 3: Edit `### Standalone Headless Mode`.** After `:48`, add:
+- [x] **Step 1: Failing check.** Each of these greps returns ≥ 1 today and must return `0` afterwards: `'wails build\`'`, `'build/bin'`, `'by using the \`--\` separator'`, `'Default is \`true\`~~'`. And `grep -c 'go run github.com/99designs/gqlgen generate' README.md` → `0` today, `1` afterwards.
+- [x] **Step 2: Edit `### Standalone GUI Mode`.** Delete `:33-36` ("Or" and `wails3 task run`). After the `wails3 dev` block, add: `` `wails3 dev` builds and runs the GUI with live reload, using `./build/config.yml`. `` (`Taskfile.yml:33`).
+- [x] **Step 3: Edit `### Standalone Headless Mode`.** After `:48`, add:
   > Each `headless-*` task first builds `bin/vcs-server-headless` (`bin/vcs-server-headless.exe` on Windows), then starts it with `--mode=standalone`, `--mode=control` or `--mode=voice`. The process runs until you stop it.
 
   (`build/*/Taskfile.yml` `headless-*` with `deps: build:headless`.)
-- [ ] **Step 4: Edit `### Config File`.** Append:
+- [x] **Step 4: Edit `### Config File`.** Append:
   > If the file named by `--config` does not exist, the server writes one with defaults: no coalitions, the admin HTTP port on 80, the client gRPC and voice ports on 5002, and placeholder token-key paths (`/path/to/ecdsa_key.pem`) that you must change.
 
   (`state/settings.go:136-195`; Task 2 Step 3a.)
-- [ ] **Step 5: Replace `### Building Protobuf files` (`:74-80`) with `### Code generation`:**
+- [x] **Step 5: Replace `### Building Protobuf files` (`:74-80`) with `### Code generation`:**
   ````markdown
   ### Code generation
 
@@ -281,7 +281,7 @@ Every gate below was approved by the user with the design on **2026-10-28** ("Ex
   ```
   ````
   Citations: `.github/actions/generate/action.yml:62-77`; `Dockerfile:26-27, :31`; `build/Taskfile.yml:4-11`; `go.mod:19`; `.github/workflows/test.yml:73`.
-- [ ] **Step 6: Replace `## Building` (`:82-84`):**
+- [x] **Step 6: Replace `## Building` (`:82-84`):**
   ```markdown
   ## Building
 
@@ -293,7 +293,7 @@ Every gate below was approved by the user with the design on **2026-10-28** ("Ex
   Releases ship only the Docker image (`Dockerfile`, built with `-tags production,headless`). There is no GUI release artifact.
   ```
   The side-effect list must equal what Task 2 Step 6 recorded. Citations: `Taskfile.yml:11, :15-18`; `build/*/Taskfile.yml`; `.github/workflows/test.yml:39, :45`; `.github/workflows/release.yml`; `Dockerfile:46-51`.
-- [ ] **Step 7: Replace `## Running` and `### Flags` (`:86-96`):**
+- [x] **Step 7: Replace `## Running` and `### Flags` (`:86-96`):**
   ```markdown
   ## Running
 
@@ -312,8 +312,8 @@ Every gate below was approved by the user with the design on **2026-10-28** ("Ex
   - `--global`: headless only, and only with `--mode voice`. Run as the global-frequency voice node. Default `false`.
   ```
   The flag list must equal `$S/sv7-flags.txt` (Task 2 Step 2). Citations: `shared.go:23-31, :34-54`; `headless.go:14, :30-33`; `app/app.go:157`; `build/windows/Taskfile.yml:58-60`; `build/linux/Taskfile.yml:112-114`; `build/darwin/Taskfile.yml:68-70`.
-- [ ] **Step 8: Check.** Re-run the Step 1 greps; they give the "afterwards" values. `grep -n '^## \|^### ' README.md` shows `### Code generation`, `## Building`, `## Running` and `### Flags`, in that order, before `## Improvements`.
-- [ ] **Step 9: Commit** `docs(readme): Wails v3 build, codegen, run and flag instructions (SV7)`.
+- [x] **Step 8: Check.** Re-run the Step 1 greps; they give the "afterwards" values. `grep -n '^## \|^### ' README.md` shows `### Code generation`, `## Building`, `## Running` and `### Flags`, in that order, before `## Improvements`.
+- [x] **Step 9: Commit** `docs(readme): Wails v3 build, codegen, run and flag instructions (SV7)`.
 
 ### Task 5: README `## Client connections` (design rows 1–6; prose approved here)
 
@@ -321,8 +321,8 @@ Every gate below was approved by the user with the design on **2026-10-28** ("Ex
 
 **Interfaces:** Produces the anchor `#client-connections`, which Task 7 (`deploy/README.md`) and the client DOC track link to. Also `#client-facing-tls` (Task 7 links it).
 
-- [ ] **Step 1: Failing check.** `grep -c '^## Client connections$' README.md` → `0`.
-- [ ] **Step 2: Insert this text verbatim** (the inline citations in brackets after each paragraph are for the reviewer; they do **not** go into the README, they go into the PR description per D3):
+- [x] **Step 1: Failing check.** `grep -c '^## Client connections$' README.md` → `0`.
+- [x] **Step 2: Insert this text verbatim** (the inline citations in brackets after each paragraph are for the reviewer; they do **not** go into the README, they go into the PR description per D3):
 
   ````markdown
   ## Client connections
@@ -409,11 +409,11 @@ Every gate below was approved by the user with the design on **2026-10-28** ("Ex
   - **0600 and GUI (PR description):** cite `voiceontrol/utils.go:29,32` as code reading; the file mode and the GUI window were not observed (Windows, no screen). Write 'webview2 started', not 'a window opens'.
   - **Version / Login:** `srs/utils.go:13-60`; `srs/auth_service.go:48-58, :292-329, :448-501, :967-986`; client `internal/auth/auth.go:34`, `internal/version/version.go:9`, `internal/session/session.go:744`; SEC's merged cap (Task 9).
   - **Lifecycle:** `control/server.go:524-525, :548-557`; `srs/session.go:55-61, :78-94, :166-201`; `srs/srs_service.go:74, :161, :186-197, :418-422, :722-732`; `app/clients.go:233-235`.
-- [ ] **Step 3: Check.**
+- [x] **Step 3: Check.**
   - `grep -c '^## Client connections$' README.md` → `1`;
   - `grep -c '^### Client-facing TLS$' README.md` → `1`;
   - `grep -n '^## ' README.md` shows `## Running`, then `## Client connections`, then `## Improvements`, in that order.
-- [ ] **Step 4: Commit** `docs(readme): Client connections section: ports, voice address, clientTLS, version floor, login, session lifecycle (SV7)`.
+- [x] **Step 4: Commit** `docs(readme): Client connections section: ports, voice address, clientTLS, version floor, login, session lifecycle (SV7)`.
 
 ### Task 6: README historical-design line (design row 17)
 
@@ -421,10 +421,10 @@ Every gate below was approved by the user with the design on **2026-10-28** ("Ex
 
 The false statements row 17 names (`:290`, `:325-330`, `:404-410`) are all in this section, so the line goes here. `## Voice Communication Protocol` (`:171`) carries the SV-era trust model, which is accurate, and is not marked. The `:238`/`:242` contradiction stays a follow-up (§10).
 
-- [ ] **Step 1: Insert** a blank line, then:
+- [x] **Step 1: Insert** a blank line, then:
   > *Design notes from before the implementation. Where they differ from [Client connections](#client-connections), that section is authoritative.*
-- [ ] **Step 2: Check.** `grep -A2 '^## Distributed VOIP System Architecture' README.md` shows the line. `git diff --stat` shows 2 insertions.
-- [ ] **Step 3: Commit** `docs(readme): mark the distributed-architecture notes as historical (SV7)`.
+- [x] **Step 2: Check.** `grep -A2 '^## Distributed VOIP System Architecture' README.md` shows the line. `git diff --stat` shows 2 insertions.
+- [x] **Step 3: Commit** `docs(readme): mark the distributed-architecture notes as historical (SV7)`.
 
 ### Task 7: Deploy docs (design rows 13–16; Q1 = A, Q2 = A)
 
@@ -432,12 +432,12 @@ The false statements row 17 names (`:290`, `:325-330`, `:404-410`) are all in th
 - Modify: the `docker-compose.dev.yml:52` comment (one line becomes a short comment block; `:53` `restart: on-failure` is unchanged)
 - Modify: `deploy/README.md:97-99`, `:113`, `:131`, `:178-180`
 
-- [ ] **Step 1: Failing checks.**
+- [x] **Step 1: Failing checks.**
   - `grep -c 'retries if control hasn.t written its cert' docker-compose.dev.yml` → `1`;
   - `grep -cE 'publicAddr: voice-(eu|global)' deploy/README.md` → `2`;
   - `grep -c 'BEGIN RSA PRIVATE KEY' deploy/README.md` → `0`;
   - `grep -c 'docker-compose.central.yml. already mounts' deploy/README.md` → `0`.
-- [ ] **Step 2: `docker-compose.dev.yml:52`.** Replace the comment line with (4-space indent, as `:52`):
+- [x] **Step 2: `docker-compose.dev.yml:52`.** Replace the comment line with (4-space indent, as `:52`):
   ```yaml
       # restart: on-failure only covers crashes. A voice node does not exit when
       # control's cert is missing (it logs the error and runs without voice) or
@@ -446,27 +446,27 @@ The false statements row 17 names (`:290`, `:325-330`, `:404-410`) are all in th
       #   docker compose -f docker-compose.dev.yml restart voice-eu voice-global
   ```
   Citations: `voice/server.go:170-175`; `app/server_control.go:182-189`; `headless.go:44`; `voiceontrol/client.go:186-205, :255-287`.
-- [ ] **Step 3: `deploy/README.md:97-99`.** After the existing paragraph, add:
+- [x] **Step 3: `deploy/README.md:97-99`.** After the existing paragraph, add:
   > The shipped `docker-compose.central.yml` already mounts `./certs:/certs:ro`, so a first start cannot write these files. For the first start, remove `:ro` from the `control` service's `./certs` line, start once, then restore it. Alternatively, create the files beforehand. The same applies to a `clientTLS` pair you let the server generate (see [Client-facing TLS](#client-facing-tls)). `deploy/config/` is not shipped; create it with the files below.
 
   (`deploy/docker-compose.central.yml:15`; F6, F7.)
-- [ ] **Step 4: `deploy/README.md:113, :131`.**
+- [x] **Step 4: `deploy/README.md:113, :131`.**
   - `:113` becomes `  publicAddr: vcs.example.com:5002  # Public host[:port] clients use to reach this node`.
   - `:131` becomes `  publicAddr: vcs.example.com:5003`.
   - After the `:101-115` block, add:
     > `publicAddr` is handed to clients as `host:port`. Clients outside the compose network cannot resolve the service names `voice-eu` / `voice-global`, so use the host's public name or IP (see [Voice address](../README.md#voice-address)).
 
   Citations: `voiceontrol/client.go:440-468`; `voiceontrol/service.go:192`; `srs/srs_service.go:165-176`.
-- [ ] **Step 5: `deploy/README.md:178-180`.** After "…with no configuration at all.", add:
+- [x] **Step 5: `deploy/README.md:178-180`.** After "…with no configuration at all.", add:
   > As of commit `df8d9f3` the server loads only **PKCS#1 RSA** private keys (`-----BEGIN RSA PRIVATE KEY-----`). Most CAs and `openssl genrsa` on OpenSSL 3 produce PKCS#8 (`-----BEGIN PRIVATE KEY-----`). Convert with OpenSSL 3: `openssl rsa -in key.pem -traditional -out key-pkcs1.pem`; on OpenSSL 1.1.1: `openssl rsa -in key.pem -out key-pkcs1.pem`. ECDSA keys cannot be used today (`openssl rsa` answers `Not an RSA key`). Details: [Client-facing TLS](../README.md#client-facing-tls).
 
   (`voiceontrol/utils.go:47-54`; Task 2 Step 4.)
-- [ ] **Step 6: Checks.**
+- [x] **Step 6: Checks.**
   - The Step 1 greps now give `0`, `0`, `≥1` and `1`.
   - **Comment-only compose diff:** `git diff -U0 docker-compose.dev.yml | grep -E '^[+-][^+-]' | grep -vE '^[+-]\s*#'` prints nothing.
   - If `docker` is installed: `docker compose -f docker-compose.dev.yml config -q` exits 0. Otherwise record "docker not available".
   - `git diff --stat` lists only `docker-compose.dev.yml` and `deploy/README.md`.
-- [ ] **Step 7: Commit** `docs(deploy): voice restart comment, public publicAddr, first-start :ro note, PKCS#1 key requirement (SV7 Q1, Q2)`.
+- [x] **Step 7: Commit** `docs(deploy): voice restart comment, public publicAddr, first-start :ro note, PKCS#1 key requirement (SV7 Q1, Q2)`.
 
 ### Task 8: Commit the SV7 design and plan to the server repo
 
@@ -476,8 +476,8 @@ The false statements row 17 names (`:290`, `:325-330`, `:404-410`) are all in th
 
 These follow SV1–SV5 and UP, which keep their specs and plans in the server repo.
 
-- [ ] **Step 1:** Copy both files, then fix the first line of the spec copy to read `**Status: approved 2026-10-28** (user decisions at the end).` The file is otherwise unchanged.
-- [ ] **Step 2: Commit** `docs(phase-6.9): SV7 design and plan`.
+- [x] **Step 1:** Copy both files, then fix the first line of the spec copy to read `**Status: approved 2026-10-28** (user decisions at the end).` The file is otherwise unchanged.
+- [x] **Step 2: Commit** `docs(phase-6.9): SV7 design and plan`.
 
 ### Task 9: Rebase checkpoint onto SEC (after SEC merges)
 
