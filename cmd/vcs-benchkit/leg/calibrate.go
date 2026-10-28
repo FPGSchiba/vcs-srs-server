@@ -141,6 +141,10 @@ func RunCalibration(ctx context.Context, c CalConfig) (*Calibration, error) {
 			c.OnLine(lineType(line), append([]byte(nil), line...))
 		}
 	}
+	// A read error (a line over the limit) stops the scanner, not calibrate:
+	// keep draining so it can exit instead of blocking on a full pipe.
+	scanErr := sc.Err()
+	_, _ = io.Copy(io.Discard, calOut)
 	runErr := cal.Wait()
 
 	// The reflector is always stopped politely, also after a calibrate
@@ -153,6 +157,9 @@ func RunCalibration(ctx context.Context, c CalConfig) (*Calibration, error) {
 
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if scanErr != nil {
+		return nil, fmt.Errorf("read calibrate output: %w", scanErr)
 	}
 	steps, pps, lb, haveCap, stop, perr := parseCalibrateLines(out.Bytes())
 	if perr != nil {

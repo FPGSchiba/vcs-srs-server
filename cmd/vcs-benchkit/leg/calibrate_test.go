@@ -90,6 +90,16 @@ func fakeLoadbot(args []string) int {
 				}
 			}
 			return 0
+		case "huge-line":
+			// One line beyond the reader's 4 MiB limit, then more output: the kit
+			// must keep draining stdout or this process blocks on a full pipe.
+			fmt.Println(`{"type":"calibration","n":64,"egress_pps":3150,"valid":true,"violations":null}`)
+			os.Stdout.Write(bytes.Repeat([]byte("x"), 5<<20))
+			fmt.Println()
+			for i := 0; i < 1<<16; i++ {
+				fmt.Println(`{"type":"progress"}`)
+			}
+			return 0
 		case "v1-none":
 			fmt.Fprintln(os.Stderr, "vcs-loadbot: calibrate: bot 0: no HELLO_ACK after 5 tries")
 			return 1
@@ -271,5 +281,19 @@ func TestParseCalibrateTolerant(t *testing.T) {
 	}
 	if _, _, _, err := ParseCalibrate([]byte(`{"type":"calibration_stopped","n":64}`)); err == nil {
 		t.Fatal("no completed step must be an error")
+	}
+}
+
+// A stdout line over the reader's limit is an error that names the cause, and
+// the kit keeps draining the pipe so calibrate can exit instead of hanging on
+// a full pipe until the leg's context ends.
+func TestRunCalibrationOversizeLineFailsFast(t *testing.T) {
+	start := time.Now()
+	_, err := runFakeCal(t, "huge-line", CalConfig{})
+	if err == nil || !strings.Contains(err.Error(), "calibrate output") {
+		t.Fatalf("err = %v, want a calibrate output read error", err)
+	}
+	if el := time.Since(start); el > 15*time.Second {
+		t.Fatalf("took %v: the kit stopped draining calibrate's stdout", el)
 	}
 }
