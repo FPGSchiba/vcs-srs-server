@@ -16,8 +16,7 @@ Linux GUI builds need `libgtk-4-dev` and `libwebkitgtk-6.0-dev` (the Wails v3 de
 
 ### Note about Wails3
 
-I am currently using Wails3 mainly for the Task file to be able to build the different modes of the server.
-So to run the commands that are mentioned in the Live development section, you need to have Wails3 installed. But you can also run the server without Wails3 by using the commands configured in the `Taskfile.yml` file.
+Wails3 is used for the GUI and for the Taskfile that builds the different server modes. The headless server needs neither: after code generation it builds with plain `go build` (see [Building](#building)).
 
 ## Development
 
@@ -270,7 +269,7 @@ KEEPALIVE deliberately does not carry the secret. It cannot rebind, so it cannot
 - **Replay of a captured HELLO.** A HELLO carries the session ID and the secret together, in cleartext. An attacker who captures one can replay it from their own address and take over the session outright — no address forging needed. The secret does not rotate and HELLO carries no nonce or timestamp, so a captured HELLO stays valid for the life of the session. What the secret buys is that a HELLO is sent only at connect or reconnect, whereas voice packets flow continuously: the window narrows from "sniff any packet at any time" to "sniff the one HELLO at session start". Closing this needs transport encryption.
 - **Eavesdropping.** Payloads are cleartext. A passive observer on the network path still hears all traffic they can see. This needs transport encryption (DTLS/SRTP) and is not implemented.
 - **Source-address spoofing.** An attacker who can observe a session ID *and* forge the victim's source address — without needing to receive replies — can still inject VOICE and BYE packets on an existing binding. A forged BYE is the cheapest case: a single 27-byte packet that needs no reply disconnects the victim. On a shared LAN this is achievable. For this injection path specifically, the bar rises from "observe one packet" to "observe one packet and forge addresses blind" — a real improvement, though it does not apply to the HELLO-replay hijack above, which needs no forging at all.
-- **Flooding.** The server spawns a goroutine per received datagram with no backpressure. UDP flood mitigation is not implemented in-process.
+- **Flooding.** The read loop hands each datagram to one of a fixed set of shard workers, chosen by a hash of the sender ID, each with a 256-packet queue. When a shard's queue is full the packet is dropped and a rate-limited WARN is logged. There is no per-sender rate limit, so UDP flood mitigation is still not implemented in-process.
 
 
 ## Distributed VOIP System Architecture
