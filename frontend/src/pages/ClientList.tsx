@@ -40,11 +40,16 @@ function ClientListPage() {
         });
     }, []);
 
+    // Wails v3 GA bindings type map values as optional; skip any undefined entry.
+    const entries = clients
+        ? Object.entries(clients).filter((entry): entry is [string, ClientState] => entry[1] !== undefined)
+        : [];
+
     return (
         <>
             <Paper className="clients clients-paper">
                 <Box className="clients clients-content">
-                    { clients && Object.entries(clients).filter((e): e is [string, ClientState] => e[1] !== undefined).map(([key, client]) => (
+                    { entries.map(([key, client]) => (
                         <ClientEntry key={key} client={client} clientId={key} handleBan={handleBan} handleKick={handleKick} />
                     ))}
                 </Box>
