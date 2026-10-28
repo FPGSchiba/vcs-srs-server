@@ -35,6 +35,9 @@ type ProcConfig struct {
 	TokenPrivateKey, TokenPublicKey, VCCert, VCKey     string
 	RemoteHost                                         string
 	PublicAddr                                         string
+	// ServerName is the TLS server name for the VoiceControl channel;
+	// empty means "localhost" (the pre-generated certificate's SAN).
+	ServerName string
 }
 
 // yamlSingleQuote renders s as a single-quoted YAML scalar. Single quotes
@@ -96,7 +99,7 @@ voiceControl:
   listenHost: 127.0.0.1
   certificateFile: {{q .VCCert}}
   privateKeyFile: {{q .VCKey}}
-  serverName: localhost
+  serverName: {{q .ServerName}}
   publicAddr: {{q .PublicAddr}}
   region: ""
 
@@ -107,6 +110,9 @@ api:
 // RenderConfig renders one process's config.yaml. Every host is
 // 127.0.0.1 and no clientTLS block is emitted (plaintext loopback).
 func RenderConfig(c ProcConfig) ([]byte, error) {
+	if c.ServerName == "" {
+		c.ServerName = "localhost"
+	}
 	var b bytes.Buffer
 	if err := configTmpl.Execute(&b, c); err != nil {
 		return nil, err
