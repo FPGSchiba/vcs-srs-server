@@ -6,7 +6,7 @@ This is the official server for the [Vanguard Communication System](). It is a d
 
 ## Installation
 
-Important: This project uses the [Wails v3](https://github.com/wailsapp/wails) framework. The `wails3` CLI must match the Wails version in `go.mod`, so install it with:
+Important: This project uses the [Wails v3](https://github.com/wailsapp/wails) framework. The `wails3` CLI must match the Wails version in `go.mod`, so install it by running this from the repository root:
 
 ```bash
 go install "github.com/wailsapp/wails/v3/cmd/wails3@$(go list -m -f '{{.Version}}' github.com/wailsapp/wails/v3)"
