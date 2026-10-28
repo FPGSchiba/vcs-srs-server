@@ -44,7 +44,6 @@ npm_pkg="@wailsio/runtime"
 label="wails-update"
 marker="<!-- wails-update-check -->"
 advisories_url="https://github.com/wailsapp/wails/security/advisories"
-curl_opts="-fsSL --proto =https --tlsv1.2 --retry 3 --max-time 30"
 
 if [ "$dry_run" = 0 ] && [ -z "${GITHUB_REPOSITORY:-}" ]; then
   die "GITHUB_REPOSITORY is not set (use --dry-run to only print)"
@@ -73,15 +72,13 @@ plain_re='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'
 [[ "$npm_current" =~ $plain_re ]] || die "$npm_pkg in $pkg_json is not a plain version: $npm_spec"
 
 # --- latest stable versions --------------------------------------------------
-# shellcheck disable=SC2086 # curl_opts is a deliberate word list
-curl $curl_opts "https://proxy.golang.org/github.com/wailsapp/wails/v3/@v/list" > "$work/proxy-list" \
+curl -fsSL --proto =https --tlsv1.2 --retry 3 --max-time 30 "https://proxy.golang.org/github.com/wailsapp/wails/v3/@v/list" > "$work/proxy-list" \
   || die "could not fetch the Go module proxy version list"
 go_latest="$(tr -d '\r' < "$work/proxy-list" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
   | jq -R . | jq -rs "$semkey"' max_by(semkey) // empty' | tr -d '\r' || true)"
 [ -n "$go_latest" ] || die "the Go module proxy lists no stable $go_pkg version"
 
-# shellcheck disable=SC2086
-curl $curl_opts -H 'Accept: application/vnd.npm.install-v1+json' 'https://registry.npmjs.org/@wailsio%2Fruntime' > "$work/npm.json" \
+curl -fsSL --proto =https --tlsv1.2 --retry 3 --max-time 30 -H 'Accept: application/vnd.npm.install-v1+json' 'https://registry.npmjs.org/@wailsio%2Fruntime' > "$work/npm.json" \
   || die "could not fetch $npm_pkg from the npm registry"
 npm_latest="$(jq -r '."dist-tags".latest // empty' < "$work/npm.json" | tr -d '\r')"
 [ -n "$npm_latest" ] || die "the npm registry has no latest dist-tag for $npm_pkg"
