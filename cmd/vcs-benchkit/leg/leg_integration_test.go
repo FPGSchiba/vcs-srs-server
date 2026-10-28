@@ -27,6 +27,9 @@ func TestLegSmoke(t *testing.T) {
 		t.Skip("needs two cpus: one for the server, one for the generator")
 	}
 	out := t.TempDir()
+	if d := os.Getenv("LEG_SMOKE_OUT"); d != "" {
+		out = d // keep the files for inspection
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	err := Run(ctx, Options{
