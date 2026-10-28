@@ -1,0 +1,59 @@
+name: Distributed integration
+
+# Multi-process distributed integration suite (itest/distributed).
+#
+# - Release gate: release.yml calls this workflow (with race: true) and the
+#   docker job needs it, so a failing distributed suite blocks a release.
+# - Manual: run it from the Actions tab (workflow_dispatch). The suite is not
+#   run on PRs; test.yml only compiles it (go vet -tags headless,integration).
+on:
+  workflow_dispatch:
+    inputs:
+      race:
+        description: Build the server and run the tests with -race
+        type: boolean
+        default: true
+  workflow_call:
+    inputs:
+      race:
+        description: Build the server and run the tests with -race
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  itest:
+    name: Distributed integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Assert Go toolchain
+        run: bash .github/scripts/assert-go-toolchain.sh
+
+      - name: Generate code
+        uses: ./.github/actions/generate
+
+      - name: Vet
+        run: go vet -tags headless,integration ./itest/... ./internal/topology/...
+
+      # The input goes through the environment: workflow inputs are not shell
+      # variables, and are never interpolated into a run: line.
+      - name: Build server
+        env:
+          RACE_FLAG: ${{ inputs.race && '-race' || '' }}
+        run: go build $RACE_FLAG -tags headless -o "$RUNNER_TEMP/vcs-server" .
+
+      - name: Run distributed suite
+        env:
+          RACE_FLAG: ${{ inputs.race && '-race' || '' }}
+        run: VCS_SERVER_BIN="$RUNNER_TEMP/vcs-server" go test $RACE_FLAG -tags headless,integration -count=1 -timeout 8m -v ./itest/distributed/...

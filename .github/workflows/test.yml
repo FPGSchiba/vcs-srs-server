@@ -38,6 +38,11 @@ jobs:
       - name: Vet
         run: go vet -tags headless ./...
 
+      # Compile-only rot guard (R15, G-CI4): compiles itest/ on every PR
+      # without running it, so an API change cannot break it until release day.
+      - name: Vet integration-tagged code (compile-only rot guard)
+        run: go vet -tags headless,integration ./...
+
       # Blocking (Phase 6.9 SEC D5): any reachable advisory fails the job.
       # A new advisory can turn main red with no code change; that is the
       # point of the gate. Covers linux + headless only (design R13).
