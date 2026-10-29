@@ -32,7 +32,7 @@ on:
       client_ref:
         description: Client commit that provides vcs-loadbot (full 40-hex SHA; pinned, bumped deliberately)
         type: string
-        default: '694e06bbb55da6f6b7caf780287710d268627736'
+        default: 'b55823e195577506ba5c3fa2c6d16a48a5f9bd5b'
       scenarios:
         description: Scenario to run (v1 has one-big-net only)
         type: choice
