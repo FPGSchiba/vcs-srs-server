@@ -386,6 +386,12 @@ env -u BENCH_HOST_IN_CONTAINER BENCH_HOST_NPROC=24 BENCH_HOST_SERVER_SHA=feed123
 set -e
 if jq -e '.server_sha == "feed1234" and .server_dirty == true' "$tmp/out/host.json" >/dev/null; then pass host-json-server-sha-names; else fail "host-json-server-sha-names ($(cat "$tmp/out/host.json"))"; fi
 
+# a run launched through docker executes the native pipeline in the container; host.json records the launch mode
+set +e
+BENCH_HOST_IN_CONTAINER=1 BENCH_HOST_NPROC=24 BENCH_HOST_FAKE_DIRTY=false bash "$script" native --host-label local-docker --server-set 0 --gen-set 4-11 --out "$(fresh_out)" --dry-run >/dev/null 2>&1
+set -e
+if jq -e '.mode == "docker"' "$tmp/out/host.json" >/dev/null; then pass host-json-mode-docker; else fail "host-json-mode-docker ($(cat "$tmp/out/host.json" 2>&1))"; fi
+
 recs --gogc both --repeats 2 --leg-arg --n-max=200 --note 'High performance | apps closed'
 if jq -e '(keys - ["server_sha","go_version","client_sha","client_go_version","server_dirty"]) == []
           and (["server_sha","go_version","client_sha","client_go_version","server_dirty"] - keys) == []

@@ -290,7 +290,9 @@ write_records() {
   done
   nproc_v="${BENCH_HOST_NPROC:-$(nproc 2>/dev/null || true)}"
   kernel="${BENCH_HOST_FAKE_KERNEL:-$(uname -r 2>/dev/null || echo unknown)}"
-  jq -n --arg host_label "$host_label" --arg mode "$mode" \
+  rec_mode="$mode"   # the container runs the native pipeline; record how it was launched
+  if [ -n "${BENCH_HOST_IN_CONTAINER:-}" ]; then rec_mode=docker; fi
+  jq -n --arg host_label "$host_label" --arg mode "$rec_mode" \
     --argjson image "$(str_or_null "${BENCH_HOST_IMAGE:-}")" \
     --argjson docker_version "$(str_or_null "${BENCH_HOST_DOCKER_VERSION:-}")" \
     --argjson tool_versions "$(str_or_null "${BENCH_HOST_TOOL_VERSIONS:-}")" \
