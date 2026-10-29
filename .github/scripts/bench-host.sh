@@ -197,6 +197,7 @@ done
 if [ -e "$out_dir" ]; then
   [ -d "$out_dir" ] || die "--out $out_dir is not a directory"
   if [ -n "${BENCH_HOST_IN_CONTAINER:-}" ]; then
+    # BENCH_HOST_IN_CONTAINER is internal: the docker launcher sets it, users must not (it only loosens this check)
     # the docker launcher stages the source archive and a --predict file in --out; nothing else may be there
     [ -z "$(ls -A "$out_dir" | grep -v -x -e .src.tar -e .predict.json || true)" ] || die "--out $out_dir must be empty"
   else
@@ -587,14 +588,20 @@ pipeline_docker() {
   # Only now: MSYS_NO_PATHCONV would stop git.exe from understanding the /d/... paths used above.
   # Git Bash rewrites /out and /work/src in docker arguments unless told not to, and wants Windows paths for -v.
   local uname_s="${BENCH_HOST_FAKE_UNAME:-$(uname -s 2>/dev/null || echo unknown)}"
-  mkdir -p "$out_dir"
-  out_abs="$(cd "$out_dir" && pwd)"
+  # A dry-run must leave nothing behind, so it does not create --out; a missing one is taken as given.
+  if [ "$dry_run" -eq 1 ] && [ ! -d "$out_dir" ]; then
+    case "$out_dir" in /*) out_abs="$out_dir" ;; *) out_abs="$PWD/$out_dir" ;; esac
+  else
+    mkdir -p "$out_dir"
+    out_abs="$(cd "$out_dir" && pwd)"
+  fi
   host_out="$out_abs"
   case "$uname_s" in
     MINGW*|MSYS*)
       export MSYS_NO_PATHCONV=1
       echo "bench-host: Git Bash detected, MSYS_NO_PATHCONV=1 and Windows paths for docker" >&2
-      host_out="${BENCH_HOST_FAKE_PWDW:-$(cd "$out_dir" && pwd -W)}" ;;
+      if [ -n "${BENCH_HOST_FAKE_PWDW:-}" ]; then host_out="$BENCH_HOST_FAKE_PWDW"
+      elif [ -d "$out_dir" ]; then host_out="$(cd "$out_dir" && pwd -W)"; fi ;;
   esac
 
   dver="${BENCH_HOST_DOCKER_VERSION:-}"
@@ -603,7 +610,7 @@ pipeline_docker() {
     else dver="$(docker version --format '{{.Server.Version}}' 2>/dev/null || true)"; fi
   fi
 
-  if [ -n "$predict" ]; then cp "$predict" "$out_abs/.predict.json"; fi
+  if [ -n "$predict" ] && [ -d "$out_abs" ]; then cp "$predict" "$out_abs/.predict.json"; fi
 
   if [ "$privileged_sysctl" -eq 1 ]; then
     echo "bench-host: WARNING: --privileged-sysctl runs the container privileged and changes the host's net.core.rmem_max/wmem_max until reboot; the script restores the old values on exit" >&2
@@ -632,6 +639,8 @@ pipeline_docker() {
     -v "$host_out:/out" -v vcs-bench-gomod:/go/pkg/mod -v vcs-bench-gocache:/root/.cache/go-build
     "$IMAGE" bash -c "$c")
 
+  # a SIGINT or a failed git archive must not leave a partial .src.tar in --out (the next run would refuse it)
+  trap "rm -f $(q1 "$host_out/.src.tar")" EXIT
   # core.autocrlf=false: git archive converts to the working-tree form, and CRLF scripts do not run in the container
   run_in "$repo" git -c core.autocrlf=false archive --format=tar HEAD -o "$host_out/.src.tar"
   local rc=0

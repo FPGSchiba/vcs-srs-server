@@ -582,6 +582,32 @@ out="$(env -u BENCH_HOST_IN_CONTAINER BENCH_HOST_NPROC=24 bash "$script" native 
 set -e
 expect native-host-rejects-staging 2 "must be empty"
 
+# dry-run docker must not create --out when it does not exist
+nx="$tmp/nx-out"; rm -rf "$nx"
+set +e
+out="$(env -u BENCH_HOST_IN_CONTAINER BENCH_HOST_NPROC=24 BENCH_HOST_FAKE_SHA=0123abcd BENCH_HOST_FAKE_DIRTY=false BENCH_HOST_FAKE_UNAME=Linux   bash "$script" docker --host-label local-docker --server-set 0 --gen-set 4-11 --out "$nx" --dry-run 2>&1)"; rc=$?
+set -e
+expect docker-dryrun-missing-out-ok 0 "-v $nx:/out"
+if [ ! -e "$nx" ]; then pass docker-dryrun-no-mkdir; else fail docker-dryrun-no-mkdir; fi
+
+# a failed git archive must not leave .src.tar behind in --out
+stubbin="$tmp/stubbin"; mkdir -p "$stubbin"
+cat > "$stubbin/git" <<'STUB'
+#!/usr/bin/env bash
+for a in "$@"; do if [ "${prev:-}" = "-o" ]; then echo partial > "$a"; fi; prev="$a"; done
+exit 1
+STUB
+printf '#!/usr/bin/env bash
+exit 0
+' > "$stubbin/docker"
+chmod +x "$stubbin/git" "$stubbin/docker"
+o="$(fresh_out)"
+set +e
+out="$(env -u BENCH_HOST_IN_CONTAINER PATH="$stubbin:$PATH" BENCH_HOST_NPROC=24 BENCH_HOST_FAKE_SHA=0123abcd BENCH_HOST_FAKE_DIRTY=false BENCH_HOST_FAKE_UNAME=Linux   BENCH_HOST_DOCKER_VERSION=29.7.2 bash "$script" docker --host-label local-docker --server-set 0 --gen-set 4-11 --out "$o" 2>&1)"; rc=$?
+set -e
+if [ "$rc" -ne 0 ]; then pass docker-archive-failure-rc; else fail "docker-archive-failure-rc ($out)"; fi
+if [ ! -e "$o/.src.tar" ]; then pass docker-archive-failure-cleans-src-tar; else fail docker-archive-failure-cleans-src-tar; fi
+
 # host.json carries the sysctl outcome and the tool versions (null when unknown)
 set +e
 env -u BENCH_HOST_IN_CONTAINER BENCH_HOST_NPROC=24 BENCH_HOST_FAKE_DIRTY=false BENCH_HOST_SYSCTL_RAISE='refused: Permission denied' \
