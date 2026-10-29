@@ -358,6 +358,7 @@ pipeline_native() {
   if [ "$micro" = "run" ]; then
     have_predict=1
     run go test -c -tags headless -o "$bin/voice.test" ./voice/
+    # GOMAXPROCS=$nsrv is deliberate: bench.yml fixes it at 2. With a 1-cpu --server-set the micro numbers are therefore NOT comparable with Actions micro results.
     run_tee "$out_dir/micro/micro.txt" taskset -c "$server_set" env "GOMAXPROCS=$nsrv" "$bin/voice.test" \
       -test.run '^$' -test.bench "$MICRO_RE" -test.benchmem -test.count=10
     run_tee "$out_dir/micro/micro-benchstat.txt" go run "$BENCHSTAT" "$out_dir/micro/micro.txt"
