@@ -69,6 +69,20 @@ func FormatCalLine(tag string, s CalStep) string {
 		tag, s.N, s.EgressPPS, expectedPPS(s), pct(delivered(s), 0), s.Valid, s.HelloTriesMax, v)
 }
 
+// FormatCapacity renders the calibration receive capacity for the log. It uses
+// the ASCII ">=" on purpose (log lines stay grep-able); results.md uses the
+// unicode form.
+func FormatCapacity(c *Calibration) string {
+	if !c.LowerBound {
+		return fmt.Sprintf("receive capacity %.0f pps", c.ReceivePPS)
+	}
+	s := fmt.Sprintf("receive capacity >= %.0f pps (lower bound", c.ReceivePPS)
+	if c.LowerBoundReason != "" {
+		s += ": " + c.LowerBoundReason
+	}
+	return s + ")"
+}
+
 // FormatCalStopped is the line printed when calibration ended before its last
 // step: where, why, and what receive capacity the completed steps still give.
 func FormatCalStopped(tag string, c *Calibration) string {
@@ -76,8 +90,9 @@ func FormatCalStopped(tag string, c *Calibration) string {
 	if c.StoppedBots >= 0 {
 		bots = strconv.Itoa(c.StoppedBots)
 	}
-	return fmt.Sprintf("%s calibration stopped at N=%d (%s bots up): %s; receive capacity %.0f pps (lower bound %v) from %d completed steps",
-		tag, c.StoppedAt, bots, c.StopReason, c.ReceivePPS, c.LowerBound, len(c.Steps))
+	capacity := FormatCapacity(c)
+	return fmt.Sprintf("%s calibration stopped at N=%d (%s bots up): %s; %s from %d completed steps",
+		tag, c.StoppedAt, bots, c.StopReason, capacity, len(c.Steps))
 }
 
 // FormatRampProgress relays one informational `progress` line of the load bot.
@@ -104,6 +119,13 @@ type rowFacts struct {
 	helloAccepted, helloRejected, queueFull    string
 	failedAcked                                string
 	lossPct, serverCPUPct, genCPUPct, reasonsS string
+	// healthWarn is health with the generator's warnings (a soft bound that was
+	// crossed but is not a breach), for the results table.
+	healthWarn string
+	// Round 2 (W6 fix 2). A figure the bot or the kernel did not give is "-".
+	ctlLost, ctlFirst, rampRate, rampTalker string
+	gcCycles, warnings                      string
+	tcpAbortOnData, estabResets             string
 }
 
 func factsOf(r Row) rowFacts {
@@ -114,7 +136,8 @@ func factsOf(r Row) rowFacts {
 	f.tries = strconv.Itoa(max(j.HelloTriesMax, r.Step.HelloTriesMax))
 	f.loss, f.serverCPU, f.genCPU = loss4(r.Data.LossRatio), frac(r.Data.ServerCPU), frac(r.Data.GenCPU)
 	f.lossPct, f.serverCPUPct, f.genCPUPct = pct(r.Data.LossRatio, 2), pct(r.Data.ServerCPU, 0), pct(r.Data.GenCPU, 0)
-	f.health, f.drops = dash, dash
+	f.health, f.drops, f.gcCycles = dash, dash, dash
+	f.warnings = "none"
 	win, logs := r.RampWindow, r.RampLogs
 	if r.Held {
 		f.health = "ok"
@@ -123,6 +146,31 @@ func factsOf(r Row) rowFacts {
 		}
 		f.drops = u(r.Window.ServerDrops)
 		win, logs = r.Window, r.Logs
+		if g := r.Step.Health.GCCycles; g != nil {
+			f.gcCycles = u(*g)
+		}
+		if len(r.Step.Warnings) > 0 {
+			f.warnings = strings.Join(r.Step.Warnings, ",")
+		}
+	}
+	f.healthWarn = f.health
+	if r.Held && len(r.Step.Violations) == 0 && len(r.Step.Warnings) > 0 {
+		f.healthWarn = "ok (warn: " + strings.Join(r.Step.Warnings, ",") + ")"
+	}
+	f.ctlLost = strconv.Itoa(r.ControlLostCount)
+	if len(r.ControlLost) > 0 {
+		f.ctlFirst = describeLost(r.ControlLost[0])
+	}
+	f.rampRate, f.rampTalker = dash, dash
+	if j.Mode != "" {
+		f.rampRate, f.rampTalker = fmt.Sprintf("%.1f", j.JoinsPerS), j.Talker
+		if f.rampTalker == "" {
+			f.rampTalker = dash
+		}
+	}
+	f.tcpAbortOnData, f.estabResets = dash, dash
+	if win.TCPOK {
+		f.tcpAbortOnData, f.estabResets = u(win.TCPAbortOnData), u(win.EstabResets)
 	}
 	f.rampServerCPU, f.rampGenCPU = dash, dash
 	if r.RampWindow.Seconds > 0 {
@@ -143,13 +191,38 @@ func factsOf(r Row) rowFacts {
 // FormatRowLine is the progress line of one measured step.
 func FormatRowLine(tag string, r Row) string {
 	f := factsOf(r)
-	s := fmt.Sprintf("%s %s #%d N=%d: outcome=%s joined=%s join_failures=%s hello_tries_max=%s loss=%s server_cpu=%s gen_cpu=%s gen_health=%s ramp_server_cpu=%s ramp_gen_cpu=%s server_drops=%s softnet_dropped=%s hello_accepted=%s hello_rejected=%s shard_queue_full=%s",
+	s := fmt.Sprintf("%s %s #%d N=%d: outcome=%s joined=%s join_failures=%s hello_tries_max=%s loss=%s server_cpu=%s gen_cpu=%s gen_health=%s ramp_server_cpu=%s ramp_gen_cpu=%s server_drops=%s softnet_dropped=%s hello_accepted=%s hello_rejected=%s shard_queue_full=%s control_lost=%s",
 		tag, r.Kind, r.Seq, r.N, r.Outcome, f.joined, f.failures, f.tries, f.loss, f.serverCPU, f.genCPU, f.health,
-		f.rampServerCPU, f.rampGenCPU, f.drops, f.softnet, f.helloAccepted, f.helloRejected, f.queueFull)
+		f.rampServerCPU, f.rampGenCPU, f.drops, f.softnet, f.helloAccepted, f.helloRejected, f.queueFull, f.ctlLost)
+	if f.ctlFirst != "" {
+		s += fmt.Sprintf(" control_lost_first=%q", f.ctlFirst)
+	}
+	s += fmt.Sprintf(" ramp_joins_per_s=%s ramp_talker=%s gc_cycles=%s warnings=%s tcp_abort_on_data=%s estab_resets=%s",
+		f.rampRate, f.rampTalker, f.gcCycles, f.warnings, f.tcpAbortOnData, f.estabResets)
 	if f.failedAcked != "" {
 		s += " failed_acked_by_server=" + f.failedAcked
 	}
 	return s + fmt.Sprintf(" reasons=%q", f.reasonsS)
+}
+
+// FormatBurstLine is the progress line of one join-burst row: the bots added at
+// once with the talker silent or live, and how many of them failed to join.
+func FormatBurstLine(tag string, r Row) string {
+	j := r.Joins
+	from, to := j.Had, j.Requested
+	if to == 0 { // a burst that lost control reports no joins line
+		from, to = r.N, r.N
+	}
+	rate, p99, joined, fails, retried, triesMax := dash, dash, dash, dash, dash, dash
+	if j.Mode != "" || j.Requested != 0 { // otherwise the bot gave no joins line: no join data exists
+		joined, fails, triesMax = strconv.Itoa(j.Joined), strconv.Itoa(j.JoinFailures), strconv.Itoa(j.HelloTriesMax)
+		retried = fmt.Sprintf("%d/%d", j.HelloRetried, to-from)
+	}
+	if j.Mode != "" {
+		rate, p99 = fmt.Sprintf("%.1f", j.JoinsPerS), fmt.Sprintf("%.2fs", float64(j.JoinP99Us)/1e6)
+	}
+	return fmt.Sprintf("%s burst #%d talker=%s N=%d->%d: joined=%s join_failures=%s joins_per_s=%s join_p99=%s hello_retried=%s hello_tries_max=%s result=%s",
+		tag, r.Seq, r.BurstTalker, from, to, joined, fails, rate, p99, retried, triesMax, r.BurstResult)
 }
 
 // ResultsInput is what one leg's results.md is built from. Cal and Out may be
@@ -190,7 +263,14 @@ func WriteResultsMarkdown(w io.Writer, in ResultsInput) error {
 		p("**Result:** %s  \n", in.Result)
 	}
 	if c := in.Cal; c != nil {
-		line := fmt.Sprintf("receive capacity %.0f pps (lower bound %v)", c.ReceivePPS, c.LowerBound)
+		line := fmt.Sprintf("receive capacity %.0f pps", c.ReceivePPS)
+		if c.LowerBound {
+			line = fmt.Sprintf("receive capacity ≥ %.0f pps (lower bound", c.ReceivePPS)
+			if c.LowerBoundReason != "" {
+				line += ": " + c.LowerBoundReason
+			}
+			line += ")"
+		}
 		if c.StoppedAt > 0 {
 			line += fmt.Sprintf("; stopped at N=%d: %s", c.StoppedAt, c.StopReason)
 		}
@@ -205,12 +285,23 @@ func WriteResultsMarkdown(w io.Writer, in ResultsInput) error {
 	p("**N_max:** %d · **predicted knee:** %d · **starts:** %d\n\n", in.NMax, in.Predicted, starts)
 
 	hasCal := in.Cal != nil && len(in.Cal.Steps) > 0
-	hasRows := in.Out != nil && len(in.Out.Rows) > 0
+	// Join bursts measure join cost, not steady capacity: their own table.
+	var steps, bursts []Row
+	if in.Out != nil {
+		for _, r := range in.Out.Rows {
+			if r.Kind == "burst" {
+				bursts = append(bursts, r)
+			} else {
+				steps = append(steps, r)
+			}
+		}
+	}
+	hasRows := len(steps) > 0
 	if hasCal || hasRows {
-		if err := mdRow(w, "kind", "#", "N", "joined", "outcome", "loss", "server CPU", "gen CPU", "gen health", "join failures", "hello tries max", "server drops", "reasons"); err != nil {
+		if err := mdRow(w, "kind", "#", "N", "joined", "outcome", "loss", "server CPU", "gen CPU", "gen health", "join failures", "hello tries max", "server drops", "control lost", "ramp joins/s", "reasons"); err != nil {
 			return err
 		}
-		if err := mdRow(w, "---", "---", "---", "---", "---", "---", "---", "---", "---", "---", "---", "---", "---"); err != nil {
+		if err := mdRow(w, "---", "---", "---", "---", "---", "---", "---", "---", "---", "---", "---", "---", "---", "---", "---"); err != nil {
 			return err
 		}
 	}
@@ -228,16 +319,16 @@ func WriteResultsMarkdown(w io.Writer, in ResultsInput) error {
 				}
 			}
 			if err := mdRow(w, "calibration", dash, strconv.Itoa(s.N), strconv.Itoa(joined), "delivered "+pct(delivered(s), 0),
-				dash, dash, dash, health, "0", strconv.Itoa(s.HelloTriesMax), dash, ""); err != nil {
+				dash, dash, dash, health, "0", strconv.Itoa(s.HelloTriesMax), dash, dash, dash, ""); err != nil {
 				return err
 			}
 		}
 	}
 	if hasRows {
-		for _, r := range in.Out.Rows {
+		for _, r := range steps {
 			f := factsOf(r)
 			if err := mdRow(w, r.Kind, strconv.Itoa(r.Seq), strconv.Itoa(r.N), f.joined, r.Outcome.String(),
-				f.lossPct, f.serverCPUPct, f.genCPUPct, f.health, f.failures, f.tries, f.drops, f.reasonsS); err != nil {
+				f.lossPct, f.serverCPUPct, f.genCPUPct, f.healthWarn, f.failures, f.tries, f.drops, f.ctlLost, f.rampRate, f.reasonsS); err != nil {
 				return err
 			}
 		}
@@ -245,6 +336,53 @@ func WriteResultsMarkdown(w io.Writer, in ResultsInput) error {
 	if hasCal || hasRows {
 		p("\n")
 	}
+	if len(bursts) > 0 {
+		p("#### Join bursts\n\n")
+		if err := mdRow(w, "talker", "from N", "added", "joined", "failures", "joins/s", "join p99", "hello retried", "result"); err != nil {
+			return err
+		}
+		if err := mdRow(w, "---", "---", "---", "---", "---", "---", "---", "---", "---"); err != nil {
+			return err
+		}
+		for _, r := range bursts {
+			j := r.Joins
+			from, added := j.Had, j.Requested-j.Had
+			if j.Requested == 0 {
+				from, added = r.N, 0
+			}
+			rate, p99 := dash, dash
+			if j.Mode != "" {
+				rate, p99 = fmt.Sprintf("%.1f", j.JoinsPerS), fmt.Sprintf("%.2fs", float64(j.JoinP99Us)/1e6)
+			}
+			if err := mdRow(w, r.BurstTalker, strconv.Itoa(from), strconv.Itoa(added), strconv.Itoa(j.Joined), strconv.Itoa(j.JoinFailures),
+				rate, p99, strconv.Itoa(j.HelloRetried), r.BurstResult); err != nil {
+				return err
+			}
+		}
+		p("\n")
+	}
 	p("_%s_\n", Label)
 	return nil
+}
+
+// FormatControlLostLine is the log line printed the moment the load bot reports
+// a lost control connection, so the Actions log shows each death live and in
+// order, not only in the step's row. A v2 hold death has no age, ping data,
+// address or running total: those print as "-".
+func FormatControlLostLine(tag string, ev ControlLostEvent) string {
+	age, ping, addr, total := dash, dash, dash, dash
+	if !ev.BotExited {
+		age = strconv.FormatFloat(ev.AgeS, 'f', 1, 64)
+	}
+	if ev.SinceLastOKPingS >= 0 && !ev.BotExited {
+		ping = strconv.FormatFloat(ev.SinceLastOKPingS, 'f', 1, 64)
+	}
+	if ev.LocalAddr != "" {
+		addr = ev.LocalAddr
+	}
+	if ev.DeadTotal > 0 {
+		total = strconv.Itoa(ev.DeadTotal)
+	}
+	return fmt.Sprintf("%s control_lost bot=%d cause=%s code=%s phase=%s age_s=%s since_last_ok_ping_s=%s local_addr=%s dead_total=%s message=%q",
+		tag, ev.Bot, ev.Cause, ev.Code, ev.Phase, age, ping, addr, total, ev.Message)
 }

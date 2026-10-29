@@ -20,6 +20,10 @@ const (
 	// self-health out of bounds, or the step never settled). It is neither a
 	// pass nor a breach.
 	Invalid
+	// ControlLost: at least one bot lost its control connection during the step.
+	// The cause is not attributed (it may be the harness or the server), so the
+	// step is neither a pass nor a breach nor a generator-health verdict.
+	ControlLost
 )
 
 func (o StepOutcome) String() string {
@@ -30,6 +34,8 @@ func (o StepOutcome) String() string {
 		return "breach"
 	case Invalid:
 		return "invalid"
+	case ControlLost:
+		return "control_lost"
 	}
 	return fmt.Sprintf("StepOutcome(%d)", int(o))
 }
@@ -129,11 +135,22 @@ type StepData struct {
 	// healthy generator, so a driver must always set it from the ramp window
 	// (NaN or -1 when unmeasured) whenever JoinFailures may be non-zero.
 	RampGenCPU float64
+
+	// ControlLost is the number of bots whose control connection died during
+	// the step (ramp, settle or hold). Non-zero makes Classify return ControlLost
+	// before any other rule, because the step's load was not the load asked for.
+	ControlLost uint64
+	// ControlLostFirst describes the first death, for example "bot 2 Unavailable:
+	// error reading from server: connection reset by peer". Optional.
+	ControlLostFirst string
 }
 
 // Classify applies the design 6.4.4 criteria to one step. The returned
 // reasons name every criterion that decided the outcome, in a fixed order;
 // they are empty for Pass.
+//
+// A lost control connection is checked first: it is neither a server breach nor
+// a generator verdict, and every other number of such a step is suspect.
 //
 // Invalid wins over Breach. A generator that is not healthy cannot attribute
 // a server breach to the server (D14), and a step that never settled still
@@ -145,6 +162,9 @@ type StepData struct {
 // bot-reported ramp scheduler/GC latency is logged only. Join-failure rules
 // run first and return: such a step has no hold to measure.
 func Classify(s StepData, b Bounds) (StepOutcome, []string) {
+	if s.ControlLost > 0 {
+		return ControlLost, []string{controlLostReason(s)}
+	}
 	if s.JoinFailures > 0 {
 		return classifyJoinFailure(s, b)
 	}
@@ -250,4 +270,16 @@ func classifyJoinFailure(s StepData, b Bounds) (StepOutcome, []string) {
 		msg += fmt.Sprintf("; hello tries max %d", s.HelloTriesMax)
 	}
 	return Breach, []string{msg}
+}
+
+func controlLostReason(s StepData) string {
+	noun := "bots"
+	if s.ControlLost == 1 {
+		noun = "bot"
+	}
+	msg := fmt.Sprintf("control lost: %d %s", s.ControlLost, noun)
+	if s.ControlLostFirst != "" {
+		msg += " (" + s.ControlLostFirst + ")"
+	}
+	return msg
 }

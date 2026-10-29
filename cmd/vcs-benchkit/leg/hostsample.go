@@ -31,6 +31,13 @@ type snapshot struct {
 	UDP     sample.UDPCounters
 	NetOK   bool
 	NetErr  string
+	// TCP are the TcpExt abort/timeout and Tcp reset counters and SoftnetPerCPU
+	// the per-CPU softnet rows. They are informational: a failed read leaves
+	// TCPOK false and TCPErr set and never touches NetOK.
+	TCP           sample.TCPCounters
+	TCPOK         bool
+	TCPErr        string
+	SoftnetPerCPU []sample.Softnet
 }
 
 // windowFrom reduces the readings of one hold to a Window. serverNCPU and
@@ -91,7 +98,64 @@ func windowFrom(snaps []snapshot, serverNCPU int, serverCPUs []int, genNCPU int,
 			w.NetErr = "network counters not read"
 		}
 	}
+	w.softnetPerCPU(first.SoftnetPerCPU, last.SoftnetPerCPU)
+	w.tcpDeltas(first, last)
 	return w
+}
+
+// tcpDeltas fills the informational TCP counters from the first and last
+// snapshot. A decrease is 0 (counterDelta), and a missing file is TCPErr.
+func (w *Window) tcpDeltas(first, last snapshot) {
+	if !first.TCPOK || !last.TCPOK {
+		w.TCPErr = first.TCPErr
+		if w.TCPErr == "" {
+			w.TCPErr = last.TCPErr
+		}
+		if w.TCPErr == "" {
+			w.TCPErr = "tcp counters not read"
+		}
+		return
+	}
+	w.TCPOK = true
+	f, l := first.TCP, last.TCP
+	w.TCPAbortOnData = counterDelta(f.AbortOnData, l.AbortOnData)
+	w.TCPAbortOnClose = counterDelta(f.AbortOnClose, l.AbortOnClose)
+	w.TCPAbortOnMemory = counterDelta(f.AbortOnMemory, l.AbortOnMemory)
+	w.TCPAbortOnTimeout = counterDelta(f.AbortOnTimeout, l.AbortOnTimeout)
+	w.TCPAbortOnLinger = counterDelta(f.AbortOnLinger, l.AbortOnLinger)
+	w.TCPTimeouts = counterDelta(f.Timeouts, l.Timeouts)
+	w.EstabResets = counterDelta(f.EstabResets, l.EstabResets)
+	w.OutRsts = counterDelta(f.OutRsts, l.OutRsts)
+	w.TCPMissing = mergeMissing(first.TCP.Missing, last.TCP.Missing)
+}
+
+// mergeMissing is the union of the two snapshots' missing TcpExt keys, in order
+// of first appearance; nil when both are empty.
+func mergeMissing(a, b []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, k := range append(append([]string(nil), a...), b...) {
+		if !seen[k] {
+			seen[k] = true
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// softnetPerCPU fills the per-CPU softnet increases. Both counters are 32-bit
+// kernel values, so a wrap is not a decrease. A CPU present in only one reading
+// (hotplug) is skipped.
+func (w *Window) softnetPerCPU(first, last []sample.Softnet) {
+	for i := 0; i < len(first) && i < len(last); i++ {
+		c := CPUSoftnet{
+			CPU:      i,
+			Dropped:  sample.DropDelta(first[i].Dropped, last[i].Dropped),
+			Squeezed: sample.DropDelta(first[i].TimeSqueeze, last[i].TimeSqueeze),
+		}
+		w.SoftnetCPUs = append(w.SoftnetCPUs, c)
+		w.SoftnetSqueezed += c.Squeezed
+	}
 }
 
 // counterDelta is cur - prev of a 64-bit kernel counter; a decrease (a reset)
@@ -151,6 +215,7 @@ func (p *procSampler) take(now time.Time) (snapshot, string) {
 	}
 	s.Drops = drops
 	s.NetOK, s.NetErr = p.takeNet(&s)
+	p.takeTCP(&s)
 	return s, ""
 }
 
@@ -172,6 +237,62 @@ func (p *procSampler) takeNet(s *snapshot) (bool, string) {
 		return false, err.Error()
 	}
 	return true, ""
+}
+
+// takeTCP reads the informational TCP counters and the per-CPU softnet rows
+// into s. A failure is TCPErr and never an error of the snapshot: these
+// counters attribute a lost control connection, they never decide a step.
+func (p *procSampler) takeTCP(s *snapshot) {
+	// A softnet_stat that cannot be read or parsed is unread, never a measured
+	// zero of SoftnetSqueezed: it fails TCPOK like the other files.
+	b, err := p.read("/proc/net/softnet_stat")
+	if err != nil {
+		s.TCPErr = "/proc/net/softnet_stat: " + err.Error()
+		return
+	}
+	if s.SoftnetPerCPU, err = sample.ParseSoftnetPerCPU(b); err != nil {
+		s.TCPErr = err.Error()
+		return
+	}
+	b, err = p.read("/proc/net/netstat")
+	if err != nil {
+		s.TCPErr = "/proc/net/netstat: " + err.Error()
+		return
+	}
+	ext, err := sample.ParseNetstatTcpExt(b)
+	if err != nil {
+		s.TCPErr = err.Error()
+		return
+	}
+	if b, err = p.read("/proc/net/snmp"); err != nil {
+		s.TCPErr = "/proc/net/snmp: " + err.Error()
+		return
+	}
+	tcp, err := sample.ParseSNMPTcp(b)
+	if err != nil {
+		s.TCPErr = err.Error()
+		return
+	}
+	tcp.AbortOnData, tcp.AbortOnClose, tcp.AbortOnMemory = ext.AbortOnData, ext.AbortOnClose, ext.AbortOnMemory
+	tcp.AbortOnTimeout, tcp.AbortOnLinger, tcp.Timeouts = ext.AbortOnTimeout, ext.AbortOnLinger, ext.Timeouts
+	tcp.Missing = ext.Missing
+	s.TCP, s.TCPOK = tcp, true
+}
+
+// peek reads the window so far: the processes' CPU between prev and a fresh
+// reading, for a heartbeat line. It returns the snapshot to pass as the next
+// prev. A failed read keeps prev; a zero prev (nothing read yet) yields no CPU
+// figure (NaN) and starts from the fresh reading.
+func (p *procSampler) peek(prev snapshot) (Window, snapshot) {
+	cur, e := p.take(time.Now())
+	none := Window{ServerCPU: math.NaN(), GenCPU: math.NaN(), Err: e}
+	if e != "" {
+		return none, prev
+	}
+	if prev.At.IsZero() {
+		return none, cur
+	}
+	return windowFrom([]snapshot{prev, cur}, p.serverNCPU, p.serverCPUs, p.genNCPU, nil), cur
 }
 
 // begin starts the 1 s sampler and returns the func that stops it.

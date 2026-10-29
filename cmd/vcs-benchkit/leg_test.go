@@ -33,3 +33,39 @@ func TestLegRefusesNonSArm(t *testing.T) {
 		t.Fatal("--arms Seq must be refused in S4")
 	}
 }
+
+func TestDefaultCalSteps(t *testing.T) {
+	o, err := parseLegFlags([]string{"--server-bin", "s", "--loadbot-bin", "l", "--out", "o", "--q6", "Server 2 / bots 2"}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "64,128,256,512,1024,1536,1792,2048,4096"; o.CalSteps != want {
+		t.Errorf("CalSteps = %q, want %q", o.CalSteps, want)
+	}
+}
+
+func TestParseLegFlagsRound2(t *testing.T) {
+	base := []string{"--server-bin", "s", "--loadbot-bin", "l", "--out", "o"}
+	// Defaults are the round-2 values (R2-1, R2-4, R2-5, R2-6, R2-8).
+	o, err := parseLegFlags(base, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.RampChunk != 250 || o.Bot.JoinRateMax != 12 || o.Bot.JoinRateScale != 5000 || o.Bot.MaxInFlight != 8 ||
+		o.Bot.PingEvery != 5*time.Second || o.BurstAdd != 150 || o.BurstInFlight != 16 || !o.Bursts ||
+		o.Bot.GCPauseP99 != 5*time.Millisecond || o.Bot.GCPauseWarnP99 != 2*time.Millisecond || o.Bot.GRPCLog != "info" {
+		t.Errorf("defaults = %+v", o)
+	}
+	// Every flag overrides.
+	o, err = parseLegFlags(append(append([]string{}, base...), "--ramp-chunk", "100", "--join-rate-max", "20", "--join-rate-scale", "3000",
+		"--max-in-flight", "4", "--ping-every", "0s", "--burst-add", "60", "--burst-in-flight", "8", "--bursts=false",
+		"--gc-pause-p99", "7ms", "--gc-pause-warn-p99", "3ms", "--grpc-log", "off"), io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.RampChunk != 100 || o.Bot.JoinRateMax != 20 || o.Bot.JoinRateScale != 3000 || o.Bot.MaxInFlight != 4 ||
+		o.Bot.PingEvery != 0 || o.BurstAdd != 60 || o.BurstInFlight != 8 || o.Bursts ||
+		o.Bot.GCPauseP99 != 7*time.Millisecond || o.Bot.GCPauseWarnP99 != 3*time.Millisecond || o.Bot.GRPCLog != "off" {
+		t.Errorf("overrides = %+v", o)
+	}
+}

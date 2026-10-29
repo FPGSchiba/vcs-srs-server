@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -55,8 +56,19 @@ func TestLegSmoke(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(out, "passwords.json")); err == nil {
 		t.Error("passwords.json is in the results directory")
 	}
-	if m, _ := filepath.Glob(filepath.Join(out, "server-*")); len(m) > 0 {
-		t.Errorf("server data directories in the results directory: %v", m)
+	// server-<k>.log.gz is the kept server log (S-T7); a server-<k> directory
+	// would be a data directory.
+	m, _ := filepath.Glob(filepath.Join(out, "server-*"))
+	logs := 0
+	for _, f := range m {
+		if strings.HasSuffix(f, ".log.gz") {
+			logs++
+			continue
+		}
+		t.Errorf("server data directory in the results directory: %v", f)
+	}
+	if logs == 0 {
+		t.Error("no server-<k>.log.gz in the results directory")
 	}
 	mb, err := os.ReadFile(filepath.Join(out, "manifest.json"))
 	if err != nil {

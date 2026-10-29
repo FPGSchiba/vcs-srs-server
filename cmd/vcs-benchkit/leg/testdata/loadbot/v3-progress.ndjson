@@ -1,0 +1,2 @@
+{"type":"progress","phase":"ramp","requested":1336,"had":1215,"done":60,"joined":60,"in_flight":8,"hello_retried":1,"elapsed_s":15,"rate_per_s":3.9,"talker":"silent"}
+{"type":"progress","phase":"burst","requested":818,"had":668,"done":100,"joined":80,"join_failures":20,"in_flight":16,"hello_retried":25,"elapsed_s":10,"rate_per_s":0,"talker":"live"}

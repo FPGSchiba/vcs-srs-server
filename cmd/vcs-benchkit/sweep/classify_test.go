@@ -230,3 +230,38 @@ func TestClassifyJoinFailureWithoutHelloTries(t *testing.T) {
 		t.Fatalf("reasons = %q, want [%q]", reasons, want)
 	}
 }
+
+func TestClassifyControlLostFirst(t *testing.T) {
+	s := healthy()
+	s.ControlLost = 3
+	s.ControlLostFirst = "bot 2 Unavailable: error reading from server: connection reset by peer"
+	// Everything else is also wrong: join failures, loss, an invalid generator.
+	s.JoinFailures, s.JoinAttempted = 5, 100
+	s.LossRatio = 0.5
+	s.GenCPU = 0.99
+	got, reasons := Classify(s, DefaultBounds)
+	if got != ControlLost {
+		t.Fatalf("outcome = %v, want control_lost", got)
+	}
+	want := []string{"control lost: 3 bots (bot 2 Unavailable: error reading from server: connection reset by peer)"}
+	if !reflect.DeepEqual(reasons, want) {
+		t.Fatalf("reasons = %q, want %q", reasons, want)
+	}
+	s.ControlLost = 1
+	if _, r := Classify(s, DefaultBounds); !strings.HasPrefix(r[0], "control lost: 1 bot (") {
+		t.Errorf("singular reason = %q", r)
+	}
+	s.ControlLostFirst = ""
+	if _, r := Classify(s, DefaultBounds); r[0] != "control lost: 1 bot" {
+		t.Errorf("reason without a first death = %q", r)
+	}
+}
+
+func TestClassifyControlLostZeroChangesNothing(t *testing.T) {
+	if got, r := Classify(healthy(), DefaultBounds); got != Pass || r != nil {
+		t.Fatalf("healthy = %v %v", got, r)
+	}
+	if ControlLost.String() != "control_lost" {
+		t.Errorf("String() = %q", ControlLost.String())
+	}
+}

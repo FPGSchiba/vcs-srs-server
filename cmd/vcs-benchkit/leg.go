@@ -39,9 +39,22 @@ func parseLegFlags(args []string, errw io.Writer) (leg.Options, error) {
 	fs.DurationVar(&o.Hold, "hold", 40*time.Second, "measured hold per step")
 	fs.DurationVar(&o.Confirm, "confirm", 120*time.Second, "confirm hold at the knee")
 	fs.DurationVar(&o.Overload, "overload", 60*time.Second, "overload hold at 2x the knee")
-	fs.StringVar(&o.CalSteps, "cal-steps", "64,128,256,512,1024,2048,4096", "calibration bot counts, ascending")
+	fs.StringVar(&o.CalSteps, "cal-steps", "64,128,256,512,1024,1536,1792,2048,4096", "calibration bot counts, ascending")
 	fs.DurationVar(&o.CalHold, "cal-hold", 3*time.Second, "calibration seconds per step")
 	fs.BoolVar(&o.Sysctl, "sysctl", true, "raise net.core.rmem_max/wmem_max with sudo (never the defaults)")
+	d := leg.DefaultBotParams()
+	fs.IntVar(&o.RampChunk, "ramp-chunk", 250, "split a ramp into chunks of at most this many bots, stopping at the first failing chunk (0 = one set_n per step)")
+	fs.Float64Var(&o.Bot.JoinRateMax, "join-rate-max", d.JoinRateMax, "bot join rate cap, joins per second: min(max, scale/N)")
+	fs.Float64Var(&o.Bot.JoinRateScale, "join-rate-scale", d.JoinRateScale, "bot join rate scale: min(max, scale/N)")
+	fs.IntVar(&o.Bot.MaxInFlight, "max-in-flight", d.MaxInFlight, "bot joins in flight")
+	fs.DurationVar(&o.Bot.PingEvery, "ping-every", d.PingEvery, "bot control-plane Ping period (0 = off, the round-1 bot)")
+	fs.IntVar(&o.BurstAdd, "burst-add", 150, "bots added by one join burst")
+	fs.IntVar(&o.BurstInFlight, "burst-in-flight", 16, "joins in flight during a join burst")
+	fs.BoolVar(&o.Bursts, "bursts", true, "run the join-burst phase after the sweep")
+	fs.DurationVar(&o.Bot.GCPauseP99, "gc-pause-p99", d.GCPauseP99, "generator GC-pause p99 hard bound (invalidates a step)")
+	fs.DurationVar(&o.Bot.GCPauseWarnP99, "gc-pause-warn-p99", d.GCPauseWarnP99, "generator GC-pause p99 warning bound")
+	fs.StringVar(&o.Bot.GRPCLog, "grpc-log", d.GRPCLog, "grpc-go log severity for the server and the bot (info, warning, error; off disables)")
+	o.Bot.RampTalker = d.RampTalker
 	if err := fs.Parse(args); err != nil {
 		return o, err
 	}

@@ -1,6 +1,8 @@
 package leg
 
 import (
+	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -135,5 +137,115 @@ func TestBuildPinsRejectsOverlapAndBadSets(t *testing.T) {
 		if _, err := BuildPins(c[0], c[1]); err == nil {
 			t.Errorf("BuildPins(%q, %q) must fail", c[0], c[1])
 		}
+	}
+}
+
+func TestManifestRound2(t *testing.T) {
+	o := Options{RampChunk: 250, Bursts: true, BurstAdd: 150, BurstInFlight: 16, Bot: DefaultBotParams()}
+	v3 := Features{Version: 3, Set: map[string]bool{"ping": true, "join_rate": true, "talker_pause": true, "gc_warn": true, "burst": true}}
+	m := &Manifest{}
+	m.recordRound2(o, v3)
+	b, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"bot_features", "bot_flags", "generator_env", "server_env", "ramp", "burst", "bounds_generator", "decisions_round2"} {
+		if _, ok := got[k]; !ok {
+			t.Fatalf("manifest lacks %q: %s", k, b)
+		}
+	}
+	ramp := got["ramp"].(map[string]any)
+	if ramp["chunk"] != float64(250) || ramp["rate_max"] != float64(12) || ramp["rate_scale"] != float64(5000) ||
+		ramp["max_in_flight"] != float64(8) || ramp["talker"] != "silent" {
+		t.Errorf("ramp = %v", ramp)
+	}
+	burst := got["burst"].(map[string]any)
+	if burst["add"] != float64(150) || burst["in_flight"] != float64(16) || burst["enabled"] != true {
+		t.Errorf("burst = %v", burst)
+	}
+	bg := got["bounds_generator"].(map[string]any)
+	if bg["gc_pause_p99_us"] != float64(5000) || bg["gc_pause_warn_p99_us"] != float64(2000) {
+		t.Errorf("bounds_generator = %v", bg)
+	}
+	dec := got["decisions_round2"].(map[string]any)
+	for i := 1; i <= 12; i++ {
+		id := "R2-" + strconv.Itoa(i)
+		v, ok := dec[id].(string)
+		if !ok || !strings.Contains(v, "->") {
+			t.Errorf("decisions_round2[%s] = %v, want an old -> new string", id, dec[id])
+		}
+	}
+	// A v2 bot gets only --bounds.
+	m2 := &Manifest{}
+	m2.recordRound2(o, Features{Version: 2, Set: map[string]bool{}})
+	if len(m2.BotFlags) != 2 {
+		t.Errorf("v2 bot_flags = %q", m2.BotFlags)
+	}
+	// A v2 bot never saw the rate rule, so the record must not claim it applied;
+	// it cannot run bursts either.
+	r2 := m2.Ramp
+	if r2.RateMax != 0 || r2.RateScale != 0 || r2.MaxInFlight != 0 {
+		t.Errorf("v2 ramp records an unapplied rate rule: %+v", r2)
+	}
+	if m2.Burst.Enabled {
+		t.Errorf("v2 burst enabled although the bot has no burst feature: %+v", m2.Burst)
+	}
+}
+
+func TestRound2SummaryNamesEffectiveValues(t *testing.T) {
+	o := Options{RampChunk: 250, Bursts: true, BurstAdd: 150, BurstInFlight: 16, Bot: DefaultBotParams()}
+	v3 := Features{Version: 3, Set: map[string]bool{"ping": true, "join_rate": true, "talker_pause": true, "gc_warn": true, "burst": true}}
+	s := Round2Summary(o, v3)
+	for _, want := range []string{"chunk 250", "rate min(12,5000/N)", "in-flight 8", "ping 5s", "bursts on", "gc 2ms/5ms", "grpc-log info"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("summary %q lacks %q", s, want)
+		}
+	}
+	s2 := Round2Summary(o, Features{Version: 2, Set: map[string]bool{}})
+	for _, want := range []string{"rate rule not applied", "ping off", "bursts off"} {
+		if !strings.Contains(s2, want) {
+			t.Errorf("v2 summary %q lacks %q", s2, want)
+		}
+	}
+}
+
+func TestValidateRejectsBadRound2Values(t *testing.T) {
+	base := func() Options {
+		o := Options{ServerBin: "s", LoadbotBin: "l", OutDir: "o", Scenario: "one-big-net", Arms: "S", ServerSet: "0,1", GenSet: "2,3", Topology: "t", PredictedKnee: 100, Bot: DefaultBotParams()}
+		return o
+	}
+	cases := map[string]func(*Options){
+		"--ping-every":      func(o *Options) { o.Bot.PingEvery = -time.Second },
+		"--ramp-chunk":      func(o *Options) { o.RampChunk = -1 },
+		"--burst-add":       func(o *Options) { o.BurstAdd = -1 },
+		"--burst-in-flight": func(o *Options) { o.BurstInFlight = -1 },
+		"gc warn":           func(o *Options) { o.Bot.GCPauseWarnP99 = 9 * time.Millisecond; o.Bot.GCPauseP99 = 5 * time.Millisecond },
+	}
+	for name, mut := range cases {
+		o := base()
+		mut(&o)
+		if err := o.Validate(); err == nil || !strings.Contains(err.Error(), name) {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+	o := base()
+	if err := o.Validate(); err != nil {
+		t.Errorf("defaults must validate: %v", err)
+	}
+}
+
+func TestValidateRejectsUnknownGRPCLog(t *testing.T) {
+	o := Options{ServerBin: "s", LoadbotBin: "l", OutDir: "o", Scenario: "one-big-net", Arms: "S", ServerSet: "0,1", GenSet: "2,3", Topology: "t", PredictedKnee: 100}
+	o.Bot.GRPCLog = "loud"
+	if err := o.Validate(); err == nil || !strings.Contains(err.Error(), "--grpc-log") {
+		t.Errorf("err = %v", err)
+	}
+	o.Bot.GRPCLog = "off"
+	if err := o.Validate(); err != nil {
+		t.Errorf("off must be valid: %v", err)
 	}
 }

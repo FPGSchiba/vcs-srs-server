@@ -39,7 +39,7 @@ func TestFormatCalStopped(t *testing.T) {
 		Steps: make([]CalStep, 6), ReceivePPS: 102350, LowerBound: true,
 		StoppedAt: 4096, StoppedBots: 3702, StopReason: "bot 3702: no HELLO_ACK after 5 tries",
 	}
-	want := "[leg 1 S one-big-net] calibration stopped at N=4096 (3702 bots up): bot 3702: no HELLO_ACK after 5 tries; receive capacity 102350 pps (lower bound true) from 6 completed steps"
+	want := "[leg 1 S one-big-net] calibration stopped at N=4096 (3702 bots up): bot 3702: no HELLO_ACK after 5 tries; receive capacity >= 102350 pps (lower bound) from 6 completed steps"
 	if got := FormatCalStopped("[leg 1 S one-big-net]", c); got != want {
 		t.Errorf("v2:\n got  %s\n want %s", got, want)
 	}
@@ -62,6 +62,8 @@ func TestFormatRampProgress(t *testing.T) {
 	}
 }
 
+func gcCycles(n uint64) *uint64 { return &n }
+
 func passRow() Row {
 	return Row{
 		Kind: "sweep", Seq: 1, N: 1038, Outcome: sweep.Pass, Held: true,
@@ -69,6 +71,7 @@ func passRow() Row {
 		Data:   sweep.StepData{N: 1038, LossRatio: 0, ServerCPU: 0.39, GenCPU: 0.19},
 		Window: Window{ServerCPU: 0.39, GenCPU: 0.19, NetOK: true, Seconds: 40},
 		Logs:   LogCounts{HelloAccepted: 1036}, FailedAckedByServer: -1,
+		Step: Step{Health: Health{GCCycles: gcCycles(0)}},
 	}
 }
 
@@ -86,11 +89,11 @@ func joinFailRow() Row {
 }
 
 func TestFormatRowLine(t *testing.T) {
-	want := `[leg 2 S one-big-net] sweep #1 N=1038: outcome=pass joined=1038 join_failures=0 hello_tries_max=2 loss=0.0000 server_cpu=0.39 gen_cpu=0.19 gen_health=ok ramp_server_cpu=- ramp_gen_cpu=- server_drops=0 softnet_dropped=0 hello_accepted=1036 hello_rejected=0 shard_queue_full=0 reasons=""`
+	want := `[leg 2 S one-big-net] sweep #1 N=1038: outcome=pass joined=1038 join_failures=0 hello_tries_max=2 loss=0.0000 server_cpu=0.39 gen_cpu=0.19 gen_health=ok ramp_server_cpu=- ramp_gen_cpu=- server_drops=0 softnet_dropped=0 hello_accepted=1036 hello_rejected=0 shard_queue_full=0 control_lost=0 ramp_joins_per_s=- ramp_talker=- gc_cycles=0 warnings=none tcp_abort_on_data=- estab_resets=- reasons=""`
 	if got := FormatRowLine(testTag, passRow()); got != want {
 		t.Errorf("pass:\n got  %s\n want %s", got, want)
 	}
-	want = `[leg 2 S one-big-net] sweep #2 N=2076: outcome=breach joined=2074 join_failures=2 hello_tries_max=5 loss=- server_cpu=- gen_cpu=- gen_health=- ramp_server_cpu=0.97 ramp_gen_cpu=0.41 server_drops=- softnet_dropped=120 hello_accepted=1036 hello_rejected=0 shard_queue_full=4 failed_acked_by_server=1/2 reasons="join failure: 2 of 1038 new bots failed (hello 2); hello tries max 5"`
+	want = `[leg 2 S one-big-net] sweep #2 N=2076: outcome=breach joined=2074 join_failures=2 hello_tries_max=5 loss=- server_cpu=- gen_cpu=- gen_health=- ramp_server_cpu=0.97 ramp_gen_cpu=0.41 server_drops=- softnet_dropped=120 hello_accepted=1036 hello_rejected=0 shard_queue_full=4 control_lost=0 ramp_joins_per_s=- ramp_talker=- gc_cycles=- warnings=none tcp_abort_on_data=- estab_resets=- failed_acked_by_server=1/2 reasons="join failure: 2 of 1038 new bots failed (hello 2); hello tries max 5"`
 	if got := FormatRowLine(testTag, joinFailRow()); got != want {
 		t.Errorf("join failure:\n got  %s\n want %s", got, want)
 	}
@@ -212,5 +215,133 @@ func TestRunWritesResultsMarkdownEvenWhenTheLegFails(t *testing.T) {
 	}
 	if !strings.Contains(log.String(), "did not finish") {
 		t.Errorf("results table not printed to the log:\n%s", log.String())
+	}
+}
+
+// v3Row is a held step of a v3 bot: a bounded silent ramp, a GC warning, kernel
+// TCP counters and dead bots.
+func v3Row() Row {
+	r := passRow()
+	r.Joins.Mode, r.Joins.Talker, r.Joins.JoinsPerS, r.Joins.JoinP99Us, r.Joins.HelloRetried = "ramp", "silent", 9.6, 7400000, 30
+	r.Step.Health.GCCycles = gcCycles(12)
+	r.Step.Warnings = []string{"gc_pause_p99"}
+	r.Window.TCPOK, r.Window.TCPAbortOnData, r.Window.EstabResets = true, 3, 5
+	r.Outcome, r.ControlLostCount, r.ControlLostPhase = sweep.ControlLost, 2, "hold"
+	r.ControlLost = []ControlLostEvent{{Bot: 7, Code: "Unavailable", Message: "connection reset by peer"}}
+	return r
+}
+
+func TestFormatRowLineRound2Keys(t *testing.T) {
+	want := `[leg 2 S one-big-net] sweep #1 N=1038: outcome=control_lost joined=1038 join_failures=0 hello_tries_max=2 loss=0.0000 server_cpu=0.39 gen_cpu=0.19 gen_health=ok ramp_server_cpu=- ramp_gen_cpu=- server_drops=0 softnet_dropped=0 hello_accepted=1036 hello_rejected=0 shard_queue_full=0 control_lost=2 control_lost_first="bot 7 Unavailable: connection reset by peer" ramp_joins_per_s=9.6 ramp_talker=silent gc_cycles=12 warnings=gc_pause_p99 tcp_abort_on_data=3 estab_resets=5 reasons=""`
+	if got := FormatRowLine(testTag, v3Row()); got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+}
+
+func burstRow() Row {
+	return Row{
+		Kind: "burst", Seq: 7, N: 818, Outcome: sweep.Pass, BurstTalker: "live", BurstResult: "join failures",
+		Joins: Joins{Schema: JoinsSchema, Requested: 818, Had: 668, N: 788, Joined: 120, JoinFailures: 30, HelloTriesMax: 5,
+			Mode: "burst", Talker: "live", JoinsPerS: 9.6, JoinP99Us: 7400000, HelloRetried: 30},
+		FailedAckedByServer: -1,
+	}
+}
+
+func TestFormatBurstLine(t *testing.T) {
+	want := `[leg 2 S one-big-net] burst #7 talker=live N=668->818: joined=120 join_failures=30 joins_per_s=9.6 join_p99=7.40s hello_retried=30/150 hello_tries_max=5 result=join failures`
+	if got := FormatBurstLine(testTag, burstRow()); got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+}
+
+func TestWriteResultsMarkdownRound2(t *testing.T) {
+	in := resultsInput()
+	in.Cal.ReflectorSendErrors, in.Cal.LowerBoundReason = 186000, "reflector dropped 186000 destinations"
+	in.Cal.StoppedAt = 0
+	in.Out.Rows = []Row{passRow(), v3Row(), burstRow()}
+	in.Out.Rows[0].Step.Warnings = []string{"gc_pause_p99"}
+	var buf bytes.Buffer
+	if err := WriteResultsMarkdown(&buf, in); err != nil {
+		t.Fatal(err)
+	}
+	golden := filepath.Join("testdata", "results-round2.md")
+	if os.Getenv("UPDATE_GOLDEN") != "" {
+		if err := os.WriteFile(golden, buf.Bytes(), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(golden)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.ReplaceAll(string(want), "\r\n", "\n") != buf.String() {
+		t.Errorf("results.md differs from %s:\n--- got\n%s\n--- want\n%s", golden, buf.String(), want)
+	}
+	got := buf.String()
+	for _, w := range []string{
+		"receive capacity ≥ 51150 pps (lower bound: reflector dropped 186000 destinations)",
+		"ok (warn: gc_pause_p99)",
+		"| kind | # | N | joined | outcome | loss | server CPU | gen CPU | gen health | join failures | hello tries max | server drops | control lost | ramp joins/s | reasons |",
+		"#### Join bursts",
+		"| talker | from N | added | joined | failures | joins/s | join p99 | hello retried | result |",
+		"| live | 668 | 150 | 120 | 30 | 9.6 | 7.40s | 30 | join failures |",
+	} {
+		if !strings.Contains(got, w) {
+			t.Errorf("results.md lacks %q", w)
+		}
+	}
+	// A burst row is not a steady-state row.
+	if strings.Contains(got, "| burst |") {
+		t.Errorf("a burst row is in the main table:\n%s", got)
+	}
+}
+
+// A v2 bot does not report gc_cycles: the cell is unmeasured, not zero.
+func TestGCCyclesUnreportedIsDashAndEmptyCell(t *testing.T) {
+	r := passRow()
+	r.Step.Health.GCCycles = nil
+	if got := FormatRowLine(testTag, r); !strings.Contains(got, " gc_cycles=- ") {
+		t.Errorf("row line: %s", got)
+	}
+	if got := round2Cells(r)[11]; got != "" {
+		t.Errorf("gen_gc_cycles cell = %q, want empty", got)
+	}
+	r.Step.Health.GCCycles = gcCycles(0)
+	if got := round2Cells(r)[11]; got != "0" {
+		t.Errorf("reported zero cell = %q, want 0", got)
+	}
+}
+
+// A burst that lost control has no join data: say so instead of printing zeros.
+func TestFormatBurstLineControlLostHasNoJoinData(t *testing.T) {
+	r := Row{Kind: "burst", Seq: 3, N: 818, BurstTalker: "live", BurstResult: "control lost"}
+	want := `[leg 2 S one-big-net] burst #3 talker=live N=818->818: joined=- join_failures=- joins_per_s=- join_p99=- hello_retried=- hello_tries_max=- result=control lost`
+	if got := FormatBurstLine(testTag, r); got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+}
+
+func TestFormatCapacityLowerBound(t *testing.T) {
+	c := &Calibration{ReceivePPS: 25000, LowerBound: true, LowerBoundReason: "reflector dropped 3"}
+	got := FormatCapacity(c)
+	if got != "receive capacity >= 25000 pps (lower bound: reflector dropped 3)" {
+		t.Fatalf("got %q", got)
+	}
+	if got := FormatCapacity(&Calibration{ReceivePPS: 100}); got != "receive capacity 100 pps" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestFormatControlLostLine(t *testing.T) {
+	ev := ControlLostEvent{Bot: 2, Cause: "stream", Code: "Unavailable", Message: "error reading from server: connection reset by peer",
+		Phase: "hold", AgeS: 243.1, SinceLastOKPingS: 3.2, LocalAddr: "127.0.0.1:41234", DeadTotal: 1}
+	want := `[leg 2 S one-big-net] control_lost bot=2 cause=stream code=Unavailable phase=hold age_s=243.1 since_last_ok_ping_s=3.2 local_addr=127.0.0.1:41234 dead_total=1 message="error reading from server: connection reset by peer"`
+	if got := FormatControlLostLine(testTag, ev); got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+	// A v2 hold death carries no ping data or address.
+	v2 := ControlLostFromV2Error("hold: bot 55 died: update stream ended by the server", "settle")
+	if got := FormatControlLostLine(testTag, v2); !strings.Contains(got, "bot=55 cause=stream code=Unknown phase=settle") || !strings.Contains(got, "since_last_ok_ping_s=- local_addr=- dead_total=-") {
+		t.Errorf("v2 line = %s", got)
 	}
 }

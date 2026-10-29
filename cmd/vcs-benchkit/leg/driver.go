@@ -44,10 +44,33 @@ type Window struct {
 	SoftnetDropped, UDPRcvbufErrors, UDPSndbufErrors uint64
 	NetOK                                            bool
 	NetErr                                           string
+	// The kernel TCP abort, timeout and reset counters, and softnet's
+	// time_squeeze, over the window (W6 fix 2): they classify the KIND of abort
+	// (data, close, memory, timeout, linger). They are host-wide and the bots
+	// share the host with the server, so they do not say which side sent a reset;
+	// that attribution comes from the grpc transport logs. They are
+	// informational and are NEVER classified.
+	// Only meaningful when TCPOK; an unread file is TCPErr, shown as unread and
+	// never folded into Err (it must not invalidate a step). TCPMissing lists
+	// the TcpExt keys this kernel does not print (read as 0).
+	TCPAbortOnData, TCPAbortOnClose, TCPAbortOnMemory, TCPAbortOnTimeout, TCPAbortOnLinger, TCPTimeouts uint64
+	EstabResets, OutRsts                                                                                uint64
+	TCPOK                                                                                               bool
+	TCPErr                                                                                              string
+	TCPMissing                                                                                          []string
+	SoftnetSqueezed                                                                                     uint64
+	// SoftnetCPUs is the per-CPU softnet dropped/squeezed increase, in CPU order.
+	SoftnetCPUs []CPUSoftnet
 	// Err is set when a sampler failed (a missing /proc file, ss not
 	// installed, the server socket absent from ss). The step is then invalid:
 	// a zero drop count that was never read is not a measurement.
 	Err string
+}
+
+// CPUSoftnet is one CPU's softnet_stat increase over a window.
+type CPUSoftnet struct {
+	CPU               int
+	Dropped, Squeezed uint64
 }
 
 // System is one running server plus its load bot.
@@ -58,6 +81,13 @@ type System interface {
 	// BeginSample starts the 1 s samplers; the returned func stops them and
 	// returns the window.
 	BeginSample() func() Window
+	// ControlLost returns every control-lost event of this system's load bot so
+	// far, in detection order (a v2 bot's hold death is one event too).
+	ControlLost() []ControlLostEvent
+	// Burst adds add bots with no rate limit at inFlight concurrency and the
+	// talker silent or live (I-13). A bot without the burst command returns an
+	// error wrapping ErrNotSupported. Join failures are data in the result.
+	Burst(ctx context.Context, add, inFlight int, talker string) (Joins, error)
 	// Close stops the bot, then the server, and reaps both.
 	Close() error
 }
@@ -66,6 +96,12 @@ type System interface {
 // the bot wrote (see Bot.LastJoins).
 type lastJoiner interface {
 	LastJoins() (Joins, bool)
+}
+
+// burstSupporter is the optional System method that says whether the load bot
+// has the burst command, so a v2 bot is skipped before any rebuild or ramp.
+type burstSupporter interface {
+	SupportsBurst() bool
 }
 
 // Env starts a fresh system: a new server topology and a new load bot with
@@ -93,6 +129,18 @@ type Config struct {
 	Bounds sweep.Bounds
 	Clock  Clock
 
+	// RampChunk bounds one set_n of a ramp: a ramp is split into chunks of at
+	// most this many bots and stops at the first chunk that fails to join or
+	// loses control (0 = one set_n per step). RateMax and RateScale are the bot's
+	// join-rate rule min(RateMax, RateScale/alive) (0 terms are left out; both 0
+	// = the constant JoinRate), which the time guard prices a ramp with.
+	RampChunk          int
+	RateMax, RateScale float64
+	// BurstEnabled runs the join-burst phase after the sweep; BurstAdd (150) and
+	// BurstInFlight (16) shape one burst.
+	BurstEnabled            bool
+	BurstAdd, BurstInFlight int
+
 	// OnRow is called with each row right after it is appended to the outcome;
 	// Logf receives the driver's own progress lines (a ramp starting and
 	// ending). Both are optional and only for the operator's log.
@@ -102,7 +150,7 @@ type Config struct {
 
 // Row is one measured step.
 type Row struct {
-	Kind    string // sweep | confirm | overload
+	Kind    string // sweep | confirm | overload | burst
 	Seq     int
 	N       int
 	Outcome sweep.StepOutcome
@@ -127,7 +175,24 @@ type Row struct {
 	// logged an "Accepted voice HELLO" for during the ramp: the server saw the
 	// HELLO that the bot never saw answered. -1 = unknown (no GUIDs reported).
 	FailedAckedByServer int
+	// ControlLost holds the first (at most 8) bots that lost their control
+	// connection during the step, ControlLostCount all of them and
+	// ControlLostPhase the stage the kit was in when it saw it (ramp, settle or
+	// hold). A step with deaths is classified sweep.ControlLost.
+	ControlLost      []ControlLostEvent
+	ControlLostCount int
+	ControlLostPhase string
+	// JoinFailedChunk is the ramp chunk that had join failures, when the ramp was
+	// chunked (nil otherwise); Joins then sums the chunks up to and including it.
+	JoinFailedChunk *ChunkRange
+	// BurstTalker (silent | live) and BurstResult (ok | join failures | control
+	// lost) are set on Kind "burst" rows only. A burst row never reaches the sweep.
+	BurstTalker string
+	BurstResult string
 }
+
+// ChunkRange is one ramp chunk: it grew the bot count from Had to Requested.
+type ChunkRange struct{ Had, Requested int }
 
 // Outcome is everything one arm produced.
 type Outcome struct {
@@ -147,13 +212,18 @@ type Driver struct {
 
 	sys    System
 	joined int
+	// seenLost is the count of control-lost events already attributed to a row
+	// (reset when the system is rebuilt).
+	seenLost int
 	// rebuild is set after a join failure: the server and bot are no longer
 	// trusted, so the next step boots fresh. rebuildAt is the failing N.
 	rebuild   bool
 	rebuildAt int
-	rate      float64
-	start     time.Time
-	out       Outcome
+	// rebuildWhy names what killed the system, for the rebuild note.
+	rebuildWhy string
+	rate       float64
+	start      time.Time
+	out        Outcome
 }
 
 // NewDriver fills the defaults a zero Config leaves open.
@@ -200,6 +270,7 @@ func (d *Driver) boot(ctx context.Context) error {
 	d.sys = sys
 	d.out.Starts++
 	d.joined = 0
+	d.seenLost = 0
 	if j, err := sys.SetN(ctx, 2); err != nil {
 		return fmt.Errorf("pre-flight: %w", err)
 	} else if j.JoinFailures > 0 {
@@ -242,6 +313,13 @@ type ramp struct {
 	FailedAcked int
 	// Ran is false when no SetN was needed.
 	Ran bool
+	// FailedChunk is the chunk with join failures (chunked ramps only).
+	FailedChunk *ChunkRange
+	// Dead0 is the system's control-lost count when the ramp began (after any
+	// rebuild); deaths past it belong to this step. Lost carries a death that
+	// came back as an error from a set_n.
+	Dead0 int
+	Lost  *ControlLostEvent
 }
 
 // joinFailureSummary is the one line a fatal join failure and a log line carry:
@@ -255,16 +333,102 @@ func joinFailureSummary(j Joins) string {
 	return s
 }
 
+// asLost turns a bot error into a control-lost event: a *ControlLostError, or
+// the v2 hold-death text (a v2 bot's raw error line). phase is the kit's stage,
+// used when the event carries none.
+func asLost(err error, phase string) *ControlLostEvent {
+	if err == nil {
+		return nil
+	}
+	var cle *ControlLostError
+	if errors.As(err, &cle) {
+		ev := cle.Event
+		if ev.Phase == "" {
+			ev.Phase = phase
+		}
+		return &ev
+	}
+	if t := err.Error(); IsControlLostText(t) {
+		ev := ControlLostFromV2Error(t, phase)
+		return &ev
+	}
+	return nil
+}
+
+// lostSince returns the deaths the system recorded after dead0, or extra alone
+// when the bot recorded none (an error that carried the death).
+func (d *Driver) lostSince(dead0 int, extra *ControlLostEvent) []ControlLostEvent {
+	var evs []ControlLostEvent
+	if all := d.sys.ControlLost(); len(all) > dead0 {
+		evs = append(evs, all[dead0:]...)
+	} else {
+		d.seenLost = len(all)
+	}
+	if len(evs) == 0 && extra != nil {
+		evs = append(evs, *extra)
+	}
+	return evs
+}
+
+func describeLost(ev ControlLostEvent) string {
+	return fmt.Sprintf("bot %d %s: %s", ev.Bot, ev.Code, ev.Message)
+}
+
+// mergeJoins folds the next chunk's joins line into the running total. The
+// total's Requested is the last chunk's target, so the I-1 invariants hold for
+// the chunks that ran.
+func mergeJoins(a, b Joins) Joins {
+	m := b
+	m.Had = a.Had
+	m.Joined = a.Joined + b.Joined
+	m.JoinFailures = a.JoinFailures + b.JoinFailures
+	m.N = a.Had + m.Joined
+	m.FailuresByStage = map[string]int{}
+	for _, k := range joinStages {
+		m.FailuresByStage[k] = a.FailuresByStage[k] + b.FailuresByStage[k]
+	}
+	m.HelloTriesHist = make([]int, helloHistLen)
+	for i := range m.HelloTriesHist {
+		if i < len(a.HelloTriesHist) {
+			m.HelloTriesHist[i] += a.HelloTriesHist[i]
+		}
+		if i < len(b.HelloTriesHist) {
+			m.HelloTriesHist[i] += b.HelloTriesHist[i]
+		}
+	}
+	m.HelloTriesMax = max(a.HelloTriesMax, b.HelloTriesMax)
+	m.HelloRetried = a.HelloRetried + b.HelloRetried
+	m.Failed = append(append([]JoinFailure(nil), a.Failed...), b.Failed...)
+	m.FailedTruncated = a.FailedTruncated || b.FailedTruncated
+	if len(m.Failed) > maxFailedEntries {
+		m.Failed, m.FailedTruncated = m.Failed[:maxFailedEntries], true
+	}
+	m.RampS = a.RampS + b.RampS
+	m.RampHealth.SchedP99us = max(a.RampHealth.SchedP99us, b.RampHealth.SchedP99us)
+	m.RampHealth.GCPauseP99us = max(a.RampHealth.GCPauseP99us, b.RampHealth.GCPauseP99us)
+	if m.RampS > 0 {
+		m.JoinsPerS = float64(m.Joined) / m.RampS
+	}
+	m.JoinP99Us = max(a.JoinP99Us, b.JoinP99Us)
+	return m
+}
+
 // ensure makes the bot count exactly n. Bots only grow, so a smaller n needs
 // a fresh server and load bot (which also gives the step a server that was not
-// just driven past its knee), and so does the step after a join failure. A join
-// failure is returned in ramp.Joins, not as an error: the caller decides.
+// just driven past its knee), and so does the step after a join failure or a
+// control loss. A ramp runs in chunks of cfg.RampChunk and stops at the first
+// chunk with join failures or deaths. A join failure is returned in ramp.Joins,
+// not as an error: the caller decides.
 func (d *Driver) ensure(ctx context.Context, n int) (ramp, error) {
 	var r ramp
 	switch {
 	case d.rebuild:
-		d.note("rebuilt the server and load bot after join failures at %d bots", d.rebuildAt)
-		d.rebuild = false
+		why := d.rebuildWhy
+		if why == "" {
+			why = "join failures"
+		}
+		d.note("rebuilt the server and load bot after %s at %d bots", why, d.rebuildAt)
+		d.rebuild, d.rebuildWhy = false, ""
 		d.closeSys()
 		if err := d.boot(ctx); err != nil {
 			return r, err
@@ -276,25 +440,66 @@ func (d *Driver) ensure(ctx context.Context, n int) (ramp, error) {
 			return r, err
 		}
 	}
+	// The baseline is the high-water mark of deaths already attributed to a
+	// row, not the count now: a bot that died between the previous step's final
+	// check and this point belongs to this step.
+	r.Dead0 = min(d.seenLost, len(d.sys.ControlLost()))
 	if n == d.joined {
 		return r, nil
 	}
 	t0 := d.cfg.Clock.Now()
-	add := n - d.joined
+	start := d.joined
+	add := n - start
 	before, errBefore := d.sys.LogText()
 	end := d.sys.BeginSample()
-	d.logf("ramp N=%d->%d started", d.joined, n)
-	j, err := d.sys.SetN(ctx, n)
-	win := end()
-	if err != nil {
-		return r, fmt.Errorf("set_n %d: %w", n, err)
+	d.logf("ramp N=%d->%d started", start, n)
+	var total Joins
+	chunks := 0
+	cur := start
+	for cur < n {
+		target := n
+		if d.cfg.RampChunk > 0 && n-cur > d.cfg.RampChunk {
+			target = cur + d.cfg.RampChunk
+		}
+		j, err := d.sys.SetN(ctx, target)
+		chunks++
+		if err != nil {
+			if ev := asLost(err, "ramp"); ev != nil {
+				r.Lost = ev
+				break
+			}
+			end()
+			return r, fmt.Errorf("set_n %d: %w", n, err)
+		}
+		if chunks == 1 {
+			total = j
+		} else {
+			total = mergeJoins(total, j)
+		}
+		if j.Source == JoinsSourcePending {
+			cur = target
+			continue
+		}
+		if j.JoinFailures > 0 {
+			if d.cfg.RampChunk > 0 {
+				r.FailedChunk = &ChunkRange{Had: cur, Requested: target}
+			}
+			break
+		}
+		cur = target
+		if len(d.sys.ControlLost()) > r.Dead0 {
+			break
+		}
 	}
-	if j.Source != JoinsSourcePending {
-		d.logf("ramp N=%d->%d done in %.0fs: joined=%d join_failures=%d", d.joined, n,
-			d.cfg.Clock.Now().Sub(t0).Seconds(), max(0, n-d.joined-j.JoinFailures), j.JoinFailures)
+	win := end()
+	if total.Source != JoinsSourcePending {
+		// cur stops before a failing chunk, so the bots that chunk did join
+		// are only in the joins line.
+		d.logf("ramp N=%d->%d done in %.0fs: joined=%d join_failures=%d", start, n,
+			d.cfg.Clock.Now().Sub(t0).Seconds(), max(cur-start, total.Joined), total.JoinFailures)
 	}
 	after, errAfter := d.sys.LogText()
-	r = ramp{Joins: j, Window: win, Ran: true, FailedAcked: -1}
+	r.Joins, r.Window, r.Ran, r.FailedAcked = total, win, true, -1
 	// A failed read must not turn the server's whole log into the ramp's
 	// delta: the counts stay zero (unknown) and the note says why.
 	logsOK := errBefore == nil && errAfter == nil
@@ -303,20 +508,61 @@ func (d *Driver) ensure(ctx context.Context, n int) (ramp, error) {
 	} else {
 		d.note("ramp log unreadable at %d bots (%v): ramp log counts left empty", n, errors.Join(errBefore, errAfter))
 	}
-	if j.JoinFailures > 0 {
+	if r.Lost != nil || len(d.sys.ControlLost()) > r.Dead0 {
+		// The caller records the death; the system is not trusted any more.
+		d.rebuild, d.rebuildAt, d.rebuildWhy = true, n, "control lost"
+		return r, nil
+	}
+	if total.JoinFailures > 0 {
 		if logsOK {
-			r.FailedAcked = FailedAcked(before, after, j.Failed)
+			r.FailedAcked = FailedAcked(before, after, total.Failed)
 		}
-		d.rebuild, d.rebuildAt = true, n
+		d.rebuild, d.rebuildAt, d.rebuildWhy = true, n, ""
 		return r, nil
 	}
 	d.joined = n
 	// Learn the real join rate once the ramp is long enough to trust, so the
-	// time guard follows this VM and not the design's estimate.
-	if el := d.cfg.Clock.Now().Sub(t0).Seconds(); add >= 50 && el > 0 {
+	// time guard follows this VM and not the design's estimate. With the bot's
+	// rate rule modelled the guard uses the model instead.
+	if el := d.cfg.Clock.Now().Sub(t0).Seconds(); add >= 50 && el > 0 && !d.rateModel() {
 		d.rate = float64(add) / el
 	}
 	return r, nil
+}
+
+// rateModel reports whether the time guard prices ramps with the bot's rate rule.
+func (d *Driver) rateModel() bool { return d.cfg.RateMax > 0 || d.cfg.RateScale > 0 }
+
+// rampSeconds is the time to grow the bot count from `from` to `to` joins.
+// Under the I-9 rule the rate at `alive` bots is min(RateMax, RateScale/alive)
+// (a zero term is left out), so the closed form integrates 1/rate over alive:
+// RateMax per second up to the crossover alive = RateScale/RateMax, and
+// alive/RateScale per join after it. Without the rule it is the constant rate.
+func (d *Driver) rampSeconds(from, to int) float64 {
+	if to <= from {
+		return 0
+	}
+	if !d.rateModel() {
+		return float64(to-from) / d.rate
+	}
+	a, b := float64(max(from, 1)), float64(to)
+	mx, sc := d.cfg.RateMax, d.cfg.RateScale
+	switch {
+	case sc <= 0:
+		return (b - a) / mx
+	case mx <= 0:
+		return (b*b - a*a) / (2 * sc)
+	}
+	c := sc / mx
+	var secs float64
+	if a < c {
+		secs += (math.Min(b, c) - a) / mx
+	}
+	if b > c {
+		lo := math.Max(a, c)
+		secs += (b*b - lo*lo) / (2 * sc)
+	}
+	return secs
 }
 
 // settle probes with short holds until the step is quiescent (design 6.4.3).
@@ -327,12 +573,21 @@ func (d *Driver) ensure(ctx context.Context, n int) (ramp, error) {
 // The bot counts a probe as a hold phase, so a probe's ResourceExhausted counts
 // are returned for the caller to fold into the step's ramp and settle columns
 // (they are ramp artefacts and never part of the measured hold).
-func (d *Driver) settle(ctx context.Context, rampEnd time.Time) (ok bool, reason string, rex PhaseCounts, err error) {
+//
+// A death after dead0, or a probe error that is one, ends the settle with lost
+// set; it is the step's outcome, not an error.
+func (d *Driver) settle(ctx context.Context, rampEnd time.Time, dead0 int) (ok bool, reason string, rex PhaseCounts, lost []ControlLostEvent, err error) {
 	var samples []sweep.SettleSample
 	for i := 0; ; i++ {
 		st, err := d.sys.Hold(ctx, d.cfg.ProbeHold, fmt.Sprintf("probe-%d", i))
 		if err != nil {
-			return false, "", rex, err
+			if ev := asLost(err, "settle"); ev != nil {
+				return false, "", rex, d.lostSince(dead0, ev), nil
+			}
+			return false, "", rex, nil, err
+		}
+		if evs := d.lostSince(dead0, nil); len(evs) > 0 {
+			return false, "", rex, evs, nil
 		}
 		rex.Ramp += st.ResourceExhausted.Ramp
 		rex.Settle += st.ResourceExhausted.Settle + st.ResourceExhausted.Hold
@@ -348,15 +603,39 @@ func (d *Driver) settle(ctx context.Context, rampEnd time.Time) (ok bool, reason
 		})
 		ok, reason := sweep.Settled(samples, now)
 		if ok {
-			return true, "", rex, nil
+			return true, "", rex, nil, nil
 		}
 		if strings.HasPrefix(reason, sweep.InvalidCannotSettle) {
-			return false, reason, rex, nil
+			return false, reason, rex, nil, nil
 		}
 	}
 }
 
-// measure runs one step at n bots: ramp, settle, then the measured hold.
+// markControlLost makes the row a control_lost step: it keeps whatever the step
+// measured, adds the deaths to its data and classifies (control loss first).
+// The system is no longer trusted, so the next step boots fresh.
+func (d *Driver) markControlLost(row *Row, evs []ControlLostEvent, phase string) {
+	count := len(evs)
+	if row.Held && row.Step.ControlLost.DeadSinceLastStep > count {
+		count = row.Step.ControlLost.DeadSinceLastStep
+	}
+	row.ControlLost = append([]ControlLostEvent(nil), evs[:min(8, len(evs))]...)
+	row.ControlLostCount, row.ControlLostPhase = count, phase
+	row.Data.N = row.N
+	row.Data.ControlLost = uint64(count)
+	row.Data.ControlLostFirst = describeLost(evs[0])
+	row.Outcome, row.Reasons = sweep.Classify(row.Data, d.cfg.Bounds)
+	d.rebuild, d.rebuildAt, d.rebuildWhy = true, row.N, "control lost"
+}
+
+// nanData is the StepData of a step that never reached a measured hold.
+func nanData(n int) sweep.StepData {
+	nan := math.NaN()
+	return sweep.StepData{N: n, LossRatio: nan, LateLossRatio: nan, ServerCPU: nan, GenCPU: nan}
+}
+
+// measure runs one step at n bots: ramp, settle, then the measured hold. A bot
+// that loses its control connection at any point ends the step as ControlLost.
 func (d *Driver) measure(ctx context.Context, kind string, n int, hold time.Duration, label string) (Row, error) {
 	row := Row{Kind: kind, Seq: len(d.out.Rows) + 1, N: n, FailedAckedByServer: -1}
 	rp, err := d.ensure(ctx, n)
@@ -364,32 +643,43 @@ func (d *Driver) measure(ctx context.Context, kind string, n int, hold time.Dura
 		return row, err
 	}
 	row.Joins, row.RampWindow, row.RampLogs, row.FailedAckedByServer = rp.Joins, rp.Window, rp.Logs, rp.FailedAcked
+	row.JoinFailedChunk = rp.FailedChunk
+	if evs := d.lostSince(rp.Dead0, rp.Lost); len(evs) > 0 {
+		row.Data = nanData(n)
+		d.markControlLost(&row, evs, "ramp")
+		return row, nil
+	}
 	if rp.Joins.JoinFailures > 0 {
 		// The ramp is this step's outcome: no settle, no hold. A join failure
 		// is a server breach unless the generator itself was the limit.
-		nan := math.NaN()
 		by := map[string]uint64{}
 		for k, v := range rp.Joins.FailuresByStage {
 			by[k] = uint64(v)
 		}
-		row.Data = sweep.StepData{
-			N: n, LossRatio: nan, LateLossRatio: nan, ServerCPU: nan, GenCPU: nan,
-			JoinFailures: uint64(rp.Joins.JoinFailures), JoinAttempted: max(0, rp.Joins.Requested-rp.Joins.Had),
-			JoinStages: by, HelloTriesMax: rp.Joins.HelloTriesMax, RampGenCPU: rp.Window.GenCPU,
-		}
+		row.Data = nanData(n)
+		row.Data.JoinFailures = uint64(rp.Joins.JoinFailures)
+		row.Data.JoinAttempted = max(0, rp.Joins.Requested-rp.Joins.Had)
+		row.Data.JoinStages = by
+		row.Data.HelloTriesMax = rp.Joins.HelloTriesMax
+		row.Data.RampGenCPU = rp.Window.GenCPU
 		row.Outcome, row.Reasons = sweep.Classify(row.Data, d.cfg.Bounds)
 		return row, nil
 	}
 	rampEnd := d.cfg.Clock.Now()
-	ok, reason, probeRex, err := d.settle(ctx, rampEnd)
+	ok, reason, probeRex, lost, err := d.settle(ctx, rampEnd, rp.Dead0)
 	if err != nil {
 		return row, fmt.Errorf("settle at %d bots: %w", n, err)
 	}
 	row.SettleSeconds = d.cfg.Clock.Now().Sub(rampEnd).Seconds()
-	nan := math.NaN()
+	if len(lost) > 0 {
+		row.Data = nanData(n)
+		d.markControlLost(&row, lost, "settle")
+		return row, nil
+	}
 	if !ok {
 		row.Step.ResourceExhausted = probeRex
-		row.Data = sweep.StepData{N: n, LossRatio: nan, LateLossRatio: nan, ServerCPU: nan, GenCPU: nan, CannotSettle: true}
+		row.Data = nanData(n)
+		row.Data.CannotSettle = true
 		row.Outcome, row.Reasons = sweep.Classify(row.Data, d.cfg.Bounds)
 		row.Reasons = append([]string{reason}, row.Reasons...)
 		return row, nil
@@ -407,6 +697,11 @@ func (d *Driver) measure(ctx context.Context, kind string, n int, hold time.Dura
 		win.Err = strings.TrimPrefix(win.Err+"; "+win.NetErr, "; ")
 	}
 	if herr != nil {
+		if ev := asLost(herr, "hold"); ev != nil {
+			row.Data = nanData(n)
+			d.markControlLost(&row, d.lostSince(rp.Dead0, ev), "hold")
+			return row, nil
+		}
 		return row, fmt.Errorf("hold at %d bots: %w", n, herr)
 	}
 	after, err := d.sys.LogText()
@@ -435,6 +730,12 @@ func (d *Driver) measure(ctx context.Context, kind string, n int, hold time.Dura
 		row.Outcome = sweep.Invalid
 		row.Reasons = append([]string{"invalid: sampler: " + win.Err}, row.Reasons...)
 	}
+	// A death during the hold (or the second after it) makes the loss of the
+	// listeners it took down meaningless: the step is control_lost, with its
+	// measurements kept.
+	if evs := d.lostSince(rp.Dead0, nil); len(evs) > 0 {
+		d.markControlLost(&row, evs, "hold")
+	}
 	return row, nil
 }
 
@@ -445,25 +746,140 @@ func (d *Driver) overBudget(n, lo int) bool {
 	if d.cfg.Budget <= 0 {
 		return false
 	}
-	rate := d.rate
-	secs := func(bots int) time.Duration { return time.Duration(float64(bots) / rate * float64(time.Second)) }
+	secs := func(from, to int) time.Duration {
+		return time.Duration(d.rampSeconds(from, to) * float64(time.Second))
+	}
 	cost := sweep.SettleTypical + sweep.HoldDuration
 	if d.rebuild {
 		// A join failure killed the system: the step boots fresh at 2 bots
 		// and ramps from there, whatever d.joined last was.
-		cost += secs(max(0, n-2)) + 30*time.Second
+		cost += secs(2, n) + 30*time.Second
 	} else if n < d.joined {
-		cost += secs(n) + 30*time.Second
+		cost += secs(0, n) + 30*time.Second
 	} else {
-		cost += secs(n - d.joined)
+		cost += secs(d.joined, n)
 	}
 	// The confirm may rebuild and ramp to the knee, and the overload then
 	// ramps another knee's worth of bots: two ramps and two settles.
-	reserve := d.cfg.Confirm + d.cfg.Overload + 2*secs(lo) + 2*sweep.SettleTypical + 30*time.Second
+	reserve := d.cfg.Confirm + d.cfg.Overload + 2*secs(0, lo) + 2*sweep.SettleTypical + 30*time.Second
 	return d.cfg.Clock.Now().Sub(d.start)+cost+reserve > d.cfg.Budget
 }
 
-// Run executes the arm: boot, warm-up, sweep, confirm, overload.
+// measureRetried is a confirm or overload step: a control loss gets exactly one
+// retry on a rebuilt system. Both rows are recorded; the last one is returned.
+func (d *Driver) measureRetried(ctx context.Context, kind string, n int, hold time.Duration, label string) (Row, error) {
+	row, err := d.measure(ctx, kind, n, hold, label)
+	if err != nil {
+		return row, err
+	}
+	d.record(row)
+	if row.Outcome != sweep.ControlLost {
+		return row, nil
+	}
+	d.note("the %s step at %d bots lost control (%s); retrying once", kind, n, strings.Join(row.Reasons, "; "))
+	row, err = d.measure(ctx, kind, n, hold, label)
+	if err != nil {
+		return row, err
+	}
+	d.record(row)
+	return row, nil
+}
+
+// burstPhase measures join behaviour on its own at about knee/2: +BurstAdd bots
+// at BurstInFlight concurrency, once with the talker silent and once live. Its
+// rows are kind "burst", never reach the sweep, and a failure in here is a note
+// at most. The system is rebuilt afterwards so the confirm starts clean.
+func (d *Driver) burstPhase(ctx context.Context, k int) error {
+	add, inFlight := d.cfg.BurstAdd, d.cfg.BurstInFlight
+	if add <= 0 {
+		add = 150
+	}
+	if inFlight <= 0 {
+		inFlight = 16
+	}
+	if k/2 < 300 {
+		d.note("join burst not measured: the knee %d is below 600 bots", k)
+		return nil
+	}
+	if bs, ok := d.sys.(burstSupporter); ok && !bs.SupportsBurst() {
+		d.note("join burst not measured: the load bot lacks the burst command (v2)")
+		return nil
+	}
+	base := k/2 - add
+	if d.overBudget(base, k) {
+		d.note("budget guard: join burst not measured so the confirm and overload still fit")
+		return nil
+	}
+	// A pending rebuild (the sweep's last step failed its joins or lost
+	// control) already boots fresh in ensure; booting here too would waste one.
+	if d.joined > base && !d.rebuild {
+		d.note("rebuilt the server and load bot for the join burst: %d bots joined, burst base %d", d.joined, base)
+		d.closeSys()
+		if err := d.boot(ctx); err != nil {
+			return err
+		}
+	}
+	// Whatever happens, the confirm that follows boots fresh.
+	defer func() {
+		d.rebuild, d.rebuildAt, d.rebuildWhy = true, base+2*add, "the join burst"
+	}()
+	rp, err := d.ensure(ctx, base)
+	if err != nil {
+		return err
+	}
+	if rp.Joins.JoinFailures > 0 || len(d.lostSince(rp.Dead0, rp.Lost)) > 0 {
+		d.note("join burst not measured: the ramp to %d bots did not complete cleanly", base)
+		return nil
+	}
+	for _, talker := range []string{"silent", "live"} {
+		dead0 := len(d.sys.ControlLost())
+		ok, _, _, lost, err := d.settle(ctx, d.cfg.Clock.Now(), dead0)
+		if err != nil {
+			return fmt.Errorf("settle before the %s join burst: %w", talker, err)
+		}
+		if len(lost) > 0 || !ok {
+			d.note("join burst (%s talker) not measured: the system did not settle at %d bots", talker, d.joined)
+			return nil
+		}
+		j, err := d.sys.Burst(ctx, add, inFlight, talker)
+		if err != nil {
+			if errors.Is(err, ErrNotSupported) {
+				d.note("join burst not measured: the load bot lacks the burst command (v2)")
+				return nil
+			}
+			if ev := asLost(err, "burst"); ev != nil {
+				d.note("join burst (%s talker) lost control: %s", talker, describeLost(*ev))
+				return nil
+			}
+			return fmt.Errorf("join burst (%s talker): %w", talker, err)
+		}
+		n := j.N
+		if n == 0 {
+			n = d.joined + j.Joined
+		}
+		row := Row{Kind: "burst", Seq: len(d.out.Rows) + 1, N: n, Joins: j, FailedAckedByServer: -1,
+			Outcome: sweep.Pass, BurstTalker: talker, BurstResult: "ok", Data: nanData(n)}
+		if j.JoinFailures > 0 {
+			row.BurstResult = "join failures"
+			row.Reasons = []string{"burst failures: " + joinFailureSummary(j)}
+		}
+		if evs := d.lostSince(dead0, nil); len(evs) > 0 {
+			row.BurstResult = "control lost"
+			row.ControlLost, row.ControlLostCount, row.ControlLostPhase = evs[:min(8, len(evs))], len(evs), "burst"
+			row.Reasons = append(row.Reasons, "control lost: "+describeLost(evs[0]))
+		}
+		d.record(row)
+		if row.BurstResult != "ok" {
+			// The failed joins left the system in an unknown state.
+			d.note("join burst (%s talker) ended the burst phase: %s", talker, row.BurstResult)
+			return nil
+		}
+		d.joined = n
+	}
+	return nil
+}
+
+// Run executes the arm: boot, warm-up, sweep, join bursts, confirm, overload.
 func (d *Driver) Run(ctx context.Context) (*Outcome, error) {
 	d.start = d.cfg.Clock.Now()
 	defer d.closeSys()
@@ -478,8 +894,15 @@ func (d *Driver) Run(ctx context.Context) (*Outcome, error) {
 	} else if rp.Joins.JoinFailures > 0 {
 		return &d.out, fmt.Errorf("warm-up: join failures at %d bots: %s", warmN, joinFailureSummary(rp.Joins))
 	}
-	if _, err := d.sys.Hold(ctx, d.cfg.Warmup, "warmup"); err != nil {
-		return &d.out, fmt.Errorf("warm-up: %w", err)
+	// A death in the discarded warm-up is not any step's: note it and rebuild,
+	// so the first sweep step starts on a fresh system with a clean baseline.
+	_, werr := d.sys.Hold(ctx, d.cfg.Warmup, "warmup")
+	if werr != nil && asLost(werr, "warmup") == nil {
+		return &d.out, fmt.Errorf("warm-up: %w", werr)
+	}
+	if evs := d.lostSince(0, asLost(werr, "warmup")); len(evs) > 0 {
+		d.note("the warm-up lost control (%d bots; %s); rebuilding before the sweep", len(evs), describeLost(evs[0]))
+		d.rebuild, d.rebuildAt, d.rebuildWhy = true, warmN, "control lost in the warm-up"
 	}
 
 	sw := sweep.NewSweep(d.cfg.Predicted, d.cfg.NMax)
@@ -522,11 +945,15 @@ func (d *Driver) Run(ctx context.Context) (*Outcome, error) {
 		d.note("no passing step, so no confirm or overload")
 		return &d.out, nil
 	}
-	row, err := d.measure(ctx, "confirm", k, d.cfg.Confirm, "confirm")
+	if d.cfg.BurstEnabled {
+		if err := d.burstPhase(ctx, k); err != nil {
+			return &d.out, err
+		}
+	}
+	row, err := d.measureRetried(ctx, "confirm", k, d.cfg.Confirm, "confirm")
 	if err != nil {
 		return &d.out, err
 	}
-	d.record(row)
 	if row.Outcome != sweep.Pass {
 		d.out.Unconfirmed = true
 		d.note("the confirm step at %d bots was %s, so the knee is unconfirmed: %s", k, row.Outcome, strings.Join(row.Reasons, "; "))
@@ -535,10 +962,8 @@ func (d *Driver) Run(ctx context.Context) (*Outcome, error) {
 	if ov <= k {
 		return &d.out, nil
 	}
-	row, err = d.measure(ctx, "overload", ov, d.cfg.Overload, "overload")
-	if err != nil {
+	if _, err = d.measureRetried(ctx, "overload", ov, d.cfg.Overload, "overload"); err != nil {
 		return &d.out, err
 	}
-	d.record(row)
 	return &d.out, nil
 }

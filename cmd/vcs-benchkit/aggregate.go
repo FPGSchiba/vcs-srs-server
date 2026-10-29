@@ -93,6 +93,10 @@ type legInfo struct {
 	err   string
 	calib string // "102350 (lower bound)" or "-"
 	steps string // "1038:pass 2076:breach" or "-"
+	// ctlLost is the number of steps with a dead bot, bursts the join failures of
+	// the silent and the live join burst ("0/30"). Both are "-" when steps.csv
+	// predates round 2 or never ran a burst: a dash, never a made-up zero.
+	ctlLost, bursts string
 }
 
 // readColumns reads a CSV into one map per data row, keyed by header name.
@@ -123,7 +127,7 @@ func readColumns(path string) ([]map[string]string, error) {
 // shows as "-": the table is a log aid and must never fail a run.
 func readLegInfo(root, dir string, kneeFile bool) (legInfo, error) {
 	d := filepath.Join(root, filepath.FromSlash(dir))
-	li := legInfo{dir: dir, calib: "-", steps: "-"}
+	li := legInfo{dir: dir, calib: "-", steps: "-", ctlLost: "-", bursts: "-"}
 	if kneeFile {
 		lk, err := readKnees(filepath.Join(d, "knees.csv"), dir)
 		if err != nil {
@@ -172,11 +176,31 @@ func readLegInfo(root, dir string, kneeFile bool) (legInfo, error) {
 	}
 	if rows, err := readColumns(filepath.Join(d, "steps.csv")); err == nil {
 		var parts []string
+		lost, haveLost := 0, false
+		silent, live := "-", "-"
 		for _, r := range rows {
 			parts = append(parts, r["n"]+":"+r["outcome"])
+			if v, ok := r["control_lost"]; ok {
+				haveLost = true
+				if n, err := strconv.Atoi(v); err == nil && n > 0 {
+					lost++
+				}
+			}
+			switch r["burst_talker"] {
+			case "silent":
+				silent = dash(r["join_failures"])
+			case "live":
+				live = dash(r["join_failures"])
+			}
 		}
 		if len(parts) > 0 {
 			li.steps = strings.Join(parts, " ")
+		}
+		if haveLost {
+			li.ctlLost = strconv.Itoa(lost)
+		}
+		if silent != "-" || live != "-" {
+			li.bursts = silent + "/" + live
 		}
 	}
 	return li, nil
@@ -214,8 +238,8 @@ func renderAggregateMarkdown(legs []legInfo, rows []aggRow) string {
 		}
 	}
 	fmt.Fprintf(&b, "### Aggregate: %d of %d legs finished\n\n", finished, len(legs))
-	b.WriteString("| leg | result | N | kind | calibration pps | steps (N:outcome) | error |\n")
-	b.WriteString("|---|---|---|---|---|---|---|\n")
+	b.WriteString("| leg | result | N | kind | calibration pps | steps (N:outcome) | control lost (steps) | bursts (silent/live failures) | error |\n")
+	b.WriteString("|---|---|---|---|---|---|---|---|---|\n")
 	for _, l := range legs {
 		result, n, kind := "did not finish", "-", "-"
 		if l.knee != nil {
@@ -225,8 +249,8 @@ func renderAggregateMarkdown(legs []legInfo, rows []aggRow) string {
 		if l.knee == nil && errText == "" {
 			errText = "no knees.csv"
 		}
-		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %s |\n",
-			mdCell(l.dir), mdCell(result), n, mdCell(kind), mdCell(l.calib), mdCell(l.steps), mdCell(errText))
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",
+			mdCell(l.dir), mdCell(result), n, mdCell(kind), mdCell(l.calib), mdCell(l.steps), mdCell(l.ctlLost), mdCell(l.bursts), mdCell(errText))
 	}
 	if len(rows) > 0 {
 		b.WriteString("\n| arm | scenario | repeats | median N | min N | max N | censored | unconfirmed |\n")
@@ -246,7 +270,7 @@ func renderAggregateMarkdown(legs []legInfo, rows []aggRow) string {
 // A leg without knees.csv did not finish: it is listed in aggregate.md with
 // its manifest error, and when no leg finished the run still fails, after the
 // table is written.
-// A censored leg (generator-bound, time-bound, below range) contributes its
+// A censored leg (generator-bound, time-bound, below range, control-lost) contributes its
 // bound as n and sets censored=true, so the statistics are lower bounds then.
 // A leg whose knee failed its confirm step keeps result_kind=knee; it sets
 // unconfirmed=true instead, so the flag is not buried in the results text.

@@ -37,9 +37,12 @@ type CalStep struct {
 
 // Calibration is the generator's receive-side calibration of one leg.
 type Calibration struct {
-	Steps               []CalStep
-	ReceivePPS          float64
-	LowerBound          bool
+	Steps      []CalStep
+	ReceivePPS float64
+	LowerBound bool
+	// LowerBoundReason says why ReceivePPS is only a lower bound (empty when it
+	// is not one). S-T9 fills it; results.md shows it next to the figure.
+	LowerBoundReason    string
 	ReflectorSendErrors uint64
 	Senders             int
 
@@ -154,6 +157,8 @@ func kindName(k sweep.ResultKind) string {
 		return "time-bound"
 	case sweep.BelowRange:
 		return "below-range"
+	case sweep.ControlLostBound:
+		return "control-lost"
 	}
 	return fmt.Sprintf("kind-%d", int(k))
 }
@@ -176,6 +181,12 @@ func WriteStepsCSV(w io.Writer, o *Outcome, topology string) error {
 		"ramp_s", "ramp_server_cpu", "ramp_gen_cpu", "ramp_server_drops", "ramp_softnet_dropped", "ramp_udp_rcvbuf_errors",
 		"ramp_hello_accepted", "ramp_hello_rejected", "ramp_shard_queue_full",
 		"softnet_dropped", "udp_rcvbuf_errors", "udp_sndbuf_errors",
+		// Appended by W6 fix 2 (27 columns, see round2Cells).
+		"control_lost", "control_lost_phase", "control_lost_first", "ramp_mode", "ramp_talker", "ramp_joins_per_s", "ramp_join_p99_us",
+		"ramp_hello_retried", "join_failed_chunk", "burst_talker", "burst_result", "gen_gc_cycles", "gen_warnings",
+		"ping_sent", "ping_failed", "ping_rtt_p99_us",
+		"tcp_abort_on_data", "tcp_abort_on_close", "tcp_abort_on_memory", "tcp_abort_on_timeout", "tcp_abort_on_linger", "tcp_timeouts",
+		"tcp_estab_resets", "tcp_out_rsts", "softnet_squeezed", "ramp_tcp_abort_on_data", "ramp_tcp_estab_resets",
 	}
 	if err := cw.Write(header); err != nil {
 		return err
@@ -200,6 +211,7 @@ func WriteStepsCSV(w io.Writer, o *Outcome, topology string) error {
 			topology, Label, PayloadLabel, JoinLabel, NotMeasured,
 		}
 		rec = append(rec, joinCells(r)...)
+		rec = append(rec, round2Cells(r)...)
 		if len(rec) != len(header) {
 			return fmt.Errorf("steps.csv: row has %d cells for %d columns", len(rec), len(header))
 		}
@@ -248,6 +260,50 @@ func joinCells(r Row) []string {
 	}
 	if r.Held && r.Window.NetOK {
 		cells[15], cells[16], cells[17] = u(r.Window.SoftnetDropped), u(r.Window.UDPRcvbufErrors), u(r.Window.UDPSndbufErrors)
+	}
+	return cells
+}
+
+// round2Cells are the 27 steps.csv cells appended by W6 fix 2: control loss, the
+// bot's ramp mode, the join burst, generator GC and warnings, the bot's Ping
+// account and the kernel TCP counters. A value that was not measured (a v2 bot,
+// no hold, an unread /proc file) is an empty cell, never a zero. The kit's own
+// control_lost count is always written: it counts what the kit saw.
+func round2Cells(r Row) []string {
+	cells := make([]string, 27)
+	cells[0], cells[1] = strconv.Itoa(r.ControlLostCount), r.ControlLostPhase
+	if len(r.ControlLost) > 0 {
+		cells[2] = describeLost(r.ControlLost[0])
+	}
+	if j := r.Joins; j.Mode != "" {
+		cells[3], cells[4], cells[5] = j.Mode, j.Talker, cell(j.JoinsPerS)
+		cells[6], cells[7] = strconv.FormatInt(j.JoinP99Us, 10), strconv.Itoa(j.HelloRetried)
+	}
+	if c := r.JoinFailedChunk; c != nil {
+		cells[8] = fmt.Sprintf("%d->%d", c.Had, c.Requested)
+	}
+	cells[9], cells[10] = r.BurstTalker, r.BurstResult
+	if r.Held {
+		if g := r.Step.Health.GCCycles; g != nil {
+			cells[11] = u(*g)
+		}
+		cells[12] = strings.Join(r.Step.Warnings, "; ")
+	}
+	if p := r.Step.Ping; p.EveryS > 0 {
+		cells[13], cells[14], cells[15] = u(p.Sent), u(p.Failed), strconv.FormatInt(p.RTTP99Us, 10)
+	}
+	if w := r.Window; r.Held {
+		if w.TCPOK {
+			cells[16], cells[17], cells[18], cells[19], cells[20], cells[21] = u(w.TCPAbortOnData), u(w.TCPAbortOnClose),
+				u(w.TCPAbortOnMemory), u(w.TCPAbortOnTimeout), u(w.TCPAbortOnLinger), u(w.TCPTimeouts)
+			cells[22], cells[23] = u(w.EstabResets), u(w.OutRsts)
+		}
+		if w.NetOK {
+			cells[24] = u(w.SoftnetSqueezed)
+		}
+	}
+	if rw := r.RampWindow; rw.Seconds > 0 && rw.TCPOK {
+		cells[25], cells[26] = u(rw.TCPAbortOnData), u(rw.EstabResets)
 	}
 	return cells
 }
@@ -305,6 +361,7 @@ func WriteCalibrationCSV(w io.Writer, c *Calibration, topology string) error {
 	header := []string{
 		"kind", "n", "egress_pps", "valid", "violations", "lower_bound",
 		"reflector_send_errors", "reflector_senders", "topology", "label", "payload",
+		"lower_bound_reason",
 	}
 	if err := cw.Write(header); err != nil {
 		return err
@@ -312,7 +369,7 @@ func WriteCalibrationCSV(w io.Writer, c *Calibration, topology string) error {
 	for _, s := range c.Steps {
 		if err := cw.Write([]string{
 			"step", strconv.Itoa(s.N), cell(s.EgressPPS), strconv.FormatBool(s.Valid), strings.Join(s.Violations, "; "), "",
-			"", "", topology, Label, PayloadLabel,
+			"", "", topology, Label, PayloadLabel, "",
 		}); err != nil {
 			return err
 		}
@@ -320,14 +377,14 @@ func WriteCalibrationCSV(w io.Writer, c *Calibration, topology string) error {
 	if c.StoppedAt > 0 {
 		if err := cw.Write([]string{
 			"stopped", strconv.Itoa(c.StoppedAt), "", "", c.StopReason, "",
-			"", "", topology, Label, PayloadLabel,
+			"", "", topology, Label, PayloadLabel, "",
 		}); err != nil {
 			return err
 		}
 	}
 	if err := cw.Write([]string{
 		"receive_capacity", "", cell(c.ReceivePPS), "", "", strconv.FormatBool(c.LowerBound),
-		u(c.ReflectorSendErrors), strconv.Itoa(c.Senders), topology, Label, PayloadLabel,
+		u(c.ReflectorSendErrors), strconv.Itoa(c.Senders), topology, Label, PayloadLabel, c.LowerBoundReason,
 	}); err != nil {
 		return err
 	}

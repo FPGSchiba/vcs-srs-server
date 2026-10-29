@@ -52,6 +52,15 @@ type Options struct {
 	CalHold                         time.Duration
 	// Sysctl allows the kit to raise rmem_max/wmem_max (needs sudo).
 	Sysctl bool
+
+	// RampChunk splits a ramp into chunks of at most this many bots (0 = one set_n
+	// per step). Bursts runs the join-burst phase after the sweep: BurstAdd bots at
+	// BurstInFlight in flight. Bot holds the bot flags and the grpc log level (R2-1,
+	// R2-4 to R2-9). A zero GC bound, ramp talker or grpc log level means the default.
+	RampChunk               int
+	Bursts                  bool
+	BurstAdd, BurstInFlight int
+	Bot                     BotParams
 }
 
 // Probe is the part of gate 0's env-probe.json the leg needs.
@@ -136,6 +145,18 @@ func (o *Options) Validate() error {
 		return errors.New("a topology label is required (--probe or --topology)")
 	case o.PredictedKnee <= 0:
 		return errors.New("a predicted knee is required (--predict or --predicted-knee)")
+	case o.Bot.PingEvery < 0:
+		return fmt.Errorf("--ping-every %v: must not be negative", o.Bot.PingEvery)
+	case o.RampChunk < 0:
+		return fmt.Errorf("--ramp-chunk %d: must not be negative", o.RampChunk)
+	case o.BurstAdd < 0:
+		return fmt.Errorf("--burst-add %d: must not be negative", o.BurstAdd)
+	case o.BurstInFlight < 0:
+		return fmt.Errorf("--burst-in-flight %d: must not be negative", o.BurstInFlight)
+	case o.Bot.GCPauseWarnP99 > 0 && o.Bot.GCPauseP99 > 0 && o.Bot.GCPauseWarnP99 > o.Bot.GCPauseP99:
+		return fmt.Errorf("gc warn bound %v exceeds the hard bound %v", o.Bot.GCPauseWarnP99, o.Bot.GCPauseP99)
+	case o.Bot.GRPCLog != "" && o.Bot.GRPCLog != "off" && o.Bot.GRPCLog != "info" && o.Bot.GRPCLog != "warning" && o.Bot.GRPCLog != "error":
+		return fmt.Errorf("--grpc-log %q: want info, warning, error or off", o.Bot.GRPCLog)
 	}
 	return disjoint(o.ServerSet, o.GenSet)
 }
@@ -233,6 +254,24 @@ type Manifest struct {
 
 	Bounds sweep.Bounds `json:"bounds"`
 
+	// BotFeatures is what `vcs-loadbot features` listed ("v2" with none for a
+	// bot without the subcommand); BotFlags the extra flags the kit then passed
+	// to `run`; GeneratorEnv the variables added to each generator process, and
+	// ServerEnv the ones put in the kit's own environment for the server to
+	// inherit (grpc transport log only; the server binary is untouched).
+	BotVersion   int                 `json:"bot_version,omitempty"`
+	BotFeatures  []string            `json:"bot_features"`
+	BotFlags     []string            `json:"bot_flags,omitempty"`
+	GeneratorEnv map[string][]string `json:"generator_env,omitempty"`
+	ServerEnv    []string            `json:"server_env,omitempty"`
+
+	// Round 2 (W6 fix 2): the ramp and burst shapes, the generator bounds and every
+	// design change with its old and new value.
+	Ramp            *RampRecord       `json:"ramp,omitempty"`
+	Burst           *BurstRecord      `json:"burst,omitempty"`
+	BoundsGenerator *GenBoundsRecord  `json:"bounds_generator,omitempty"`
+	DecisionsRound2 map[string]string `json:"decisions_round2,omitempty"`
+
 	EnvProbe json.RawMessage `json:"env_probe,omitempty"`
 
 	Result       string   `json:"result,omitempty"`
@@ -301,6 +340,7 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 			return err
 		}
 	}
+	o.normalizeRound2()
 	if err := o.Validate(); err != nil {
 		return err
 	}
@@ -327,12 +367,16 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 		},
 		Bounds: sweep.DefaultBounds, EnvProbe: probeRaw,
 	}
+	tag := LegTag(o.Seed, o.Arms, o.Scenario)
+	// The reporter prints the diagnostics block into the Actions log; its source
+	// is set once the S arm's environment exists.
+	rep := &diagReporter{w: logw, tag: tag}
 	fail := func(err error) error {
 		m.Error = err.Error()
 		_ = writeManifest(o.OutDir, m)
+		rep.Failure(err)
 		return err
 	}
-	tag := LegTag(o.Seed, o.Arms, o.Scenario)
 	logf := func(f string, a ...any) { fmt.Fprintf(logw, "%s "+f+"\n", append([]any{tag}, a...)...) }
 	say := func(line string) { fmt.Fprintln(logw, line) }
 
@@ -372,12 +416,23 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	}
 	m.PortRange, m.UlimitN = portRange, ulimitN
 
+	// 1b. What this load bot can do (v2 has no `features`): it decides which v3
+	// flags every later run passes. Probed once per leg, before calibration.
+	feats := ProbeFeatures(o.LoadbotBin, ProbeTimeout)
+	m.recordRound2(o, feats)
+	logf("%s", Round2Summary(o, feats))
+	if feats.Version == 2 {
+		logf("load bot v2 (no features subcommand or probe failed)")
+	} else {
+		logf("load bot v%d, features %v", feats.Version, feats.Names())
+	}
+
 	// 2. Calibration: the generator's receive side on its own.
 	legStart := time.Now()
 	logf("calibration: reflector on %s, generator on %s", o.ServerSet, o.GenSet)
 	cal, err = RunCalibration(ctx, CalConfig{
 		LoadbotBin: o.LoadbotBin, ServerSet: o.ServerSet, GenSet: o.GenSet, Seed: o.Seed,
-		Steps: o.CalSteps, Hold: o.CalHold, Senders: len(serverCPUs), StderrDir: o.OutDir,
+		Steps: o.CalSteps, Hold: o.CalHold, Senders: len(serverCPUs), StderrDir: o.OutDir, Features: feats, Bot: &o.Bot,
 		OnLine: func(kind string, raw []byte) {
 			switch kind {
 			case "calibration":
@@ -427,17 +482,43 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 		return fail(fmt.Errorf("scratch dir: %w", err))
 	}
 	defer os.RemoveAll(scratch)
+	// The server inherits the kit's environment (topology passes os.Environ()), so
+	// its grpc transport log says why it closes a connection. Set only now: the
+	// reflector, which speaks no gRPC, has already run.
+	for _, kv := range ServerEnvWith(o.Bot.GRPCLog) {
+		k, v, _ := strings.Cut(kv, "=")
+		if err := os.Setenv(k, v); err != nil {
+			return fail(fmt.Errorf("set %s: %w", k, err))
+		}
+	}
 	env := &hostEnv{
 		serverBin: o.ServerBin, loadbotBin: o.LoadbotBin, outDir: o.OutDir, scratchDir: scratch, scenario: o.Scenario, seed: o.Seed,
-		serverPin: serverPin, serverGOMAXPROCS: 1, serverCPUs: serverCPUs, genSet: o.GenSet, genNCPU: len(genCPUs),
-		onProgress: func(p Progress) { say(FormatRampProgress(tag, p)) },
+		serverPin: serverPin, serverGOMAXPROCS: 1, serverCPUs: serverCPUs, genSet: o.GenSet, genNCPU: len(genCPUs), features: feats, bot: &o.Bot,
+		onProgress:    func(p Progress) { say(FormatRampProgress(tag, p)) },
+		onControlLost: func(ev ControlLostEvent) { say(FormatControlLostLine(tag, ev)) },
+		logf:          logf,
+	}
+	rep.src = env
+	// The time guard prices a ramp with the bot's rate rule only when the bot has it.
+	var rateMax, rateScale float64
+	if feats.Has("join_rate") {
+		rateMax, rateScale = o.Bot.JoinRateMax, o.Bot.JoinRateScale
 	}
 	d := NewDriver(env, Config{
 		Predicted: o.PredictedKnee, NMax: nMax, JoinRate: o.JoinRate, Budget: remaining,
 		Warmup: o.Warmup, Hold: o.Hold, Confirm: o.Confirm, Overload: o.Overload, ProbeHold: time.Second,
-		Bounds: sweep.DefaultBounds,
-		OnRow:  func(r Row) { say(FormatRowLine(tag, r)) },
-		Logf:   logf,
+		Bounds:    sweep.DefaultBounds,
+		RampChunk: o.RampChunk, RateMax: rateMax, RateScale: rateScale,
+		BurstEnabled: o.Bursts, BurstAdd: o.BurstAdd, BurstInFlight: o.BurstInFlight,
+		OnRow: func(r Row) {
+			if r.Kind == "burst" {
+				say(FormatBurstLine(tag, r))
+			} else {
+				say(FormatRowLine(tag, r))
+			}
+			rep.Row(r)
+		},
+		Logf: logf,
 	})
 	var runErr error
 	out, runErr = d.Run(ctx)
@@ -461,7 +542,7 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	}); err != nil {
 		return fail(err)
 	}
-	logf("result: %s (calibration receive capacity %.0f pps, lower bound %v)", out.Result, cal.ReceivePPS, cal.LowerBound)
+	logf("result: %s (calibration %s)", out.Result, FormatCapacity(cal))
 	return writeManifest(o.OutDir, m)
 }
 
@@ -476,4 +557,108 @@ func (s *syncWriter) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.w.Write(p)
+}
+
+// RampRecord is the ramp shape a leg ran with (R2-3 to R2-5).
+type RampRecord struct {
+	Chunk       int     `json:"chunk"`
+	RateMax     float64 `json:"rate_max"`
+	RateScale   float64 `json:"rate_scale"`
+	MaxInFlight int     `json:"max_in_flight"`
+	Talker      string  `json:"talker"`
+}
+
+// BurstRecord is the join-burst phase's shape (R2-6).
+type BurstRecord struct {
+	Add      int  `json:"add"`
+	InFlight int  `json:"in_flight"`
+	Enabled  bool `json:"enabled"`
+}
+
+// GenBoundsRecord is the generator's GC-pause bounds (R2-8).
+type GenBoundsRecord struct {
+	GCPauseP99Us     int64 `json:"gc_pause_p99_us"`
+	GCPauseWarnP99Us int64 `json:"gc_pause_warn_p99_us"`
+}
+
+// decisionsRound2 are the design changes of W6 fix round 2 with old -> new
+// values, recorded in every manifest so a result can be read against the round
+// that produced it. R2-13 (reflector senders) and R2-14 (shard queue counter)
+// are not changes and are not listed.
+func decisionsRound2() map[string]string {
+	return map[string]string{
+		"R2-1":  "bot control plane: no Ping, no keepalive -> Ping every 5s, keepalive 75s/10s, death seen at once",
+		"R2-2":  "dead bot: fatal hold error -> control_lost step outcome, rebuild, retry once",
+		"R2-3":  "talker during a ramp: live -> silent, resumes on a fresh schedule",
+		"R2-4":  "join rate: unbounded, 16 in flight -> min(12, 5000/N) joins/s, 8 in flight",
+		"R2-5":  "ramp shape: one set_n per step -> chunks of at most 250 bots, stop at the first failing chunk",
+		"R2-6":  "join-burst metric: none -> +150 bots at 16 in flight, talker silent and live, own table",
+		"R2-7":  "HELLO ladder: 1.5/3.0/4.5/6.0/7.5s -> unchanged (no change, kept equal to the real client)",
+		"R2-8":  "gc_pause_p99: 2ms hard -> 5ms hard, 2ms warning",
+		"R2-9":  "generator GC: GOGC=100 -> GOGC=off GOMEMLIMIT=1GiB",
+		"R2-10": "calibration talker: continuous -> per step from ramp end to drain, empty backlog each hold",
+		"R2-11": "calibration steps: 64..1024,2048,4096 -> 64,128,256,512,1024,1536,1792,2048,4096",
+		"R2-12": "calibration lower bound: bot lower_bound only -> OR reflector send errors and a delivery stop",
+	}
+}
+
+// normalizeRound2 fills the defaults an Options literal leaves zero, so a leg
+// never runs with a 0 ms GC bound or an empty grpc log level.
+func (o *Options) normalizeRound2() {
+	d := DefaultBotParams()
+	if o.Bot.GCPauseP99 <= 0 {
+		o.Bot.GCPauseP99 = d.GCPauseP99
+	}
+	if o.Bot.GCPauseWarnP99 <= 0 {
+		o.Bot.GCPauseWarnP99 = d.GCPauseWarnP99
+	}
+	if o.Bot.RampTalker == "" {
+		o.Bot.RampTalker = d.RampTalker
+	}
+	if o.Bot.GRPCLog == "" {
+		o.Bot.GRPCLog = d.GRPCLog
+	}
+}
+
+// Round2Summary is one log line of the effective round-2 parameters, so the
+// Actions log shows what a leg ran with without opening manifest.json.
+func Round2Summary(o Options, feats Features) string {
+	o.normalizeRound2()
+	rate := "rate rule not applied (bot lacks join_rate)"
+	if feats.Has("join_rate") {
+		rate = fmt.Sprintf("rate min(%s,%s/N), in-flight %d", fmtFloat(o.Bot.JoinRateMax), fmtFloat(o.Bot.JoinRateScale), o.Bot.MaxInFlight)
+	}
+	ping := "ping off"
+	if feats.Has("ping") && o.Bot.PingEvery > 0 {
+		ping = "ping " + o.Bot.PingEvery.String()
+	}
+	bursts := "bursts off"
+	if o.Bursts && feats.Has("burst") {
+		bursts = fmt.Sprintf("bursts on (add %d, in-flight %d)", o.BurstAdd, o.BurstInFlight)
+	}
+	return fmt.Sprintf("round 2: chunk %d, %s, ramp talker %s, %s, %s, gc %v/%v, grpc-log %s",
+		o.RampChunk, rate, o.Bot.RampTalker, ping, bursts, o.Bot.GCPauseWarnP99, o.Bot.GCPauseP99, o.Bot.GRPCLog)
+}
+
+// recordRound2 fills the manifest's bot, generator, ramp, burst and decision
+// fields from the options and the probed bot features.
+func (m *Manifest) recordRound2(o Options, feats Features) {
+	o.normalizeRound2()
+	m.BotVersion, m.BotFeatures, m.BotFlags = feats.Version, feats.Names(), BotRunArgsWith(feats, o.Bot)
+	m.GeneratorEnv = map[string][]string{
+		"run":       GeneratorEnvWith("run", o.Bot.GRPCLog),
+		"calibrate": GeneratorEnvWith("calibrate", o.Bot.GRPCLog),
+		"reflect":   GeneratorEnvWith("reflect", o.Bot.GRPCLog),
+	}
+	m.ServerEnv = ServerEnvWith(o.Bot.GRPCLog)
+	// The rate rule and the bursts are applied only when the bot has the feature;
+	// record what ran, not what the flags asked for.
+	ramp := &RampRecord{Chunk: o.RampChunk, Talker: o.Bot.RampTalker}
+	if feats.Has("join_rate") {
+		ramp.RateMax, ramp.RateScale, ramp.MaxInFlight = o.Bot.JoinRateMax, o.Bot.JoinRateScale, o.Bot.MaxInFlight
+	}
+	m.Ramp = ramp
+	m.Burst = &BurstRecord{Add: o.BurstAdd, InFlight: o.BurstInFlight, Enabled: o.Bursts && feats.Has("burst")}
+	m.BoundsGenerator = &GenBoundsRecord{GCPauseP99Us: o.Bot.GCPauseP99.Microseconds(), GCPauseWarnP99Us: o.Bot.GCPauseWarnP99.Microseconds()}
+	m.DecisionsRound2 = decisionsRound2()
 }

@@ -87,6 +87,19 @@ func TestAggregateCensoredIsALowerBound(t *testing.T) {
 	}
 }
 
+func TestAggregateControlLostIsCensored(t *testing.T) {
+	in, out := t.TempDir(), t.TempDir()
+	writeLeg(t, in, "1-one-big-net", "S", "one-big-net", "knee 2400", "knee", "2400", "t")
+	writeLeg(t, in, "2-one-big-net", "S", "one-big-net", "≥ 972 (control lost at 1944)", "control-lost", "972", "t")
+	if err := runAggregate([]string{"--in", in, "--out", out}, io.Discard, os.Stderr); err != nil {
+		t.Fatal(err)
+	}
+	r := readAgg(t, out)[0]
+	if r["censored"] != "true" || !strings.Contains(r["results"], "control lost at 1944") || r["min_n"] != "972" {
+		t.Fatalf("a control-lost leg is a censored lower bound: %v", r)
+	}
+}
+
 func TestAggregateEvenCountMedianRoundsDown(t *testing.T) {
 	in, out := t.TempDir(), t.TempDir()
 	writeLeg(t, in, "1-x", "S", "one-big-net", "knee 1001", "knee", "1001", "t")
@@ -270,5 +283,49 @@ func TestReadLegInfoShowsCalibrationStopReason(t *testing.T) {
 	}
 	if !strings.Contains(li.calib, "102350") || !strings.Contains(li.calib, "stopped at 4096: bot 3702: no HELLO_ACK after 5 tries") {
 		t.Fatalf("calib cell = %q", li.calib)
+	}
+}
+
+// addRound2Steps writes a steps.csv with the round-2 columns: one step that lost
+// control, and a silent and a live burst.
+func addRound2Steps(t *testing.T, root, dir string) {
+	t.Helper()
+	steps := "seq,kind,n,outcome,join_failures,control_lost,burst_talker\n" +
+		"1,sweep,972,pass,0,0,\n" +
+		"2,sweep,1336,control_lost,0,2,\n" +
+		"3,burst,818,pass,0,0,silent\n" +
+		"4,burst,818,pass,30,0,live\n"
+	if err := os.WriteFile(filepath.Join(root, dir, "steps.csv"), []byte(steps), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAggregateRound2(t *testing.T) {
+	in, out := t.TempDir(), t.TempDir()
+	writeLeg(t, in, "1-one-big-net", "S", "one-big-net", "≥ 972 (control lost at 1336)", "control-lost", "972", "t")
+	addRound2Steps(t, in, "1-one-big-net")
+	writeLeg(t, in, "2-one-big-net", "S", "one-big-net", "knee 1557", "knee", "1557", "t")
+	addLegDetail(t, in, "2-one-big-net")
+	if err := runAggregate([]string{"--in", in, "--out", out}, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	md, err := os.ReadFile(filepath.Join(out, "aggregate.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(md)
+	if !strings.Contains(s, "| control lost (steps) | bursts (silent/live failures) |") {
+		t.Errorf("leg table lacks the round-2 columns:\n%s", s)
+	}
+	if !strings.Contains(s, "| 972:pass 1336:control_lost 818:pass 818:pass | 1 | 0/30 |") {
+		t.Errorf("leg 1 round-2 cells:\n%s", s)
+	}
+	// A leg whose steps.csv predates round 2 shows a dash, never a zero.
+	if !strings.Contains(s, "| 1038:pass 2076:breach 1557:pass | - | - |") {
+		t.Errorf("leg 2 must show dashes:\n%s", s)
+	}
+	// A control-lost result is a censored lower bound, as before.
+	if r := readAgg(t, out)[0]; r["censored"] != "true" {
+		t.Errorf("aggregate.csv: %v", r)
 	}
 }

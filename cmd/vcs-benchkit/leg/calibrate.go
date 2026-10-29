@@ -28,6 +28,11 @@ type CalConfig struct {
 	// Senders is the reflector's send goroutines on its one socket: one per
 	// CPU of the server set, and at least 2.
 	Senders int
+	// Features is the load bot's probe result. Version 0 (not probed) passes no
+	// --bounds, so the bot's own defaults apply.
+	Features Features
+	// Bot holds the tunable bot flags and the grpc log level; nil = the defaults.
+	Bot *BotParams
 	// StderrDir receives reflect.log and calibrate.log; "" discards them.
 	StderrDir string
 	// OnLine, when set, receives each stdout line of calibrate as it is read: its
@@ -36,12 +41,12 @@ type CalConfig struct {
 }
 
 func (c CalConfig) command(sub string, args []string, set string) (*exec.Cmd, error) {
-	name, argv, env, err := PinCommand(runtime.GOOS, c.LoadbotBin, append([]string{sub}, args...), set)
+	name, argv, pinEnv, err := PinCommand(runtime.GOOS, c.LoadbotBin, append([]string{sub}, args...), set)
 	if err != nil {
 		return nil, err
 	}
 	cmd := exec.Command(name, argv...)
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = processEnvWith(os.Environ(), pinEnv, sub, botParamsOr(c.Bot).GRPCLog)
 	return cmd, nil
 }
 
@@ -95,11 +100,8 @@ func RunCalibration(ctx context.Context, c CalConfig) (*Calibration, error) {
 		return nil, fmt.Errorf("reflector: %w", err)
 	}
 
-	cal, err := c.command("calibrate", []string{
-		"--reflector", addr, "--allow", addr,
-		"--seed", strconv.FormatInt(c.Seed, 10),
-		"--steps", c.Steps, "--hold", strconv.FormatFloat(c.Hold.Seconds(), 'f', -1, 64),
-	}, c.GenSet)
+	calArgs := calibrateArgs(c, addr)
+	cal, err := c.command("calibrate", calArgs, c.GenSet)
 	if err != nil {
 		return nil, err
 	}
@@ -195,6 +197,20 @@ func RunCalibration(ctx context.Context, c CalConfig) (*Calibration, error) {
 	if rerr == nil {
 		res.ReflectorSendErrors = rstats.SendErrors
 		res.ReflectorQueueFull, res.ReflectorWriteErrors = rstats.QueueFullDrops, rstats.WriteErrors
+	}
+	// The reflector dropping destinations, or delivery giving out, means the
+	// figure is what the rig could push, not what the server can receive: OR
+	// both into the bot's own flag and say why.
+	var why []string
+	if res.ReflectorSendErrors > 0 {
+		why = append(why, fmt.Sprintf("reflector dropped %d destinations", res.ReflectorSendErrors))
+	}
+	if stop != nil && stop.Stage == "delivery" {
+		why = append(why, fmt.Sprintf("delivery stop at N=%d", stop.N))
+	}
+	if len(why) > 0 {
+		res.LowerBound = true
+		res.LowerBoundReason = strings.Join(why, "; ")
 	}
 	switch {
 	case stop != nil:
@@ -300,4 +316,19 @@ func readReady(ctx context.Context, rd *bufio.Reader, timeout time.Duration) (st
 	case <-ctx.Done():
 		return "", ctx.Err()
 	}
+}
+
+// calibrateArgs is the argv of `vcs-loadbot calibrate`. Any probed bot (v2 or
+// v3) gets --bounds, as both define it on calibrate; an unprobed one (Version 0)
+// gets none, so its own defaults apply.
+func calibrateArgs(c CalConfig, addr string) []string {
+	a := []string{
+		"--reflector", addr, "--allow", addr,
+		"--seed", strconv.FormatInt(c.Seed, 10),
+		"--steps", c.Steps, "--hold", strconv.FormatFloat(c.Hold.Seconds(), 'f', -1, 64),
+	}
+	if c.Features.Version != 0 {
+		a = append(a, "--bounds", BotBoundsJSONWith(c.Features, botParamsOr(c.Bot)))
+	}
+	return a
 }
