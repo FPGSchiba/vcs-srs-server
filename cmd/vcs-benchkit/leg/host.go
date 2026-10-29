@@ -145,6 +145,17 @@ type hostSystem struct {
 
 func (s *hostSystem) SetN(ctx context.Context, n int) (Joins, error) { return s.bot.SetN(ctx, n) }
 
+// ControlLost is the bot's control-lost events so far (System).
+func (s *hostSystem) ControlLost() []ControlLostEvent { return s.bot.ControlLost() }
+
+// Burst runs a join burst on the bot (System); ErrNotSupported for a v2 bot.
+func (s *hostSystem) Burst(ctx context.Context, add, inFlight int, talker string) (Joins, error) {
+	return s.bot.Burst(ctx, add, inFlight, talker)
+}
+
+// SupportsBurst reports whether the bot has the burst command (burstSupporter).
+func (s *hostSystem) SupportsBurst() bool { return s.bot.features.Has("burst") }
+
 // LastJoins is the bot's most recent joins line (lastJoiner).
 func (s *hostSystem) LastJoins() (Joins, bool) { return s.bot.LastJoins() }
 
