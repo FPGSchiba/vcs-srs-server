@@ -78,6 +78,9 @@ type fakeWorld struct {
 	gapDeathN int
 	gapArmed  bool
 	gapReads  int
+	// warmupDiesV2 makes the first warm-up hold return the v2 hold-death text;
+	// warmupDiesV3 records a v3 control_lost event during it instead.
+	warmupDiesV2, warmupDiesV3 bool
 }
 
 // fakeDeath kills a bot when the nth (1-based) occurrence of phase (ramp, settle
@@ -238,6 +241,15 @@ func (s *fakeSystem) Hold(ctx context.Context, d time.Duration, label string) (S
 	if s.w.dieAtSettleN > 0 && s.n == s.w.dieAtSettleN && !s.w.dieFired && strings.HasPrefix(label, "probe-") && s.w.measuredAt(s.n) {
 		s.w.dieFired = true
 		return Step{}, errors.New("loadbot: hold: bot 2 died: rpc error: code = Unavailable desc = error reading from server: connection reset by peer")
+	}
+	if label == "warmup" && s.w.warmupDiesV2 {
+		s.w.warmupDiesV2 = false
+		return Step{}, errors.New("loadbot: hold: bot 2 died: rpc error: code = Unavailable desc = error reading from server: connection reset by peer")
+	}
+	if label == "warmup" && s.w.warmupDiesV3 {
+		s.w.warmupDiesV3 = false
+		s.lost = append(s.lost, ControlLostEvent{Bot: 2, Name: "LDBT-0002", Cause: "stream", Code: "Unavailable",
+			Message: "error reading from server: connection reset by peer", Phase: "hold", DeadTotal: len(s.lost) + 1})
 	}
 	measured := label != "preflight" && label != "warmup" && !strings.HasPrefix(label, "probe-")
 	if strings.HasPrefix(label, "probe-") {
@@ -1287,4 +1299,92 @@ func TestDriverDeathInStepGapIsNotFoldedIntoBaseline(t *testing.T) {
 	if lost == 0 {
 		t.Fatalf("a death in the gap between steps was never reported: rows %d", len(out.Rows))
 	}
+}
+
+// A bot that dies during the discarded warm-up is not a leg error and is not
+// any sweep step's death: the system is rebuilt before the first step.
+func TestDriverWarmupControlLostRebuildsNotFatal(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		v2, v3 bool
+	}{{"v2 hold death", true, false}, {"v3 control_lost event", false, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := &fakeWorld{kneeN: 700, warmupDiesV2: tc.v2, warmupDiesV3: tc.v3}
+			out, err := NewDriver(w, testConfig()).Run(context.Background())
+			if err != nil {
+				t.Fatalf("Run returned %v, want nil (a warm-up death is not a leg error)", err)
+			}
+			if !noteContains(out, "warm-up lost control") {
+				t.Errorf("notes = %q, want a warm-up control-loss note", out.Notes)
+			}
+			for _, r := range out.Rows {
+				if r.Outcome == sweep.ControlLost {
+					t.Errorf("%s row at %d is control_lost; the warm-up death must not be charged to a step", r.Kind, r.N)
+				}
+			}
+			if out.Starts < 2 {
+				t.Errorf("starts = %d, want a rebuild after the warm-up death", out.Starts)
+			}
+			if out.Result.Kind != sweep.KneeFound || out.Result.N == 0 {
+				t.Errorf("result = %s, want a knee", out.Result)
+			}
+		})
+	}
+}
+
+// When the sweep's last step already left the system flagged for a rebuild
+// (join failures or a control loss), the burst phase must boot once, not close
+// and boot a system it then throws away again in ensure.
+func TestDriverBurstPhaseBootsOnceWhenRebuildPending(t *testing.T) {
+	w := &fakeWorld{kneeN: 1 << 30}
+	d := NewDriver(w, burstConfig())
+	d.start = d.cfg.Clock.Now()
+	ctx := context.Background()
+	if err := d.boot(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer d.closeSys()
+	if _, err := d.ensure(ctx, 1336); err != nil {
+		t.Fatal(err)
+	}
+	d.rebuild, d.rebuildAt, d.rebuildWhy = true, 1336, ""
+	before := w.starts
+	if err := d.burstPhase(ctx, 1336); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.starts - before; got != 1 {
+		t.Errorf("burst phase booted %d systems, want 1 (notes %q)", got, d.out.Notes)
+	}
+	if len(w.bursts) != 2 {
+		t.Errorf("bursts = %+v, want silent then live", w.bursts)
+	}
+}
+
+// The "ramp done" line counts the bots the failing chunk did join too, not only
+// the chunks before it.
+func TestDriverRampDoneLineCountsFailingChunkJoins(t *testing.T) {
+	w := &fakeWorld{kneeN: 1 << 30, chunkJoins: true, joinFailN: 752, joinsV2: true}
+	cfg := testConfig()
+	cfg.RampChunk = 250
+	var lines []string
+	cfg.Logf = func(f string, a ...any) { lines = append(lines, fmt.Sprintf(f, a...)) }
+	d := NewDriver(w, cfg)
+	ctx := context.Background()
+	if err := d.boot(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.ensure(ctx, 972); err != nil {
+		t.Fatal(err)
+	}
+	// 250 + 250 joined, then the 502->752 chunk joined 248 and failed 2.
+	want := "ramp N=2->972 done in"
+	for _, l := range lines {
+		if strings.HasPrefix(l, want) {
+			if !strings.HasSuffix(l, "joined=748 join_failures=2") {
+				t.Errorf("ramp done line = %q, want joined=748 join_failures=2", l)
+			}
+			return
+		}
+	}
+	t.Fatalf("no ramp done line in %q", lines)
 }

@@ -493,8 +493,10 @@ func (d *Driver) ensure(ctx context.Context, n int) (ramp, error) {
 	}
 	win := end()
 	if total.Source != JoinsSourcePending {
+		// cur stops before a failing chunk, so the bots that chunk did join
+		// are only in the joins line.
 		d.logf("ramp N=%d->%d done in %.0fs: joined=%d join_failures=%d", start, n,
-			d.cfg.Clock.Now().Sub(t0).Seconds(), max(0, cur-start), total.JoinFailures)
+			d.cfg.Clock.Now().Sub(t0).Seconds(), max(cur-start, total.Joined), total.JoinFailures)
 	}
 	after, errAfter := d.sys.LogText()
 	r.Joins, r.Window, r.Ran, r.FailedAcked = total, win, true, -1
@@ -808,7 +810,9 @@ func (d *Driver) burstPhase(ctx context.Context, k int) error {
 		d.note("budget guard: join burst not measured so the confirm and overload still fit")
 		return nil
 	}
-	if d.joined > base {
+	// A pending rebuild (the sweep's last step failed its joins or lost
+	// control) already boots fresh in ensure; booting here too would waste one.
+	if d.joined > base && !d.rebuild {
 		d.note("rebuilt the server and load bot for the join burst: %d bots joined, burst base %d", d.joined, base)
 		d.closeSys()
 		if err := d.boot(ctx); err != nil {
@@ -890,8 +894,15 @@ func (d *Driver) Run(ctx context.Context) (*Outcome, error) {
 	} else if rp.Joins.JoinFailures > 0 {
 		return &d.out, fmt.Errorf("warm-up: join failures at %d bots: %s", warmN, joinFailureSummary(rp.Joins))
 	}
-	if _, err := d.sys.Hold(ctx, d.cfg.Warmup, "warmup"); err != nil {
-		return &d.out, fmt.Errorf("warm-up: %w", err)
+	// A death in the discarded warm-up is not any step's: note it and rebuild,
+	// so the first sweep step starts on a fresh system with a clean baseline.
+	_, werr := d.sys.Hold(ctx, d.cfg.Warmup, "warmup")
+	if werr != nil && asLost(werr, "warmup") == nil {
+		return &d.out, fmt.Errorf("warm-up: %w", werr)
+	}
+	if evs := d.lostSince(0, asLost(werr, "warmup")); len(evs) > 0 {
+		d.note("the warm-up lost control (%d bots; %s); rebuilding before the sweep", len(evs), describeLost(evs[0]))
+		d.rebuild, d.rebuildAt, d.rebuildWhy = true, warmN, "control lost in the warm-up"
 	}
 
 	sw := sweep.NewSweep(d.cfg.Predicted, d.cfg.NMax)
