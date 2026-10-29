@@ -33,3 +33,13 @@ func TestLegRefusesNonSArm(t *testing.T) {
 		t.Fatal("--arms Seq must be refused in S4")
 	}
 }
+
+func TestDefaultCalSteps(t *testing.T) {
+	o, err := parseLegFlags([]string{"--server-bin", "s", "--loadbot-bin", "l", "--out", "o", "--q6", "Server 2 / bots 2"}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "64,128,256,512,1024,1536,1792,2048,4096"; o.CalSteps != want {
+		t.Errorf("CalSteps = %q, want %q", o.CalSteps, want)
+	}
+}

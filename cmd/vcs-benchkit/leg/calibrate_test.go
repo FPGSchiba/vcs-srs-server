@@ -56,6 +56,14 @@ func fakeLoadbot(args []string) int {
 			os.Stdout.Write(b)
 			return 0
 		}
+		if m := os.Getenv("BENCHKIT_FAKE_CAL"); m == "v2-drops" || m == "v2-both" {
+			fmt.Println(`{"type":"reflector_stats","send_errors":186000,"queue_full_drops":186000,"write_errors":0,"senders":2}`)
+			return 0
+		}
+		if os.Getenv("BENCHKIT_FAKE_CAL") == "v2-delivery" {
+			fmt.Println(`{"type":"reflector_stats","send_errors":0,"queue_full_drops":0,"write_errors":0,"senders":2}`)
+			return 0
+		}
 		fmt.Println(`{"type":"reflector_stats","send_errors":4,"senders":2}`)
 		return 0
 	case "calibrate":
@@ -77,6 +85,20 @@ func fakeLoadbot(args []string) int {
 			return 1
 		}
 		switch os.Getenv("BENCHKIT_FAKE_CAL") {
+		case "v2-drops":
+			// A valid v2 ladder whose bot says lower_bound:false, while the
+			// reflector (stats below) dropped 186000 destinations.
+			fmt.Println(`{"type":"calibration","n":1024,"bots":1024,"egress_pps":51150,"expected_pps":51150,"valid":true,"violations":[],"hello_tries_max":1,"hello_retried":0}`)
+			fmt.Println(`{"type":"calibration","n":2048,"bots":2048,"egress_pps":51150,"expected_pps":102350,"valid":true,"violations":[],"hello_tries_max":1,"hello_retried":0}`)
+			fmt.Println(`{"type":"receive_capacity","pps":51150,"lower_bound":false}`)
+			return 0
+		case "v2-delivery", "v2-both":
+			// A valid ladder, then a stop at the delivery stage; the bot's own
+			// receive_capacity says lower_bound:false.
+			fmt.Println(`{"type":"calibration","n":1024,"bots":1024,"egress_pps":51150,"expected_pps":51150,"valid":true,"violations":[],"hello_tries_max":1,"hello_retried":0}`)
+			fmt.Println(`{"type":"calibration_stopped","n":2048,"bots":2048,"stage":"delivery","bot":0,"tries":0,"reason":"delivery below bound"}`)
+			fmt.Println(`{"type":"receive_capacity","pps":51150,"lower_bound":false}`)
+			return 0
 		case "v2-stop", "v2-stream":
 			b, err := os.ReadFile("testdata/loadbot/v2-calibrate.ndjson")
 			if err != nil {
@@ -295,5 +317,49 @@ func TestRunCalibrationOversizeLineFailsFast(t *testing.T) {
 	}
 	if el := time.Since(start); el > 15*time.Second {
 		t.Fatalf("took %v: the kit stopped draining calibrate's stdout", el)
+	}
+}
+
+// S-T9: the reflector's drops make a receive capacity a lower bound even when
+// the bot says it is not.
+func TestRunCalibrationReflectorDropsMakeLowerBound(t *testing.T) {
+	cal, err := runFakeCal(t, "v2-drops", CalConfig{Steps: "1024,2048"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cal.LowerBound {
+		t.Errorf("LowerBound = false, want true: the reflector dropped 186000 destinations (cal = %+v)", cal)
+	}
+	if !strings.Contains(cal.LowerBoundReason, "reflector dropped 186000 destinations") {
+		t.Errorf("LowerBoundReason = %q, want it to name the drops", cal.LowerBoundReason)
+	}
+}
+
+func TestRunCalibrationDeliveryStopIsLowerBound(t *testing.T) {
+	cal, err := runFakeCal(t, "v2-delivery", CalConfig{Steps: "1024,2048"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cal.LowerBound || cal.LowerBoundReason != "delivery stop at N=2048" {
+		t.Errorf("LowerBound=%v reason=%q, want true and %q", cal.LowerBound, cal.LowerBoundReason, "delivery stop at N=2048")
+	}
+}
+
+func TestCalibrationLowerBoundReasonOrder(t *testing.T) {
+	cal, err := runFakeCal(t, "v2-both", CalConfig{Steps: "1024,2048"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "reflector dropped 186000 destinations; delivery stop at N=2048"
+	if !cal.LowerBound || cal.LowerBoundReason != want {
+		t.Errorf("LowerBound=%v reason=%q, want true and %q", cal.LowerBound, cal.LowerBoundReason, want)
+	}
+}
+
+func TestFormatCalStoppedLowerBound(t *testing.T) {
+	c := &Calibration{ReceivePPS: 51150, LowerBound: true, StoppedAt: 4096, StoppedBots: 3702, StopReason: "x", Steps: []CalStep{{N: 64}}}
+	got := FormatCalStopped("t", c)
+	if !strings.Contains(got, "receive capacity >= 51150 pps") {
+		t.Errorf("line = %q, want 'receive capacity >= 51150 pps'", got)
 	}
 }

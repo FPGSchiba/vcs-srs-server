@@ -361,6 +361,7 @@ func WriteCalibrationCSV(w io.Writer, c *Calibration, topology string) error {
 	header := []string{
 		"kind", "n", "egress_pps", "valid", "violations", "lower_bound",
 		"reflector_send_errors", "reflector_senders", "topology", "label", "payload",
+		"lower_bound_reason",
 	}
 	if err := cw.Write(header); err != nil {
 		return err
@@ -368,7 +369,7 @@ func WriteCalibrationCSV(w io.Writer, c *Calibration, topology string) error {
 	for _, s := range c.Steps {
 		if err := cw.Write([]string{
 			"step", strconv.Itoa(s.N), cell(s.EgressPPS), strconv.FormatBool(s.Valid), strings.Join(s.Violations, "; "), "",
-			"", "", topology, Label, PayloadLabel,
+			"", "", topology, Label, PayloadLabel, "",
 		}); err != nil {
 			return err
 		}
@@ -376,14 +377,14 @@ func WriteCalibrationCSV(w io.Writer, c *Calibration, topology string) error {
 	if c.StoppedAt > 0 {
 		if err := cw.Write([]string{
 			"stopped", strconv.Itoa(c.StoppedAt), "", "", c.StopReason, "",
-			"", "", topology, Label, PayloadLabel,
+			"", "", topology, Label, PayloadLabel, "",
 		}); err != nil {
 			return err
 		}
 	}
 	if err := cw.Write([]string{
 		"receive_capacity", "", cell(c.ReceivePPS), "", "", strconv.FormatBool(c.LowerBound),
-		u(c.ReflectorSendErrors), strconv.Itoa(c.Senders), topology, Label, PayloadLabel,
+		u(c.ReflectorSendErrors), strconv.Itoa(c.Senders), topology, Label, PayloadLabel, c.LowerBoundReason,
 	}); err != nil {
 		return err
 	}

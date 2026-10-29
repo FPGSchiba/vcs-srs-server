@@ -207,3 +207,26 @@ func TestWriteStepsCSVAppendsRound2Columns(t *testing.T) {
 		t.Errorf("control_lost = %q, want 0", got)
 	}
 }
+
+func TestWriteCalibrationCSVLowerBoundReason(t *testing.T) {
+	cal := &Calibration{
+		Steps:      []CalStep{{N: 64, EgressPPS: 3150, Valid: true}},
+		ReceivePPS: 3150, LowerBound: true, Senders: 2,
+		LowerBoundReason: "delivery stop at N=2048",
+	}
+	var b bytes.Buffer
+	if err := WriteCalibrationCSV(&b, cal, "one-big-net"); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := csv.NewReader(&b).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, last := recs[0], recs[len(recs)-1]
+	if h[len(h)-1] != "lower_bound_reason" || last[len(last)-1] != "delivery stop at N=2048" || last[0] != "receive_capacity" {
+		t.Fatalf("header %v, row %v", h, last)
+	}
+	if len(recs[1]) != len(h) {
+		t.Fatalf("step row has %d columns, header %d", len(recs[1]), len(h))
+	}
+}

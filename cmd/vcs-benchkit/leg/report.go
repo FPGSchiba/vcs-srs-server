@@ -76,8 +76,16 @@ func FormatCalStopped(tag string, c *Calibration) string {
 	if c.StoppedBots >= 0 {
 		bots = strconv.Itoa(c.StoppedBots)
 	}
-	return fmt.Sprintf("%s calibration stopped at N=%d (%s bots up): %s; receive capacity %.0f pps (lower bound %v) from %d completed steps",
-		tag, c.StoppedAt, bots, c.StopReason, c.ReceivePPS, c.LowerBound, len(c.Steps))
+	capacity := fmt.Sprintf("receive capacity %.0f pps", c.ReceivePPS)
+	if c.LowerBound {
+		capacity = fmt.Sprintf("receive capacity >= %.0f pps (lower bound", c.ReceivePPS)
+		if c.LowerBoundReason != "" {
+			capacity += ": " + c.LowerBoundReason
+		}
+		capacity += ")"
+	}
+	return fmt.Sprintf("%s calibration stopped at N=%d (%s bots up): %s; %s from %d completed steps",
+		tag, c.StoppedAt, bots, c.StopReason, capacity, len(c.Steps))
 }
 
 // FormatRampProgress relays one informational `progress` line of the load bot.

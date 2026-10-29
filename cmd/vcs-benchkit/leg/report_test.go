@@ -39,7 +39,7 @@ func TestFormatCalStopped(t *testing.T) {
 		Steps: make([]CalStep, 6), ReceivePPS: 102350, LowerBound: true,
 		StoppedAt: 4096, StoppedBots: 3702, StopReason: "bot 3702: no HELLO_ACK after 5 tries",
 	}
-	want := "[leg 1 S one-big-net] calibration stopped at N=4096 (3702 bots up): bot 3702: no HELLO_ACK after 5 tries; receive capacity 102350 pps (lower bound true) from 6 completed steps"
+	want := "[leg 1 S one-big-net] calibration stopped at N=4096 (3702 bots up): bot 3702: no HELLO_ACK after 5 tries; receive capacity >= 102350 pps (lower bound) from 6 completed steps"
 	if got := FormatCalStopped("[leg 1 S one-big-net]", c); got != want {
 		t.Errorf("v2:\n got  %s\n want %s", got, want)
 	}

@@ -196,6 +196,20 @@ func RunCalibration(ctx context.Context, c CalConfig) (*Calibration, error) {
 		res.ReflectorSendErrors = rstats.SendErrors
 		res.ReflectorQueueFull, res.ReflectorWriteErrors = rstats.QueueFullDrops, rstats.WriteErrors
 	}
+	// The reflector dropping destinations, or delivery giving out, means the
+	// figure is what the rig could push, not what the server can receive: OR
+	// both into the bot's own flag and say why.
+	var why []string
+	if res.ReflectorSendErrors > 0 {
+		why = append(why, fmt.Sprintf("reflector dropped %d destinations", res.ReflectorSendErrors))
+	}
+	if stop != nil && stop.Stage == "delivery" {
+		why = append(why, fmt.Sprintf("delivery stop at N=%d", stop.N))
+	}
+	if len(why) > 0 {
+		res.LowerBound = true
+		res.LowerBoundReason = strings.Join(why, "; ")
+	}
 	switch {
 	case stop != nil:
 		res.StoppedAt, res.StoppedBots, res.StopReason = stop.N, stop.Bots, reason

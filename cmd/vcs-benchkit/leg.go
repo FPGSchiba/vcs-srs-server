@@ -39,7 +39,7 @@ func parseLegFlags(args []string, errw io.Writer) (leg.Options, error) {
 	fs.DurationVar(&o.Hold, "hold", 40*time.Second, "measured hold per step")
 	fs.DurationVar(&o.Confirm, "confirm", 120*time.Second, "confirm hold at the knee")
 	fs.DurationVar(&o.Overload, "overload", 60*time.Second, "overload hold at 2x the knee")
-	fs.StringVar(&o.CalSteps, "cal-steps", "64,128,256,512,1024,2048,4096", "calibration bot counts, ascending")
+	fs.StringVar(&o.CalSteps, "cal-steps", "64,128,256,512,1024,1536,1792,2048,4096", "calibration bot counts, ascending")
 	fs.DurationVar(&o.CalHold, "cal-hold", 3*time.Second, "calibration seconds per step")
 	fs.BoolVar(&o.Sysctl, "sysctl", true, "raise net.core.rmem_max/wmem_max with sudo (never the defaults)")
 	if err := fs.Parse(args); err != nil {
