@@ -87,6 +87,19 @@ func TestAggregateCensoredIsALowerBound(t *testing.T) {
 	}
 }
 
+func TestAggregateControlLostIsCensored(t *testing.T) {
+	in, out := t.TempDir(), t.TempDir()
+	writeLeg(t, in, "1-one-big-net", "S", "one-big-net", "knee 2400", "knee", "2400", "t")
+	writeLeg(t, in, "2-one-big-net", "S", "one-big-net", "≥ 972 (control lost at 1944)", "control-lost", "972", "t")
+	if err := runAggregate([]string{"--in", in, "--out", out}, io.Discard, os.Stderr); err != nil {
+		t.Fatal(err)
+	}
+	r := readAgg(t, out)[0]
+	if r["censored"] != "true" || !strings.Contains(r["results"], "control lost at 1944") || r["min_n"] != "972" {
+		t.Fatalf("a control-lost leg is a censored lower bound: %v", r)
+	}
+}
+
 func TestAggregateEvenCountMedianRoundsDown(t *testing.T) {
 	in, out := t.TempDir(), t.TempDir()
 	writeLeg(t, in, "1-x", "S", "one-big-net", "knee 1001", "knee", "1001", "t")

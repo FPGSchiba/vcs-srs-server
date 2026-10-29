@@ -187,10 +187,11 @@ func TestSweepHistory(t *testing.T) {
 
 func TestResultString(t *testing.T) {
 	for r, want := range map[Result]string{
-		{KneeFound, 3250}:      "knee 3250",
-		{GeneratorBound, 2000}: "≥ 2000 (generator-bound)",
-		{TimeBound, 3000}:      "≥ 3000 (time-bound)",
-		{BelowRange, 12}:       "< 12 (below range)",
+		{Kind: KneeFound, N: 3250}:                 "knee 3250",
+		{Kind: GeneratorBound, N: 2000}:            "≥ 2000 (generator-bound)",
+		{Kind: TimeBound, N: 3000}:                 "≥ 3000 (time-bound)",
+		{Kind: BelowRange, N: 12}:                  "< 12 (below range)",
+		{Kind: ControlLostBound, N: 972, At: 1944}: "≥ 972 (control lost at 1944)",
 	} {
 		if r.String() != want {
 			t.Errorf("%+v.String() = %q, want %q", r, r.String(), want)
@@ -247,5 +248,82 @@ func TestSweepStop(t *testing.T) {
 	_ = s.Record(Pass)
 	if got := s.Stop(); got != (Result{Kind: TimeBound, N: 1000}) {
 		t.Errorf("Stop on a finished sweep = %v", got)
+	}
+}
+
+func TestSweepControlLostRetriesOnceThenStops(t *testing.T) {
+	s := NewSweep(3888, 100000)
+	for _, step := range []struct {
+		n int
+		o StepOutcome
+	}{{972, Pass}, {1944, ControlLost}, {1944, ControlLost}} {
+		n, ok := s.Next()
+		if !ok || n != step.n {
+			t.Fatalf("Next = %d, %v, want %d (the same N again after a first loss)", n, ok, step.n)
+		}
+		if err := s.Record(step.o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, ok := s.Next(); ok {
+		t.Fatal("a second loss at the same N must end the sweep")
+	}
+	got := s.Result()
+	if want := (Result{Kind: ControlLostBound, N: 972, At: 1944}); got != want {
+		t.Fatalf("result = %+v, want %+v", got, want)
+	}
+	if got.String() != "≥ 972 (control lost at 1944)" {
+		t.Errorf("String() = %q", got.String())
+	}
+}
+
+func TestSweepControlLostThenPassContinues(t *testing.T) {
+	s := NewSweep(3888, 100000)
+	var asked []int
+	for _, o := range []StepOutcome{Pass, ControlLost, Pass, Breach} {
+		n, _ := s.Next()
+		asked = append(asked, n)
+		if err := s.Record(o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 972 pass, 1944 lost, 1944 pass (as a first attempt), 3888 breach, then the bisection.
+	if want := []int{972, 1944, 1944, 3888}; !reflect.DeepEqual(asked, want) {
+		t.Fatalf("asked %v, want %v", asked, want)
+	}
+	if n, ok := s.Next(); !ok || n != 2916 {
+		t.Fatalf("after the breach Next = %d, %v, want the bisection midpoint 2916", n, ok)
+	}
+}
+
+func TestSweepControlLostDuringBisection(t *testing.T) {
+	s := NewSweep(4000, 100000)
+	for _, o := range []StepOutcome{Pass, Pass, Breach} { // 1000, 2000, 4000
+		s.Next()
+		if err := s.Record(o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, _ := s.Next()
+	if n != 3000 {
+		t.Fatalf("first midpoint = %d, want 3000", n)
+	}
+	if err := s.Record(ControlLost); err != nil {
+		t.Fatal(err)
+	}
+	if lo, hi := s.Bracket(); lo != 2000 || hi != 4000 {
+		t.Fatalf("bracket after a loss = (%d, %d), want unchanged (2000, 4000)", lo, hi)
+	}
+	if n, _ := s.Next(); n != 3000 {
+		t.Fatalf("retry N = %d, want 3000", n)
+	}
+	if err := s.Record(ControlLost); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.Next(); ok {
+		t.Fatal("a second loss ends the sweep during bisection too")
+	}
+	if want := (Result{Kind: ControlLostBound, N: 2000, At: 3000}); s.Result() != want {
+		t.Fatalf("result = %+v, want %+v", s.Result(), want)
 	}
 }

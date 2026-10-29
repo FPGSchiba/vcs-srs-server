@@ -124,3 +124,9 @@ func TestWriteCalibrationCSVStoppedRow(t *testing.T) {
 		t.Fatalf("stopped row = %v", recs[2])
 	}
 }
+
+func TestKindNameControlLost(t *testing.T) {
+	if got := kindName(sweep.ControlLostBound); got != "control-lost" {
+		t.Fatalf("kindName(ControlLostBound) = %q, want control-lost", got)
+	}
+}

@@ -154,6 +154,8 @@ func kindName(k sweep.ResultKind) string {
 		return "time-bound"
 	case sweep.BelowRange:
 		return "below-range"
+	case sweep.ControlLostBound:
+		return "control-lost"
 	}
 	return fmt.Sprintf("kind-%d", int(k))
 }

@@ -28,12 +28,18 @@ const (
 	// design's three result kinds; it only arises when the very first step
 	// (predicted knee / 4) already breaches.
 	BelowRange
+	// ControlLostBound: a step lost bots' control connections twice at the same
+	// size. N is the last passing size (0 if none) and At the size that lost
+	// control: the knee is at least N, censored, not attributed to the server.
+	ControlLostBound
 )
 
 // Result is a sweep's final answer.
 type Result struct {
 	Kind ResultKind
 	N    int
+	// At is the step size that lost control twice (ControlLostBound only).
+	At int
 }
 
 // String renders the result as the design names it: "knee N",
@@ -48,6 +54,8 @@ func (r Result) String() string {
 		return fmt.Sprintf("≥ %d (time-bound)", r.N)
 	case BelowRange:
 		return fmt.Sprintf("< %d (below range)", r.N)
+	case ControlLostBound:
+		return fmt.Sprintf("≥ %d (control lost at %d)", r.N, r.At)
 	}
 	return fmt.Sprintf("Result(%d, %d)", int(r.Kind), r.N)
 }
@@ -74,6 +82,10 @@ const (
 //	double until the first Breach, capped at N_max
 //	then bisect (last pass, first breach) three times
 //
+// A ControlLost step is retried once at the same size; a second loss at that
+// size ends the sweep as ControlLostBound. A retry that passes or breaches
+// continues as if it were the first attempt.
+//
 // An Invalid step ends the sweep as generator-bound at the last passing step.
 // During bisection that is deliberately conservative: the knee lies in
 // [last pass, first breach), but with an unhealthy generator in between it
@@ -90,6 +102,7 @@ type Sweep struct {
 	result    Result
 	history   []StepRecord
 	smallestB int // smallest breached size seen (for BelowRange)
+	lostAt    int // size that lost control once and is being retried (0 = none)
 }
 
 // NewSweep starts a sweep from the B-0 predicted knee, capped at nMax. A
@@ -134,7 +147,7 @@ func (s *Sweep) Record(o StepOutcome) error {
 	if !s.pending {
 		return errors.New("sweep: Record without a pending Next")
 	}
-	if o != Pass && o != Breach && o != Invalid {
+	if o != Pass && o != Breach && o != Invalid && o != ControlLost {
 		return fmt.Errorf("sweep: unknown outcome %d", int(o))
 	}
 	s.pending = false
@@ -143,6 +156,17 @@ func (s *Sweep) Record(o StepOutcome) error {
 
 	if o == Invalid {
 		s.finish(Result{Kind: GeneratorBound, N: s.lo})
+		return nil
+	}
+	if o == ControlLost {
+		// The cause is unproven (harness or server), so one loss is not a
+		// breach: the same size is asked for once more, and the bracket stays.
+		// A second loss at that size ends the sweep as a censored bound.
+		if s.lostAt == n {
+			s.finish(Result{Kind: ControlLostBound, N: s.lo, At: n})
+		} else {
+			s.lostAt = n
+		}
 		return nil
 	}
 	if o == Breach && (s.smallestB == 0 || n < s.smallestB) {
