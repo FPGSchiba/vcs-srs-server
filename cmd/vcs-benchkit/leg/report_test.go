@@ -62,6 +62,8 @@ func TestFormatRampProgress(t *testing.T) {
 	}
 }
 
+func gcCycles(n uint64) *uint64 { return &n }
+
 func passRow() Row {
 	return Row{
 		Kind: "sweep", Seq: 1, N: 1038, Outcome: sweep.Pass, Held: true,
@@ -69,6 +71,7 @@ func passRow() Row {
 		Data:   sweep.StepData{N: 1038, LossRatio: 0, ServerCPU: 0.39, GenCPU: 0.19},
 		Window: Window{ServerCPU: 0.39, GenCPU: 0.19, NetOK: true, Seconds: 40},
 		Logs:   LogCounts{HelloAccepted: 1036}, FailedAckedByServer: -1,
+		Step: Step{Health: Health{GCCycles: gcCycles(0)}},
 	}
 }
 
@@ -220,7 +223,7 @@ func TestRunWritesResultsMarkdownEvenWhenTheLegFails(t *testing.T) {
 func v3Row() Row {
 	r := passRow()
 	r.Joins.Mode, r.Joins.Talker, r.Joins.JoinsPerS, r.Joins.JoinP99Us, r.Joins.HelloRetried = "ramp", "silent", 9.6, 7400000, 30
-	r.Step.Health.GCCycles = 12
+	r.Step.Health.GCCycles = gcCycles(12)
 	r.Step.Warnings = []string{"gc_pause_p99"}
 	r.Window.TCPOK, r.Window.TCPAbortOnData, r.Window.EstabResets = true, 3, 5
 	r.Outcome, r.ControlLostCount, r.ControlLostPhase = sweep.ControlLost, 2, "hold"
@@ -290,5 +293,30 @@ func TestWriteResultsMarkdownRound2(t *testing.T) {
 	// A burst row is not a steady-state row.
 	if strings.Contains(got, "| burst |") {
 		t.Errorf("a burst row is in the main table:\n%s", got)
+	}
+}
+
+// A v2 bot does not report gc_cycles: the cell is unmeasured, not zero.
+func TestGCCyclesUnreportedIsDashAndEmptyCell(t *testing.T) {
+	r := passRow()
+	r.Step.Health.GCCycles = nil
+	if got := FormatRowLine(testTag, r); !strings.Contains(got, " gc_cycles=- ") {
+		t.Errorf("row line: %s", got)
+	}
+	if got := round2Cells(r)[11]; got != "" {
+		t.Errorf("gen_gc_cycles cell = %q, want empty", got)
+	}
+	r.Step.Health.GCCycles = gcCycles(0)
+	if got := round2Cells(r)[11]; got != "0" {
+		t.Errorf("reported zero cell = %q, want 0", got)
+	}
+}
+
+// A burst that lost control has no join data: say so instead of printing zeros.
+func TestFormatBurstLineControlLostHasNoJoinData(t *testing.T) {
+	r := Row{Kind: "burst", Seq: 3, N: 818, BurstTalker: "live", BurstResult: "control lost"}
+	want := `[leg 2 S one-big-net] burst #3 talker=live N=818->818: joined=- join_failures=- joins_per_s=- join_p99=- hello_retried=- hello_tries_max=- result=control lost`
+	if got := FormatBurstLine(testTag, r); got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
 	}
 }

@@ -287,8 +287,8 @@ func TestParseV3StepAdditions(t *testing.T) {
 	if len(s.Warnings) != 1 || s.Warnings[0] != "gc_pause_p99" {
 		t.Fatalf("Warnings = %v", s.Warnings)
 	}
-	if s.Health.GCCycles != 3 {
-		t.Fatalf("GCCycles = %d", s.Health.GCCycles)
+	if s.Health.GCCycles == nil || *s.Health.GCCycles != 3 {
+		t.Fatalf("GCCycles = %v", s.Health.GCCycles)
 	}
 }
 

@@ -284,7 +284,9 @@ func round2Cells(r Row) []string {
 	}
 	cells[9], cells[10] = r.BurstTalker, r.BurstResult
 	if r.Held {
-		cells[11] = u(r.Step.Health.GCCycles)
+		if g := r.Step.Health.GCCycles; g != nil {
+			cells[11] = u(*g)
+		}
 		cells[12] = strings.Join(r.Step.Warnings, "; ")
 	}
 	if p := r.Step.Ping; p.EveryS > 0 {

@@ -131,7 +131,9 @@ func factsOf(r Row) rowFacts {
 		}
 		f.drops = u(r.Window.ServerDrops)
 		win, logs = r.Window, r.Logs
-		f.gcCycles = u(r.Step.Health.GCCycles)
+		if g := r.Step.Health.GCCycles; g != nil {
+			f.gcCycles = u(*g)
+		}
 		if len(r.Step.Warnings) > 0 {
 			f.warnings = strings.Join(r.Step.Warnings, ",")
 		}
@@ -196,12 +198,16 @@ func FormatBurstLine(tag string, r Row) string {
 	if to == 0 { // a burst that lost control reports no joins line
 		from, to = r.N, r.N
 	}
-	rate, p99 := dash, dash
+	rate, p99, joined, fails, retried, triesMax := dash, dash, dash, dash, dash, dash
+	if j.Mode != "" || j.Requested != 0 { // otherwise the bot gave no joins line: no join data exists
+		joined, fails, triesMax = strconv.Itoa(j.Joined), strconv.Itoa(j.JoinFailures), strconv.Itoa(j.HelloTriesMax)
+		retried = fmt.Sprintf("%d/%d", j.HelloRetried, to-from)
+	}
 	if j.Mode != "" {
 		rate, p99 = fmt.Sprintf("%.1f", j.JoinsPerS), fmt.Sprintf("%.2fs", float64(j.JoinP99Us)/1e6)
 	}
-	return fmt.Sprintf("%s burst #%d talker=%s N=%d->%d: joined=%d join_failures=%d joins_per_s=%s join_p99=%s hello_retried=%d/%d hello_tries_max=%d result=%s",
-		tag, r.Seq, r.BurstTalker, from, to, j.Joined, j.JoinFailures, rate, p99, j.HelloRetried, to-from, j.HelloTriesMax, r.BurstResult)
+	return fmt.Sprintf("%s burst #%d talker=%s N=%d->%d: joined=%s join_failures=%s joins_per_s=%s join_p99=%s hello_retried=%s hello_tries_max=%s result=%s",
+		tag, r.Seq, r.BurstTalker, from, to, joined, fails, rate, p99, retried, triesMax, r.BurstResult)
 }
 
 // ResultsInput is what one leg's results.md is built from. Cal and Out may be
