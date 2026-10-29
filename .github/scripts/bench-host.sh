@@ -42,7 +42,8 @@ EC2 (no extra tooling; the instance is yours to provide):
   git archive HEAD | ssh <host> 'mkdir -p vcs && tar -x -C vcs'
   ssh <host> 'cd vcs && bash .github/scripts/bench-host.sh native --host-label aws-<type> --server-set 0 --gen-set 4-11 --out ~/bench'
   scp -r <host>:bench .
-Native mode needs Go 1.21 or newer with GOTOOLCHAIN=auto, plus jq, unzip, curl, git, taskset and ss (iproute2).
+Native mode needs an x86_64 Linux host (the protoc pin is linux-x86_64; pick an x86 instance type,
+not Graviton), Go 1.21 or newer with GOTOOLCHAIN=auto, plus jq, unzip, curl, git, taskset and ss (iproute2).
 USAGE
 }
 
@@ -205,6 +206,14 @@ if [ -e "$out_dir" ]; then
   fi
 fi
 
+# The protoc pin (and its sha256) is the linux-x86_64 build, so native mode refuses any other arch
+# before building. BENCH_HOST_FAKE_ARCH is the test hook; a dry-run without it skips the check.
+host_arch="${BENCH_HOST_FAKE_ARCH:-}"
+if [ -z "$host_arch" ] && [ "$mode" = "native" ] && [ "$dry_run" -eq 0 ]; then host_arch="$(uname -m)"; fi
+if [ "$mode" = "native" ] && [ -n "$host_arch" ] && [ "$host_arch" != "x86_64" ]; then
+  die "native mode needs an x86_64 host (got $host_arch): the protoc pin is linux-x86_64"
+fi
+
 if [ "$dry_run" -eq 1 ]; then
   echo "bench-host: $mode arguments ok (dry-run)"
 fi
@@ -238,7 +247,11 @@ run_to() { # FILE argv...: stdout to FILE
 }
 run_tee() { # FILE argv...: stdout and stderr to the console and to FILE; fails when argv fails (pipefail)
   local f="$1"; shift
-  if [ "$dry_run" -eq 1 ]; then echo "+ $(qargs "$@") | tee $(q1 "$f")"; else "$@" 2>&1 | tee "$f"; fi
+  if [ "$dry_run" -eq 1 ]; then echo "+ $(qargs "$@") 2>&1 | tee $(q1 "$f")"; else "$@" 2>&1 | tee "$f"; fi
+}
+run_tee_out() { # FILE argv...: stdout only to the console and to FILE (bench.yml's "| tee"); stderr to the console
+  local f="$1"; shift
+  if [ "$dry_run" -eq 1 ]; then echo "+ $(qargs "$@") | tee $(q1 "$f")"; else "$@" | tee "$f"; fi
 }
 sha_check() { # FILE SHA256
   if [ "$dry_run" -eq 1 ]; then
@@ -290,7 +303,7 @@ write_records() {
   done
   nproc_v="${BENCH_HOST_NPROC:-$(nproc 2>/dev/null || true)}"
   kernel="${BENCH_HOST_FAKE_KERNEL:-$(uname -r 2>/dev/null || echo unknown)}"
-  rec_mode="$mode"   # the container runs the native pipeline; record how it was launched
+  local rec_mode="$mode"   # the container runs the native pipeline; record how it was launched
   if [ -n "${BENCH_HOST_IN_CONTAINER:-}" ]; then rec_mode=docker; fi
   jq -n --arg host_label "$host_label" --arg mode "$rec_mode" \
     --argjson image "$(str_or_null "${BENCH_HOST_IMAGE:-}")" \
@@ -481,9 +494,9 @@ pipeline_native() {
     have_predict=1
     run go test -c -tags headless -o "$bin/voice.test" ./voice/
     # GOMAXPROCS=$nsrv is deliberate: bench.yml fixes it at 2. With a 1-cpu --server-set the micro numbers are therefore NOT comparable with Actions micro results.
-    run_tee "$out_dir/micro/micro.txt" taskset -c "$server_set" env "GOMAXPROCS=$nsrv" "$bin/voice.test" \
+    run_tee_out "$out_dir/micro/micro.txt" taskset -c "$server_set" env "GOMAXPROCS=$nsrv" "$bin/voice.test" \
       -test.run '^$' -test.bench "$MICRO_RE" -test.benchmem -test.count=10
-    run_tee "$out_dir/micro/micro-benchstat.txt" go run "$BENCHSTAT" "$out_dir/micro/micro.txt"
+    run_tee_out "$out_dir/micro/micro-benchstat.txt" go run "$BENCHSTAT" "$out_dir/micro/micro.txt"
     run_to "$predict_file" "$bin/vcs-benchkit" predict --micro "$out_dir/micro/micro.txt" --logger bus \
       --csv "$out_dir/micro/micro.csv" --label "$label"
   elif [ -n "$predict" ]; then

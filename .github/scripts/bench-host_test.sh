@@ -652,6 +652,29 @@ env -u BENCH_HOST_IN_CONTAINER -u BENCH_HOST_SYSCTL_RAISE -u BENCH_HOST_TOOL_VER
 set -e
 if jq -e '.sysctl_raise == null and .tool_versions == null' "$tmp/out/host.json" >/dev/null; then pass host-json-sysctl-tools-null; else fail host-json-sysctl-tools-null; fi
 
+# micro output files hold stdout only, as bench.yml's `| tee micro.txt`: micro.txt feeds predict, and
+# benchstat's `go run` writes "go: downloading" lines to stderr. The leg log keeps stderr (the kit logs there).
+pipe
+holds micro-stdout-only 'voice.test -test.run' "| tee $tmp/out/micro/micro.txt"
+hasnt micro-no-stderr 'voice.test -test.run' '2>&1'
+hasnt benchstat-no-stderr 'benchstat@' '2>&1'
+holds leg-keeps-stderr 'vcs-benchkit leg' "2>&1 | tee $tmp/out/gogc-off/leg-1.log"
+
+# arch: the protoc pin is linux-x86_64 only, so native mode refuses another arch before any build
+set +e
+out="$(env -u BENCH_HOST_IN_CONTAINER BENCH_HOST_NPROC=24 BENCH_HOST_FAKE_ARCH=aarch64 bash "$script" native --host-label aws-c7g.4xlarge \
+  --server-set 0 --gen-set 4-11 --out "$(fresh_out)" --dry-run 2>&1)"; rc=$?
+set -e
+expect arch-refused 2 "bench-host: native mode needs an x86_64 host (got aarch64)"
+if [[ "$out" == *"+ "* ]]; then fail "arch-refused-before-build"; else pass arch-refused-before-build; fi
+set +e
+out="$(env -u BENCH_HOST_IN_CONTAINER BENCH_HOST_NPROC=24 BENCH_HOST_FAKE_ARCH=x86_64 bash "$script" native --host-label aws-c7i.4xlarge \
+  --server-set 0 --gen-set 4-11 --out "$(fresh_out)" --dry-run 2>&1)"; rc=$?
+set -e
+expect arch-x86-ok 0 "+ "
+host --help
+expect help-x86 0 "x86_64"
+
 echo
 echo "$failures failures"
 [ "$failures" -eq 0 ]
