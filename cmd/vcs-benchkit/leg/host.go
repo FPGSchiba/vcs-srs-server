@@ -116,7 +116,7 @@ func (e *hostEnv) Start(ctx context.Context) (System, error) {
 	}
 	s := &hostSystem{
 		env: e, top: top, cmd: cmd, stdin: stdin, logf: logf,
-		bot:  NewBot(stdin, stdout, e.onProgress),
+		bot:  NewBot(stdin, stdout, BotHooks{OnProgress: e.onProgress}),
 		done: make(chan struct{}),
 		sampler: &procSampler{
 			serverPID: top.PIDs()[topology.Standalone], genPID: cmd.Process.Pid,

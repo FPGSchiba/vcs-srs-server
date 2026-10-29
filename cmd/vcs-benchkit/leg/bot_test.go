@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -30,6 +31,11 @@ type fakeBot struct {
 	mode string
 	// progressOnSet writes the v2-progress.ndjson lines on every set_n.
 	progressOnSet bool
+	// die makes the bot lose a client on a hold: "v3" writes the v3
+	// control_lost fixture and serves on, "v2" writes the v2 hold-death error
+	// line and exits. dieOnHold is the 1-based hold it happens on (0 = 1).
+	die       string
+	dieOnHold int
 }
 
 func (f *fakeBot) seen() []string {
@@ -49,6 +55,7 @@ func (f *fakeBot) serve() (toBot io.WriteCloser, fromBot io.Reader, done <-chan 
 		defer inR.Close()
 		sc := bufio.NewScanner(inR)
 		n := 0
+		holds := 0
 		var last map[string]any
 		for sc.Scan() {
 			line := sc.Text()
@@ -79,6 +86,14 @@ func (f *fakeBot) serve() (toBot io.WriteCloser, fromBot io.Reader, done <-chan 
 					}
 				}
 			case c["hold"] != nil:
+				holds++
+				if f.die != "" && holds == max(f.dieOnHold, 1) {
+					if f.die == "v2" {
+						outW.Write(fixtureBytes("v2-hold-died.ndjson"))
+						return
+					}
+					outW.Write(fixtureBytes("v3-control-lost.json"))
+				}
 				loss := 0.0
 				if f.lossFor != nil {
 					loss = f.lossFor(n)
@@ -100,6 +115,8 @@ func (f *fakeBot) serve() (toBot io.WriteCloser, fromBot io.Reader, done <-chan 
 				rep["step"] = c["report"]
 				b, _ := json.Marshal(rep)
 				outW.Write(append(b, '\n'))
+			case c["burst"] != nil:
+				outW.Write(fixtureBytes("v3-joins-burst.json"))
 			case c["quit"] != nil:
 				return
 			}
@@ -111,7 +128,7 @@ func (f *fakeBot) serve() (toBot io.WriteCloser, fromBot io.Reader, done <-chan 
 func TestBotHoldAndSync(t *testing.T) {
 	fb := &fakeBot{lossFor: func(n int) float64 { return float64(n) / 1000 }}
 	w, r, done := fb.serve()
-	b := NewBot(w, r, nil)
+	b := NewBot(w, r, BotHooks{})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -145,7 +162,7 @@ func TestBotHoldAndSync(t *testing.T) {
 func TestBotErrorLineIsFatal(t *testing.T) {
 	fb := &fakeBot{failSet: 10}
 	w, r, done := fb.serve()
-	b := NewBot(w, r, nil)
+	b := NewBot(w, r, BotHooks{})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if _, err := b.SetN(ctx, 2); err != nil {
@@ -171,7 +188,7 @@ func TestBotContextCancel(t *testing.T) {
 	outR, outW := io.Pipe()
 	go io.Copy(io.Discard, inR)
 	defer outW.Close()
-	b := NewBot(inW, outR, nil)
+	b := NewBot(inW, outR, BotHooks{})
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	if _, err := b.Hold(ctx, time.Second, "x"); err == nil {
@@ -191,8 +208,13 @@ func fixtureBytes(name string) []byte {
 // primeBot returns a bot already past its first hold, so SetN synchronises.
 func primeBot(t *testing.T, fb *fakeBot) (*Bot, context.Context, <-chan struct{}) {
 	t.Helper()
+	return primeBotWith(t, fb, BotHooks{})
+}
+
+func primeBotWith(t *testing.T, fb *fakeBot, hooks BotHooks) (*Bot, context.Context, <-chan struct{}) {
+	t.Helper()
 	w, r, done := fb.serve()
-	b := NewBot(w, r, nil)
+	b := NewBot(w, r, hooks)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	t.Cleanup(cancel)
 	if _, err := b.SetN(ctx, 2); err != nil {
@@ -257,7 +279,7 @@ func TestBotRelaysProgress(t *testing.T) {
 	w, r, _ := fb.serve()
 	var mu sync.Mutex
 	var got []Progress
-	b := NewBot(w, r, func(p Progress) {
+	b := NewBot(w, r, BotHooks{OnProgress: func(p Progress) {
 		mu.Lock()
 		got = append(got, p)
 		first := len(got) == 1
@@ -266,7 +288,7 @@ func TestBotRelaysProgress(t *testing.T) {
 		if first {
 			panic("callback bug")
 		}
-	})
+	}})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if _, err := b.SetN(ctx, 2); err != nil {
@@ -285,7 +307,7 @@ func TestBotRelaysProgress(t *testing.T) {
 func TestBotLastJoinsBeforeFirstHold(t *testing.T) {
 	fb := &fakeBot{failSet: 1, mode: "v2"}
 	w, r, _ := fb.serve()
-	b := NewBot(w, r, nil)
+	b := NewBot(w, r, BotHooks{})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	j, err := b.SetN(ctx, 2)
@@ -312,5 +334,136 @@ func TestBotSetNWithoutJoinsLineIsNone(t *testing.T) {
 	j, err := b.SetN(ctx, 50)
 	if err != nil || j.Source != JoinsSourceNone {
 		t.Fatalf("joins = %+v, err = %v", j, err)
+	}
+}
+
+func burstHooks() BotHooks {
+	return BotHooks{Features: Features{Version: 3, Set: map[string]bool{"burst": true}}}
+}
+
+func TestBotRecordsControlLostEvents(t *testing.T) {
+	fb := &fakeBot{die: "v3"}
+	w, r, _ := fb.serve()
+	got := make(chan ControlLostEvent, 4)
+	b := NewBot(w, r, BotHooks{OnControlLost: func(ev ControlLostEvent) {
+		got <- ev
+		panic("callback bug") // must not kill the reader
+	}})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := b.SetN(ctx, 2); err != nil {
+		t.Fatal(err)
+	}
+	if b.DeadCount() != 0 {
+		t.Fatalf("DeadCount before = %d", b.DeadCount())
+	}
+	if _, err := b.Hold(ctx, time.Second, "h"); err != nil {
+		t.Fatalf("a v3 control_lost line is not a hold error: %v", err)
+	}
+	// The control_lost line precedes the step line on the wire, so it has been
+	// read and relayed by the time Hold returns.
+	var want ControlLostEvent
+	if err := json.Unmarshal(fixture(t, "v3-control-lost.json"), &want); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case ev := <-got:
+		if !reflect.DeepEqual(ev, want) {
+			t.Fatalf("relayed = %+v, want %+v", ev, want)
+		}
+	default:
+		t.Fatal("OnControlLost was not called")
+	}
+	evs := b.ControlLost()
+	if b.DeadCount() != 1 || len(evs) != 1 || !reflect.DeepEqual(evs[0], want) || evs[0].BotExited {
+		t.Fatalf("ControlLost = %+v, DeadCount = %d", evs, b.DeadCount())
+	}
+	if _, err := b.Hold(ctx, time.Second, "again"); err != nil {
+		t.Fatalf("hold after a control_lost line: %v", err)
+	}
+}
+
+func TestBotV2HoldDiedIsData(t *testing.T) {
+	fb := &fakeBot{die: "v2", dieOnHold: 2}
+	w, r, done := fb.serve()
+	b := NewBot(w, r, BotHooks{})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := b.SetN(ctx, 2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Hold(ctx, time.Second, "h1"); err != nil {
+		t.Fatal(err)
+	}
+	st, err := b.Hold(ctx, time.Second, "h2")
+	var cl *ControlLostError
+	if !errors.As(err, &cl) {
+		t.Fatalf("err = %v, want *ControlLostError", err)
+	}
+	if st.Step != "" {
+		t.Fatalf("step = %+v, want the zero Step", st)
+	}
+	want := ControlLostEvent{Bot: 2, Cause: "stream", Code: "Unavailable", Phase: "hold",
+		Message: "error reading from server: connection reset by peer", SinceLastOKPingS: -1, BotExited: true}
+	if !reflect.DeepEqual(cl.Event, want) {
+		t.Fatalf("event = %+v, want %+v", cl.Event, want)
+	}
+	if evs := b.ControlLost(); len(evs) != 1 || !reflect.DeepEqual(evs[0], want) {
+		t.Fatalf("ControlLost = %+v", evs)
+	}
+	<-done
+	_, err = b.Hold(ctx, time.Second, "h3")
+	if err == nil || errors.As(err, &cl) || !strings.Contains(err.Error(), "exited") {
+		t.Fatalf("later Hold err = %v, want a plain exited error", err)
+	}
+}
+
+func TestBotBurst(t *testing.T) {
+	fb := &fakeBot{}
+	b, ctx, _ := primeBotWith(t, fb, burstHooks())
+	j, err := b.Burst(ctx, 150, 16, "live")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.Mode != "burst" || j.Talker != "live" || j.Source != JoinsSourceV2 || j.InFlightMax != 16 || j.RateLimit != nil {
+		t.Fatalf("joins = %+v", j)
+	}
+	if b.n != j.N {
+		t.Fatalf("bot n = %d, want %d", b.n, j.N)
+	}
+	cmds := fb.seen()
+	n := len(cmds)
+	if n < 2 || cmds[n-2] != `{"burst":{"add":150,"in_flight":16,"talker":"live"}}` || !strings.HasPrefix(cmds[n-1], `{"report":"sync-`) {
+		t.Fatalf("commands = %q", cmds)
+	}
+}
+
+func TestBotBurstNeedsFeature(t *testing.T) {
+	fb := &fakeBot{}
+	b, ctx, _ := primeBotWith(t, fb, BotHooks{Features: Features{Version: 2, Set: map[string]bool{}}})
+	before := len(fb.seen())
+	_, err := b.Burst(ctx, 150, 16, "live")
+	if !errors.Is(err, ErrNotSupported) {
+		t.Fatalf("err = %v, want ErrNotSupported", err)
+	}
+	if got := len(fb.seen()); got != before {
+		t.Fatalf("Burst wrote %d command(s) to a bot without the feature", got-before)
+	}
+}
+
+func TestBotBurstRejectsBadArguments(t *testing.T) {
+	fb := &fakeBot{}
+	b, ctx, _ := primeBotWith(t, fb, burstHooks())
+	before := len(fb.seen())
+	for _, c := range []struct {
+		add, inFlight int
+		talker        string
+	}{{0, 16, "live"}, {1, 0, "live"}, {1, 17, "live"}, {1, 8, "x"}} {
+		if _, err := b.Burst(ctx, c.add, c.inFlight, c.talker); err == nil {
+			t.Errorf("Burst(%d, %d, %q) = nil error", c.add, c.inFlight, c.talker)
+		}
+	}
+	if got := len(fb.seen()); got != before {
+		t.Fatalf("invalid Burst wrote %d command(s)", got-before)
 	}
 }

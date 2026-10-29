@@ -83,6 +83,37 @@ type botLine struct {
 	// joinErr is a v1 error line whose text is a join failure (data, not a
 	// fatal bot error).
 	joinErr string
+	// lost is a v2 hold death (an error line IsControlLostText matches): data,
+	// returned by wait as a *ControlLostError.
+	lost *ControlLostEvent
+}
+
+// ControlLostError is a dead bot as an error value, for the calls that cannot
+// return it any other way (Hold and Burst). The event is data: callers
+// type-assert it and record it instead of aborting the leg.
+type ControlLostError struct{ Event ControlLostEvent }
+
+func (e *ControlLostError) Error() string {
+	ev := e.Event
+	return fmt.Sprintf("loadbot: control lost: bot %d %s: %s", ev.Bot, ev.Code, ev.Message)
+}
+
+// ErrNotSupported is returned (wrapped) for a command the load bot's feature
+// list does not include. Nothing is written to the bot in that case.
+var ErrNotSupported = errors.New("loadbot: command not supported by this load bot")
+
+// BotHooks are the optional callbacks and facts NewBot takes.
+type BotHooks struct {
+	// OnProgress receives every `progress` line synchronously on the reader
+	// goroutine, so it must be quick; a panic in it is recovered. nil = no relay.
+	OnProgress func(Progress)
+	// OnControlLost receives every control-lost event (a v3 `control_lost` line
+	// or a v2 hold death) synchronously on the reader goroutine, after it is
+	// stored. A panic in it is recovered. nil = no relay.
+	OnControlLost func(ControlLostEvent)
+	// Features is what `vcs-loadbot features` reported; it gates Burst. The
+	// zero value lists nothing.
+	Features Features
 }
 
 // joinFailureError carries a join-failure text out of wait. It is an error to
@@ -114,14 +145,19 @@ type Bot struct {
 
 	jmu       sync.Mutex
 	lastJoins *Joins
+
+	lmu  sync.Mutex
+	lost []ControlLostEvent
+
+	features Features
 }
 
 // NewBot starts reading r. The caller owns the process behind w and r.
-// onProgress receives every `progress` line synchronously on the reader
-// goroutine, so it must be quick; a panic in it is recovered. nil means no
-// relay.
-func NewBot(w io.Writer, r io.Reader, onProgress func(Progress)) *Bot {
-	b := &Bot{w: w, lines: make(chan botLine, 16)}
+// hooks.OnProgress and hooks.OnControlLost run synchronously on the reader
+// goroutine, so they must be quick; a panic in either is recovered.
+func NewBot(w io.Writer, r io.Reader, hooks BotHooks) *Bot {
+	b := &Bot{w: w, lines: make(chan botLine, 16), features: hooks.Features}
+	onProgress := hooks.OnProgress
 	go func() {
 		defer close(b.lines)
 		sc := bufio.NewScanner(r)
@@ -144,6 +180,10 @@ func NewBot(w io.Writer, r io.Reader, onProgress func(Progress)) *Bot {
 				text := "loadbot: " + head.Error
 				if IsJoinFailureText(text) {
 					b.lines <- botLine{joinErr: text}
+				} else if IsControlLostText(text) {
+					ev := ControlLostFromV2Error(text, "hold")
+					b.recordLost(ev, hooks.OnControlLost)
+					b.lines <- botLine{lost: &ev}
 				} else {
 					b.lines <- botLine{err: errors.New(text)}
 				}
@@ -163,6 +203,12 @@ func NewBot(w io.Writer, r io.Reader, onProgress func(Progress)) *Bot {
 				j.Source = JoinsSourceV2
 				b.setLastJoins(j)
 				b.lines <- botLine{joins: &j}
+			case StepControlLostType:
+				var ev ControlLostEvent
+				if err := json.Unmarshal(raw, &ev); err != nil {
+					continue // informational on the wire: the step line carries the counts
+				}
+				b.recordLost(ev, hooks.OnControlLost)
 			case "progress":
 				if onProgress == nil {
 					continue
@@ -183,6 +229,33 @@ func NewBot(w io.Writer, r io.Reader, onProgress func(Progress)) *Bot {
 func relayProgress(fn func(Progress), p Progress) {
 	defer func() { _ = recover() }()
 	fn(p)
+}
+
+// recordLost stores ev, then relays it to fn (nil = none), recovering a panic.
+func (b *Bot) recordLost(ev ControlLostEvent, fn func(ControlLostEvent)) {
+	b.lmu.Lock()
+	b.lost = append(b.lost, ev)
+	b.lmu.Unlock()
+	if fn == nil {
+		return
+	}
+	defer func() { _ = recover() }()
+	fn(ev)
+}
+
+// ControlLost returns every control-lost event read so far, in order. A v2
+// hold death is among them, with BotExited set.
+func (b *Bot) ControlLost() []ControlLostEvent {
+	b.lmu.Lock()
+	defer b.lmu.Unlock()
+	return append([]ControlLostEvent(nil), b.lost...)
+}
+
+// DeadCount is the number of control-lost events read so far.
+func (b *Bot) DeadCount() int {
+	b.lmu.Lock()
+	defer b.lmu.Unlock()
+	return len(b.lost)
 }
 
 func (b *Bot) setLastJoins(j Joins) {
@@ -233,6 +306,12 @@ func (b *Bot) writeFailed(werr error) error {
 		if ok && l.joinErr != "" {
 			return &joinFailureError{text: l.joinErr}
 		}
+		if ok && l.lost != nil {
+			return &ControlLostError{Event: *l.lost}
+		}
+		if !ok {
+			return fmt.Errorf("loadbot: exited (write command: %w)", werr)
+		}
 	case <-time.After(250 * time.Millisecond):
 	}
 	return fmt.Errorf("loadbot: write command: %w", werr)
@@ -256,6 +335,9 @@ func (b *Bot) wait(ctx context.Context, label string) (Step, *Joins, error) {
 			}
 			if l.joinErr != "" {
 				return Step{}, joins, &joinFailureError{text: l.joinErr}
+			}
+			if l.lost != nil {
+				return Step{}, joins, &ControlLostError{Event: *l.lost}
 			}
 			if l.joins != nil {
 				joins = l.joins
@@ -338,6 +420,61 @@ func (b *Bot) Hold(ctx context.Context, d time.Duration, label string) (Step, er
 		b.held = true
 	}
 	return st, err
+}
+
+// Burst adds add bots with no rate limit at inFlight concurrency, with the
+// talker silent or live during it (I-13), and returns the burst's `joins` line
+// once the bot has finished. It needs the `burst` feature: without it the call
+// returns ErrNotSupported and writes nothing. Join failures are data in the
+// result; a dead bot is a *ControlLostError. The first hold must have run (the
+// bot needs bots to add to, and the sync report needs a hold).
+func (b *Bot) Burst(ctx context.Context, add, inFlight int, talker string) (Joins, error) {
+	if !b.features.Has("burst") {
+		return Joins{}, fmt.Errorf("%w: burst", ErrNotSupported)
+	}
+	if add < 1 || inFlight < 1 || inFlight > 16 || (talker != "silent" && talker != "live") {
+		return Joins{}, fmt.Errorf("loadbot: burst: invalid arguments add=%d in_flight=%d talker=%q", add, inFlight, talker)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.held {
+		return Joins{}, errors.New("loadbot: burst before the first hold")
+	}
+	had := b.n
+	asJoins := func(err error) (Joins, bool) {
+		var je *joinFailureError
+		if errors.As(err, &je) {
+			return JoinsFromV1Error(had+add, had, je.text), true
+		}
+		return Joins{}, false
+	}
+	cmd := map[string]any{"burst": map[string]any{"add": add, "in_flight": inFlight, "talker": talker}}
+	if err := b.send(cmd); err != nil {
+		if j, ok := asJoins(err); ok {
+			return j, nil
+		}
+		return Joins{}, err
+	}
+	b.seq++
+	label := fmt.Sprintf("sync-%d", b.seq)
+	if err := b.send(map[string]string{"report": label}); err != nil {
+		if j, ok := asJoins(err); ok {
+			return j, nil
+		}
+		return Joins{}, err
+	}
+	_, joins, err := b.wait(ctx, label)
+	if err != nil {
+		if j, ok := asJoins(err); ok {
+			return j, nil
+		}
+		return Joins{}, err
+	}
+	if joins == nil {
+		return Joins{Source: JoinsSourceNone, Requested: had + add, Had: had, N: had + add, Joined: add}, nil
+	}
+	b.n = joins.N
+	return *joins, nil
 }
 
 // Quit asks the bot to BYE its clients and exit.
