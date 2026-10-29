@@ -31,6 +31,8 @@ type CalConfig struct {
 	// Features is the load bot's probe result. Version 0 (not probed) passes no
 	// --bounds, so the bot's own defaults apply.
 	Features Features
+	// Bot holds the tunable bot flags and the grpc log level; nil = the defaults.
+	Bot *BotParams
 	// StderrDir receives reflect.log and calibrate.log; "" discards them.
 	StderrDir string
 	// OnLine, when set, receives each stdout line of calibrate as it is read: its
@@ -44,7 +46,7 @@ func (c CalConfig) command(sub string, args []string, set string) (*exec.Cmd, er
 		return nil, err
 	}
 	cmd := exec.Command(name, argv...)
-	cmd.Env = processEnv(os.Environ(), pinEnv, sub)
+	cmd.Env = processEnvWith(os.Environ(), pinEnv, sub, botParamsOr(c.Bot).GRPCLog)
 	return cmd, nil
 }
 
@@ -326,7 +328,7 @@ func calibrateArgs(c CalConfig, addr string) []string {
 		"--steps", c.Steps, "--hold", strconv.FormatFloat(c.Hold.Seconds(), 'f', -1, 64),
 	}
 	if c.Features.Version != 0 {
-		a = append(a, "--bounds", BotBoundsJSON(c.Features))
+		a = append(a, "--bounds", BotBoundsJSONWith(c.Features, botParamsOr(c.Bot)))
 	}
 	return a
 }

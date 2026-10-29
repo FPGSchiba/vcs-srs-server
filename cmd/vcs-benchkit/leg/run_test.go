@@ -1,6 +1,8 @@
 package leg
 
 import (
+	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -135,5 +137,64 @@ func TestBuildPinsRejectsOverlapAndBadSets(t *testing.T) {
 		if _, err := BuildPins(c[0], c[1]); err == nil {
 			t.Errorf("BuildPins(%q, %q) must fail", c[0], c[1])
 		}
+	}
+}
+
+func TestManifestRound2(t *testing.T) {
+	o := Options{RampChunk: 250, Bursts: true, BurstAdd: 150, BurstInFlight: 16, Bot: DefaultBotParams()}
+	v3 := Features{Version: 3, Set: map[string]bool{"ping": true, "join_rate": true, "talker_pause": true, "gc_warn": true, "burst": true}}
+	m := &Manifest{}
+	m.recordRound2(o, v3)
+	b, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"bot_features", "bot_flags", "generator_env", "server_env", "ramp", "burst", "bounds_generator", "decisions_round2"} {
+		if _, ok := got[k]; !ok {
+			t.Fatalf("manifest lacks %q: %s", k, b)
+		}
+	}
+	ramp := got["ramp"].(map[string]any)
+	if ramp["chunk"] != float64(250) || ramp["rate_max"] != float64(12) || ramp["rate_scale"] != float64(5000) ||
+		ramp["max_in_flight"] != float64(8) || ramp["talker"] != "silent" {
+		t.Errorf("ramp = %v", ramp)
+	}
+	burst := got["burst"].(map[string]any)
+	if burst["add"] != float64(150) || burst["in_flight"] != float64(16) || burst["enabled"] != true {
+		t.Errorf("burst = %v", burst)
+	}
+	bg := got["bounds_generator"].(map[string]any)
+	if bg["gc_pause_p99_us"] != float64(5000) || bg["gc_pause_warn_p99_us"] != float64(2000) {
+		t.Errorf("bounds_generator = %v", bg)
+	}
+	dec := got["decisions_round2"].(map[string]any)
+	for i := 1; i <= 12; i++ {
+		id := "R2-" + strconv.Itoa(i)
+		v, ok := dec[id].(string)
+		if !ok || !strings.Contains(v, "->") {
+			t.Errorf("decisions_round2[%s] = %v, want an old -> new string", id, dec[id])
+		}
+	}
+	// A v2 bot gets only --bounds.
+	m2 := &Manifest{}
+	m2.recordRound2(o, Features{Version: 2, Set: map[string]bool{}})
+	if len(m2.BotFlags) != 2 {
+		t.Errorf("v2 bot_flags = %q", m2.BotFlags)
+	}
+}
+
+func TestValidateRejectsUnknownGRPCLog(t *testing.T) {
+	o := Options{ServerBin: "s", LoadbotBin: "l", OutDir: "o", Scenario: "one-big-net", Arms: "S", ServerSet: "0,1", GenSet: "2,3", Topology: "t", PredictedKnee: 100}
+	o.Bot.GRPCLog = "loud"
+	if err := o.Validate(); err == nil || !strings.Contains(err.Error(), "--grpc-log") {
+		t.Errorf("err = %v", err)
+	}
+	o.Bot.GRPCLog = "off"
+	if err := o.Validate(); err != nil {
+		t.Errorf("off must be valid: %v", err)
 	}
 }

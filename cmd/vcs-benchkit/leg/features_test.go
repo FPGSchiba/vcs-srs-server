@@ -173,3 +173,39 @@ func TestProbeFeaturesParsesV3AndTreatsFailureAsV2(t *testing.T) {
 		t.Errorf("a missing binary = %+v, want v2", f)
 	}
 }
+
+func TestBotParamsFlowIntoArgsAndEnv(t *testing.T) {
+	p := DefaultBotParams()
+	p.PingEvery, p.JoinRateMax, p.JoinRateScale, p.MaxInFlight = 0, 20, 3000, 4
+	p.GCPauseP99, p.GCPauseWarnP99, p.GRPCLog = 7*time.Millisecond, 3*time.Millisecond, "off"
+	v3 := Features{Version: 3, Set: map[string]bool{"ping": true, "join_rate": true, "talker_pause": true, "gc_warn": true}}
+	got := BotRunArgsWith(v3, p)
+	for flag, val := range map[string]string{
+		"--ping-every": "0s", "--join-rate-max": "20", "--join-rate-scale": "3000", "--max-in-flight": "4", "--ramp-talker": "silent",
+		"--bounds": `{"gc_pause_p99":"7ms","gc_pause_warn_p99":"3ms"}`,
+	} {
+		if !hasArg(got, flag, val) {
+			t.Errorf("args %q lack %s %s", got, flag, val)
+		}
+	}
+	for _, kind := range []string{"run", "calibrate", "reflect"} {
+		for _, e := range GeneratorEnvWith(kind, "off") {
+			if strings.HasPrefix(e, "GRPC_GO_LOG") {
+				t.Errorf("%s: grpc-log off must add no GRPC_GO_LOG variable, got %q", kind, e)
+			}
+		}
+		if !envHas(GeneratorEnvWith(kind, "off"), "GOGC=off") {
+			t.Errorf("%s: GOGC=off is not tied to --grpc-log", kind)
+		}
+	}
+	if len(ServerEnvWith("off")) != 0 {
+		t.Errorf("ServerEnvWith(off) = %q", ServerEnvWith("off"))
+	}
+	if !envHas(ServerEnvWith("warning"), "GRPC_GO_LOG_SEVERITY_LEVEL=warning") {
+		t.Errorf("ServerEnvWith(warning) = %q", ServerEnvWith("warning"))
+	}
+	// The defaults are what the round-1 wrappers pass.
+	if g, w := BotRunArgs(v3), BotRunArgsWith(v3, DefaultBotParams()); strings.Join(g, " ") != strings.Join(w, " ") {
+		t.Errorf("BotRunArgs %q != defaults %q", g, w)
+	}
+}

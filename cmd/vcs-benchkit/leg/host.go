@@ -35,6 +35,8 @@ type hostEnv struct {
 	// features is what the load bot's probe reported; it decides which v3 flags
 	// the kit passes (a v2 bot rejects unknown flags) and gates Burst.
 	features Features
+	// bot holds the tunable bot flags and the grpc log level; nil = the defaults.
+	bot *BotParams
 	// onProgress receives the load bot's progress lines; nil drops them.
 	onProgress func(Progress)
 	// logf receives the heartbeat lines (nil = no heartbeat); heartbeatEvery
@@ -129,13 +131,13 @@ func (e *hostEnv) Start(ctx context.Context) (System, error) {
 		"run", "--scenario", e.scenario, "--arm", "S",
 		"--control", control, "--voice", voiceAddr, "--allow", control + "," + voiceAddr,
 		"--passwords", pw, "--unit", "LDBT", "--seed", strconv.FormatInt(e.seed, 10),
-	}, BotRunArgs(e.features)...), e.genSet)
+	}, BotRunArgsWith(e.features, botParamsOr(e.bot))...), e.genSet)
 	if err != nil {
 		_ = top.Stop()
 		return nil, err
 	}
 	cmd := exec.Command(name, argv...)
-	cmd.Env = processEnv(os.Environ(), pinEnv, "run")
+	cmd.Env = processEnvWith(os.Environ(), pinEnv, "run", botParamsOr(e.bot).GRPCLog)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		_ = top.Stop()
