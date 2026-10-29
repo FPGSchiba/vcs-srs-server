@@ -57,12 +57,16 @@ func parseLegFlags(args []string, errw io.Writer) (leg.Options, error) {
 	fs.DurationVar(&o.Bot.GCPauseP99, "gc-pause-p99", d.GCPauseP99, "generator GC-pause p99 hard bound (invalidates a step)")
 	fs.DurationVar(&o.Bot.GCPauseWarnP99, "gc-pause-warn-p99", d.GCPauseWarnP99, "generator GC-pause p99 warning bound")
 	fs.StringVar(&o.Bot.GRPCLog, "grpc-log", d.GRPCLog, "grpc-go log severity for the server and the bot (info, warning, error; off disables)")
+	fs.StringVar(&o.Bot.GeneratorGC, "generator-gc", d.GeneratorGC, "generator GC env: off (GOGC=off GOMEMLIMIT=1GiB, R2-9) or default (inherited GOGC/GOMEMLIMIT stripped, Go defaults)")
 	o.Bot.RampTalker = d.RampTalker
 	if err := fs.Parse(args); err != nil {
 		return o, err
 	}
 	if fs.NArg() > 0 {
 		return o, fmt.Errorf("unexpected argument %q (all inputs are flags)", fs.Arg(0))
+	}
+	if err := leg.ParseGeneratorGC(o.Bot.GeneratorGC); err != nil {
+		return o, err
 	}
 	if !strings.Contains(o.Label, "relative only") {
 		return o, errors.New(`--label must say "relative only"`)

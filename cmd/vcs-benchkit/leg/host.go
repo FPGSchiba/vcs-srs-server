@@ -140,7 +140,7 @@ func (e *hostEnv) Start(ctx context.Context) (System, error) {
 		return nil, err
 	}
 	cmd := exec.Command(name, argv...)
-	cmd.Env = processEnvWith(os.Environ(), pinEnv, "run", botParamsOr(e.bot).GRPCLog)
+	cmd.Env = processEnvFor(os.Environ(), pinEnv, "run", botParamsOr(e.bot).GRPCLog, botParamsOr(e.bot).GeneratorGC)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		_ = top.Stop()

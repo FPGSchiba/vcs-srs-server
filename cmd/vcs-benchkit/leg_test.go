@@ -92,3 +92,18 @@ func TestParseLegFlagsLabel(t *testing.T) {
 		t.Errorf("err = %v, want the relative-only refusal", err)
 	}
 }
+
+func TestParseLegFlagsGeneratorGC(t *testing.T) {
+	base := []string{"--server-bin", "s", "--loadbot-bin", "l", "--out", "o"}
+	o, err := parseLegFlags(base, io.Discard)
+	if err != nil || o.Bot.GeneratorGC != "off" {
+		t.Fatalf("default = %q err = %v, want off", o.Bot.GeneratorGC, err)
+	}
+	o, err = parseLegFlags(append(append([]string{}, base...), "--generator-gc", "default"), io.Discard)
+	if err != nil || o.Bot.GeneratorGC != "default" {
+		t.Fatalf("GeneratorGC = %q err = %v", o.Bot.GeneratorGC, err)
+	}
+	if _, err = parseLegFlags(append(append([]string{}, base...), "--generator-gc", "on"), io.Discard); err == nil {
+		t.Error("--generator-gc on must be refused")
+	}
+}

@@ -259,3 +259,31 @@ func TestManifestLabel(t *testing.T) {
 		t.Errorf("default manifest label = %q, want leg.Label", got)
 	}
 }
+
+func TestManifestGeneratorGC(t *testing.T) {
+	feats := Features{Version: 3, Set: map[string]bool{}}
+	for _, tc := range []struct {
+		gc      string
+		wantGC  string
+		hasGOGC bool
+	}{{"", "off", true}, {"off", "off", true}, {"default", "default", false}} {
+		o := Options{Bot: BotParams{GeneratorGC: tc.gc}}
+		m := newManifest(o, nil, nil)
+		m.recordRound2(o, feats)
+		if m.GeneratorGC != tc.wantGC {
+			t.Errorf("%q: generator_gc = %q, want %q", tc.gc, m.GeneratorGC, tc.wantGC)
+		}
+		for kind, env := range m.GeneratorEnv {
+			if got := envHas(env, "GOGC=off"); got != tc.hasGOGC {
+				t.Errorf("%q: generator_env.%s GOGC=off present = %v", tc.gc, kind, got)
+			}
+		}
+	}
+	o := Options{Bot: BotParams{GeneratorGC: "default"}}
+	if s := Round2Summary(o, Features{Version: 3, Set: map[string]bool{}}); !strings.Contains(s, "generator GC: default (Go defaults)") {
+		t.Errorf("summary %q lacks the default-GC note", s)
+	}
+	if s := Round2Summary(Options{}, Features{Version: 3, Set: map[string]bool{}}); strings.Contains(s, "generator GC") {
+		t.Errorf("off summary %q must not mention generator GC", s)
+	}
+}

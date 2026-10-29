@@ -285,6 +285,8 @@ type Manifest struct {
 	BotFeatures  []string            `json:"bot_features"`
 	BotFlags     []string            `json:"bot_flags,omitempty"`
 	GeneratorEnv map[string][]string `json:"generator_env,omitempty"`
+	// GeneratorGC is "off" (R2-9 GOGC=off GOMEMLIMIT=1GiB) or "default" (Go defaults).
+	GeneratorGC string `json:"generator_gc,omitempty"`
 	ServerEnv    []string            `json:"server_env,omitempty"`
 
 	// Round 2 (W6 fix 2): the ramp and burst shapes, the generator bounds and every
@@ -629,6 +631,9 @@ func (o *Options) normalizeRound2() {
 	if o.Bot.GRPCLog == "" {
 		o.Bot.GRPCLog = d.GRPCLog
 	}
+	if o.Bot.GeneratorGC == "" {
+		o.Bot.GeneratorGC = d.GeneratorGC
+	}
 }
 
 // Round2Summary is one log line of the effective round-2 parameters, so the
@@ -647,8 +652,12 @@ func Round2Summary(o Options, feats Features) string {
 	if o.Bursts && feats.Has("burst") {
 		bursts = fmt.Sprintf("bursts on (add %d, in-flight %d)", o.BurstAdd, o.BurstInFlight)
 	}
-	return fmt.Sprintf("round 2: chunk %d, %s, ramp talker %s, %s, %s, gc %v/%v, grpc-log %s",
+	s := fmt.Sprintf("round 2: chunk %d, %s, ramp talker %s, %s, %s, gc %v/%v, grpc-log %s",
 		o.RampChunk, rate, o.Bot.RampTalker, ping, bursts, o.Bot.GCPauseWarnP99, o.Bot.GCPauseP99, o.Bot.GRPCLog)
+	if o.Bot.GeneratorGC != GCOff {
+		s += ", generator GC: default (Go defaults)"
+	}
+	return s
 }
 
 // recordRound2 fills the manifest's bot, generator, ramp, burst and decision
@@ -657,10 +666,11 @@ func (m *Manifest) recordRound2(o Options, feats Features) {
 	o.normalizeRound2()
 	m.BotVersion, m.BotFeatures, m.BotFlags = feats.Version, feats.Names(), BotRunArgsWith(feats, o.Bot)
 	m.GeneratorEnv = map[string][]string{
-		"run":       GeneratorEnvWith("run", o.Bot.GRPCLog),
-		"calibrate": GeneratorEnvWith("calibrate", o.Bot.GRPCLog),
-		"reflect":   GeneratorEnvWith("reflect", o.Bot.GRPCLog),
+		"run":       GeneratorEnvFor("run", o.Bot.GRPCLog, o.Bot.GeneratorGC),
+		"calibrate": GeneratorEnvFor("calibrate", o.Bot.GRPCLog, o.Bot.GeneratorGC),
+		"reflect":   GeneratorEnvFor("reflect", o.Bot.GRPCLog, o.Bot.GeneratorGC),
 	}
+	m.GeneratorGC = o.Bot.GeneratorGC
 	m.ServerEnv = ServerEnvWith(o.Bot.GRPCLog)
 	// The rate rule and the bursts are applied only when the bot has the feature;
 	// record what ran, not what the flags asked for.
