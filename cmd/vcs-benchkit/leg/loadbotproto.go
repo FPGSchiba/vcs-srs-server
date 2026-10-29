@@ -1,8 +1,11 @@
 package leg
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -58,9 +61,25 @@ type Joins struct {
 	RampHealth      RampHealth     `json:"ramp_health"`
 	Label           string         `json:"label"`
 
+	// v3 additions (I-12). Absent on a v2 line, so they stay zero/nil there.
+	Mode         string     `json:"mode"`
+	Talker       string     `json:"talker"`
+	JoinsPerS    float64    `json:"joins_per_s"`
+	JoinP99Us    int64      `json:"join_p99_us"`
+	HelloRetried int        `json:"hello_retried"`
+	InFlightMax  int        `json:"in_flight_max"`
+	RateLimit    *RateLimit `json:"rate_limit"`
+
 	// Source and BotExited are kit-only, never on the wire.
 	Source    string `json:"-"`
 	BotExited bool   `json:"-"`
+}
+
+// RateLimit is the join rate a ramp ran under (I-12). A burst or an unbounded
+// ramp has none (nil).
+type RateLimit struct {
+	MaxPerS float64 `json:"max_per_s"`
+	Scale   float64 `json:"scale"`
 }
 
 // joinStages are the four keys failures_by_stage always carries.
@@ -131,6 +150,8 @@ type Progress struct {
 	Bots         int     `json:"bots,omitempty"`
 	HelloRetried int     `json:"hello_retried"`
 	ElapsedS     float64 `json:"elapsed_s"`
+	RatePerS     float64 `json:"rate_per_s"` // v3: the current limit, 0 = unbounded
+	Talker       string  `json:"talker"`     // v3: "silent" or "live"
 }
 
 // CalStopped is the `calibration_stopped` line (I-4).
@@ -217,4 +238,128 @@ func JoinsFromV1Error(requested, had int, text string) Joins {
 		Source:          JoinsSourceV1Error,
 		BotExited:       true,
 	}
+}
+
+// Features is the result of the `vcs-loadbot features` probe (I-8). Version is
+// 3 when the probe parsed and 2 otherwise (a v2 bot has no such subcommand).
+type Features struct {
+	Version int
+	Set     map[string]bool
+}
+
+// FeaturesSchema is the only value a v3 bot writes in the features line.
+const FeaturesSchema = "loadbot-features/1"
+
+// Has reports whether the bot lists the feature.
+func (f Features) Has(name string) bool { return f.Set[name] }
+
+// Names returns the features in ascending order.
+func (f Features) Names() []string {
+	out := make([]string, 0, len(f.Set))
+	for k := range f.Set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ParseFeatures interprets the probe's stdout and exit status. Any run error,
+// unparseable output, or a line that is not a loadbot-features/1 line is a v2
+// bot with no features (I-8).
+func ParseFeatures(stdout []byte, runErr error) Features {
+	v2 := Features{Version: 2, Set: map[string]bool{}}
+	if runErr != nil {
+		return v2
+	}
+	var line struct {
+		Type     string   `json:"type"`
+		Schema   string   `json:"schema"`
+		Features []string `json:"features"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(stdout), &line); err != nil {
+		return v2
+	}
+	if line.Type != "features" || line.Schema != FeaturesSchema {
+		return v2
+	}
+	f := Features{Version: 3, Set: map[string]bool{}}
+	for _, k := range line.Features {
+		f.Set[k] = true
+	}
+	return f
+}
+
+// StepControlLostType is the `type` of an I-10 line.
+const StepControlLostType = "control_lost"
+
+// ControlLostEvent is one dead bot (I-10). BotExited is kit-only: set when the
+// bot process itself exited (a v2 hold death), never from the wire.
+type ControlLostEvent struct {
+	Bot              int     `json:"bot"`
+	Name             string  `json:"name"`
+	GUID             string  `json:"guid"`
+	Cause            string  `json:"cause"`
+	Code             string  `json:"code"`
+	Message          string  `json:"message"`
+	Error            string  `json:"error"`
+	Phase            string  `json:"phase"`
+	AtUnixMs         int64   `json:"at_unix_ms"`
+	AgeS             float64 `json:"age_s"`
+	SinceLastOKPingS float64 `json:"since_last_ok_ping_s"`
+	PingFailures     int     `json:"ping_failures"`
+	LocalAddr        string  `json:"local_addr"`
+	DeadTotal        int     `json:"dead_total"`
+
+	BotExited bool `json:"-"`
+}
+
+// StepControlLost is the step line's control_lost block (I-11).
+type StepControlLost struct {
+	DeadTotal         int                `json:"dead_total"`
+	DeadInHold        int                `json:"dead_in_hold"`
+	DeadSinceLastStep int                `json:"dead_since_last_step"`
+	Alive             int                `json:"alive"`
+	First             []ControlLostEvent `json:"first"`
+}
+
+// StepPing is the step line's ping block (I-11).
+type StepPing struct {
+	EveryS   float64 `json:"every_s"`
+	Sent     uint64  `json:"sent"`
+	Failed   uint64  `json:"failed"`
+	RTTP99Us int64   `json:"rtt_p99_us"`
+}
+
+// controlLostRE is the I-16 rule for a v2 hold death: after stripping a leading
+// "loadbot: ", "hold: bot N died: <rest>".
+var controlLostRE = regexp.MustCompile(`^hold: bot (\d+) died: (.*)$`)
+
+var rpcErrorRE = regexp.MustCompile(`rpc error: code = (\w+) desc = (.*)`)
+
+// IsControlLostText reports whether a v2 bot's error text is a hold death
+// (data) rather than a fatal bot error.
+func IsControlLostText(text string) bool {
+	return controlLostRE.MatchString(stripLoadbotPrefix(text))
+}
+
+// ControlLostFromV2Error derives an event from a v2 hold-death text. The v2 bot
+// exits after the error, so BotExited is set. The caller guarantees
+// IsControlLostText(text); otherwise bot is -1 and the text is the message.
+func ControlLostFromV2Error(text, phase string) ControlLostEvent {
+	ev := ControlLostEvent{Bot: -1, Cause: "stream", Code: "Unknown", Phase: phase, SinceLastOKPingS: -1, BotExited: true}
+	m := controlLostRE.FindStringSubmatch(stripLoadbotPrefix(text))
+	if m == nil {
+		ev.Message = text
+		return ev
+	}
+	if v, err := strconv.Atoi(m[1]); err == nil {
+		ev.Bot = v
+	}
+	rest := m[2]
+	if r := rpcErrorRE.FindStringSubmatch(rest); r != nil {
+		ev.Code, ev.Message = r[1], r[2]
+	} else {
+		ev.Message = rest
+	}
+	return ev
 }

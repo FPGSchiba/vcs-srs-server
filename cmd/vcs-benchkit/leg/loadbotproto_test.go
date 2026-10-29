@@ -1,6 +1,7 @@
 package leg
 
 import (
+	"errors"
 	"bufio"
 	"encoding/json"
 	"os"
@@ -215,5 +216,164 @@ func TestJoinsFromV1Error(t *testing.T) {
 		if tc.got != tc.want {
 			t.Errorf("Error = %q, want %q", tc.got, tc.want)
 		}
+	}
+}
+
+func TestParseFeatures(t *testing.T) {
+	f := ParseFeatures(fixture(t, "v3-features.json"), nil)
+	if f.Version != 3 {
+		t.Fatalf("Version = %d, want 3", f.Version)
+	}
+	for _, k := range []string{"burst", "control_lost", "gc_warn", "join_rate", "ping", "talker_pause"} {
+		if !f.Has(k) {
+			t.Errorf("Has(%q) = false", k)
+		}
+	}
+	if f.Has("nope") {
+		t.Error("Has(nope) = true")
+	}
+
+	// A v2 bot exits 2 with no stdout: v2, empty set.
+	v2 := ParseFeatures(nil, errors.New("exit status 2"))
+	if v2.Version != 2 || len(v2.Set) != 0 || v2.Has("burst") {
+		t.Fatalf("v2 = %+v", v2)
+	}
+	// Unparseable output, or a wrong type/schema, is v2 as well.
+	for _, b := range [][]byte{[]byte("garbage"), []byte(`{"type":"features","schema":"other/9","features":["burst"]}`), []byte(`{"type":"step"}`)} {
+		if g := ParseFeatures(b, nil); g.Version != 2 || len(g.Set) != 0 {
+			t.Errorf("ParseFeatures(%q) = %+v, want v2", b, g)
+		}
+	}
+	// A non-zero exit wins over parseable stdout.
+	if g := ParseFeatures(fixture(t, "v3-features.json"), errors.New("exit status 1")); g.Version != 2 {
+		t.Errorf("exit error with stdout = %+v, want v2", g)
+	}
+}
+
+func TestParseControlLostFixture(t *testing.T) {
+	dec := json.NewDecoder(strings.NewReader(string(fixture(t, "v3-control-lost.json"))))
+	dec.DisallowUnknownFields()
+	var line struct {
+		Type string `json:"type"`
+		ControlLostEvent
+	}
+	if err := dec.Decode(&line); err != nil {
+		t.Fatal(err)
+	}
+	e := line.ControlLostEvent
+	if line.Type != StepControlLostType || e.Bot != 2 || e.Name != "LDBT-0002" || e.Cause != "stream" ||
+		e.Code != "Unavailable" || e.Phase != "hold" || e.AgeS != 243.1 || e.SinceLastOKPingS != 3.2 ||
+		e.LocalAddr != "127.0.0.1:41234" || e.DeadTotal != 1 || e.AtUnixMs != 1793272383000 || e.PingFailures != 0 ||
+		e.Message != "error reading from server: connection reset by peer" || e.GUID == "" || e.Error == "" {
+		t.Fatalf("event = %+v", e)
+	}
+	if e.BotExited {
+		t.Error("BotExited must be kit-only, never from the wire")
+	}
+}
+
+func TestParseV3StepAdditions(t *testing.T) {
+	var s Step
+	if err := json.Unmarshal(fixture(t, "v3-step.json"), &s); err != nil {
+		t.Fatal(err)
+	}
+	if s.ControlLost.DeadInHold != 1 || s.ControlLost.DeadTotal != 1 || s.ControlLost.Alive != 1335 ||
+		s.ControlLost.DeadSinceLastStep != 1 || len(s.ControlLost.First) != 1 || s.ControlLost.First[0].Bot != 2 {
+		t.Fatalf("ControlLost = %+v", s.ControlLost)
+	}
+	if s.Ping.Sent != 10680 || s.Ping.EveryS != 5 || s.Ping.Failed != 0 || s.Ping.RTTP99Us != 850 {
+		t.Fatalf("Ping = %+v", s.Ping)
+	}
+	if len(s.Warnings) != 1 || s.Warnings[0] != "gc_pause_p99" {
+		t.Fatalf("Warnings = %v", s.Warnings)
+	}
+	if s.Health.GCCycles != 3 {
+		t.Fatalf("GCCycles = %d", s.Health.GCCycles)
+	}
+}
+
+func TestParseV3JoinsAdditions(t *testing.T) {
+	var r, b Joins
+	if err := json.Unmarshal(fixture(t, "v3-joins-ramp.json"), &r); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(fixture(t, "v3-joins-burst.json"), &b); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("ramp Validate: %v", err)
+	}
+	if err := b.Validate(); err != nil {
+		t.Fatalf("burst Validate: %v", err)
+	}
+	if r.Mode != "ramp" || r.Talker != "silent" || r.JoinsPerS != 4 || r.JoinP99Us != 240000 || r.HelloRetried != 3 ||
+		r.InFlightMax != 8 || r.RateLimit == nil || r.RateLimit.MaxPerS != 12 || r.RateLimit.Scale != 5000 {
+		t.Fatalf("ramp = %+v", r)
+	}
+	if b.Mode != "burst" || b.Talker != "live" || b.JoinsPerS != 9.6 || b.JoinP99Us != 7400000 || b.HelloRetried != 30 ||
+		b.InFlightMax != 16 || b.RateLimit != nil || b.JoinFailures != 30 {
+		t.Fatalf("burst = %+v", b)
+	}
+}
+
+func TestParseV3ProgressAdditions(t *testing.T) {
+	sc := bufio.NewScanner(strings.NewReader(string(fixture(t, "v3-progress.ndjson"))))
+	saw := false
+	for sc.Scan() {
+		var p Progress
+		if err := json.Unmarshal(sc.Bytes(), &p); err != nil {
+			t.Fatal(err)
+		}
+		if p.Talker != "" || p.RatePerS != 0 {
+			saw = true
+		}
+	}
+	if !saw {
+		t.Fatal("no progress line carried talker or rate_per_s")
+	}
+}
+
+func TestIsControlLostText(t *testing.T) {
+	sc := bufio.NewScanner(strings.NewReader(string(fixture(t, "control-lost-texts.txt"))))
+	n := 0
+	for sc.Scan() {
+		line := sc.Text()
+		if line == "" {
+			continue
+		}
+		want, text, ok := strings.Cut(line, "\t")
+		if !ok {
+			t.Fatalf("bad row %q", line)
+		}
+		n++
+		if got := IsControlLostText(text); got != (want == "true") {
+			t.Errorf("IsControlLostText(%q) = %v, want %s", text, got, want)
+		}
+	}
+	if n != 6 {
+		t.Fatalf("rows = %d, want 6", n)
+	}
+}
+
+func TestControlLostFromV2Error(t *testing.T) {
+	var line struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(fixture(t, "v2-hold-died.ndjson"), &line); err != nil {
+		t.Fatal(err)
+	}
+	got := ControlLostFromV2Error(line.Error, "")
+	want := ControlLostEvent{Bot: 2, Cause: "stream", Code: "Unavailable",
+		Message: "error reading from server: connection reset by peer", SinceLastOKPingS: -1, BotExited: true}
+	if got != want {
+		t.Fatalf("got %+v\nwant %+v", got, want)
+	}
+	if g := ControlLostFromV2Error("loadbot: hold: bot 55 died: update stream ended by the server", "settle"); g.Bot != 55 ||
+		g.Code != "Unknown" || g.Message != "update stream ended by the server" || g.Phase != "settle" {
+		t.Errorf("no-status text: %+v", g)
+	}
+	if g := ControlLostFromV2Error("hold: bot 7 died: resync: rpc error: code = Unauthenticated desc = session not found", "hold"); g.Bot != 7 ||
+		g.Code != "Unauthenticated" || g.Message != "session not found" {
+		t.Errorf("resync text: %+v", g)
 	}
 }

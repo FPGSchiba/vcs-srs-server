@@ -32,6 +32,7 @@ type Health struct {
 	SchedP99Us    int64    `json:"sched_p99_us"`
 	GCPauseP99Us  int64    `json:"gc_pause_p99_us"`
 	GenCPU        *float64 `json:"gen_cpu"`
+	GCCycles      uint64   `json:"gc_cycles"` // v3
 }
 
 // Step is the part of the load bot's step report the kit uses. Unknown keys
@@ -67,6 +68,11 @@ type Step struct {
 	Health     Health   `json:"health"`
 	Violations []string `json:"violations"`
 	Valid      bool     `json:"valid"`
+
+	// v3 additions (I-11); absent from a v2 step.
+	ControlLost StepControlLost `json:"control_lost"`
+	Ping        StepPing        `json:"ping"`
+	Warnings    []string        `json:"warnings"`
 }
 
 type botLine struct {
