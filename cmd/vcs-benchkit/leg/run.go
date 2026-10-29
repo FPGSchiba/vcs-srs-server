@@ -475,7 +475,11 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 		Warmup: o.Warmup, Hold: o.Hold, Confirm: o.Confirm, Overload: o.Overload, ProbeHold: time.Second,
 		Bounds: sweep.DefaultBounds,
 		OnRow: func(r Row) {
-			say(FormatRowLine(tag, r))
+			if r.Kind == "burst" {
+				say(FormatBurstLine(tag, r))
+			} else {
+				say(FormatRowLine(tag, r))
+			}
 			rep.Row(r)
 		},
 		Logf: logf,

@@ -57,8 +57,9 @@ func TestWriteStepsCSVAppendsJoinColumns(t *testing.T) {
 	}
 	want := append(append([]string{}, stepsCSVFirst42...), stepsCSVAppended...)
 	hdr := recs[0]
-	if len(hdr) != len(want) {
-		t.Fatalf("header has %d columns, want %d: %v", len(hdr), len(want), hdr)
+	// The first 60 columns are a contract; round 2 appended 27 more (checked below).
+	if len(hdr) != len(want)+27 {
+		t.Fatalf("header has %d columns, want %d: %v", len(hdr), len(want)+27, hdr)
 	}
 	for i := range want {
 		if hdr[i] != want[i] {
@@ -128,5 +129,81 @@ func TestWriteCalibrationCSVStoppedRow(t *testing.T) {
 func TestKindNameControlLost(t *testing.T) {
 	if got := kindName(sweep.ControlLostBound); got != "control-lost" {
 		t.Fatalf("kindName(ControlLostBound) = %q, want control-lost", got)
+	}
+}
+
+var stepsCSVRound2 = []string{
+	"control_lost", "control_lost_phase", "control_lost_first", "ramp_mode", "ramp_talker", "ramp_joins_per_s", "ramp_join_p99_us",
+	"ramp_hello_retried", "join_failed_chunk", "burst_talker", "burst_result", "gen_gc_cycles", "gen_warnings",
+	"ping_sent", "ping_failed", "ping_rtt_p99_us",
+	"tcp_abort_on_data", "tcp_abort_on_close", "tcp_abort_on_memory", "tcp_abort_on_timeout", "tcp_abort_on_linger", "tcp_timeouts",
+	"tcp_estab_resets", "tcp_out_rsts", "softnet_squeezed", "ramp_tcp_abort_on_data", "ramp_tcp_estab_resets",
+}
+
+func TestWriteStepsCSVAppendsRound2Columns(t *testing.T) {
+	r := v3Row()
+	r.Step.Ping = StepPing{EveryS: 5, Sent: 100, Failed: 1, RTTP99Us: 850}
+	r.Window.SoftnetSqueezed = 9
+	r.RampWindow = Window{Seconds: 12, TCPOK: true, TCPAbortOnData: 4, EstabResets: 6}
+	r.JoinFailedChunk = &ChunkRange{Had: 500, Requested: 750}
+	b := burstRow()
+	// A v2-bot row: none of the v3 cells were measured.
+	v2 := passRow()
+	v2.Joins = Joins{}
+	var buf bytes.Buffer
+	if err := WriteStepsCSV(&buf, &Outcome{Rows: []Row{r, b, v2}}, "one-big-net"); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := csv.NewReader(&buf).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := append(append(append([]string{}, stepsCSVFirst42...), stepsCSVAppended...), stepsCSVRound2...)
+	if len(want) != 42+18+27 {
+		t.Fatalf("test table has %d columns", len(want))
+	}
+	hdr := recs[0]
+	if len(hdr) != len(want) {
+		t.Fatalf("header has %d columns, want %d", len(hdr), len(want))
+	}
+	for i := range want {
+		if hdr[i] != want[i] {
+			t.Errorf("column %d = %q, want %q", i, hdr[i], want[i])
+		}
+	}
+	col := func(rec []string, name string) string {
+		for i, h := range hdr {
+			if h == name {
+				return rec[i]
+			}
+		}
+		t.Fatalf("no column %q", name)
+		return ""
+	}
+	for name, w := range map[string]string{
+		"control_lost": "2", "control_lost_phase": "hold", "control_lost_first": "bot 7 Unavailable: connection reset by peer",
+		"ramp_mode": "ramp", "ramp_talker": "silent", "ramp_joins_per_s": "9.6", "ramp_join_p99_us": "7400000", "ramp_hello_retried": "30",
+		"join_failed_chunk": "500->750", "burst_talker": "", "burst_result": "",
+		"gen_gc_cycles": "12", "gen_warnings": "gc_pause_p99", "ping_sent": "100", "ping_failed": "1", "ping_rtt_p99_us": "850",
+		"tcp_abort_on_data": "3", "tcp_abort_on_close": "0", "tcp_estab_resets": "5", "tcp_out_rsts": "0", "softnet_squeezed": "9",
+		"ramp_tcp_abort_on_data": "4", "ramp_tcp_estab_resets": "6",
+	} {
+		if got := col(recs[1], name); got != w {
+			t.Errorf("v3 row %s = %q, want %q", name, got, w)
+		}
+	}
+	if col(recs[2], "burst_talker") != "live" || col(recs[2], "burst_result") != "join failures" || col(recs[2], "ramp_mode") != "burst" {
+		t.Errorf("burst row: %v", recs[2][len(recs[2])-27:])
+	}
+	// A v2 row: every round-2 cell the bot or the kernel did not give is empty.
+	for _, name := range []string{"control_lost_phase", "control_lost_first", "ramp_mode", "ramp_talker", "ramp_joins_per_s", "ramp_join_p99_us",
+		"ramp_hello_retried", "join_failed_chunk", "burst_talker", "gen_warnings", "ping_sent", "ping_failed", "ping_rtt_p99_us",
+		"tcp_abort_on_data", "tcp_estab_resets", "ramp_tcp_abort_on_data", "ramp_tcp_estab_resets"} {
+		if got := col(recs[3], name); got != "" {
+			t.Errorf("v2 row %s = %q, want an empty cell", name, got)
+		}
+	}
+	if got := col(recs[3], "control_lost"); got != "0" {
+		t.Errorf("control_lost = %q, want 0", got)
 	}
 }
