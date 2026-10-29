@@ -17,6 +17,9 @@
 # - Only the S arm and the one-big-net scenario exist in v1. Seq, D2 and
 #   org-op arrive with S5/C2; there is no publish input or job until then.
 # - This is v1 of three (S2/S4/S5); later inputs and jobs arrive with them.
+# - R2 (W6 fix 2): the leg keeps the server log as server-<k>.log.gz in the
+#   leg artifact and prints diagnostics itself. The Diagnostics (failed leg)
+#   step is only a backstop for a leg that dies before the kit can print them.
 # - Inputs never reach run: text directly; they go through env:.
 name: Bench
 on:
@@ -370,6 +373,30 @@ jobs:
             --server-sha "$(jq -r .server_sha bin/build.json)" \
             --client-sha "$(jq -r .client_sha bin/build.json)" \
             --q6 "A: server 2 vCPU, bots 2 vCPU (user, 2026-10-28)"
+
+      # Backstop for a leg that failed before or outside the kit's own
+      # diagnostics (R2): tails of the bot, calibration and reflector logs, the
+      # newest kept server log and the manifest, each folded in a group. Every
+      # read tolerates a missing file.
+      - name: Diagnostics (failed leg)
+        if: ${{ failure() }}
+        env:
+          REPEAT: ${{ matrix.repeat }}
+          SCENARIO: ${{ matrix.scenario }}
+        run: |
+          dir="results/${REPEAT}-${SCENARIO}"
+          for f in "$dir"/loadbot-*.log "$dir"/calibrate.log "$dir"/reflect.log; do
+            echo "::group::$f (last 50 lines)"
+            tail -n 50 "$f" 2>&1 || true
+            echo "::endgroup::"
+          done
+          srv="$(ls "$dir"/server-*.log.gz 2>/dev/null | sort -V | tail -n 1 || true)"
+          echo "::group::${srv:-server log} (last 200 lines)"
+          if [ -n "$srv" ]; then zcat "$srv" 2>&1 | tail -n 200 || true; else echo "no server log kept"; fi
+          echo "::endgroup::"
+          echo "::group::$dir/manifest.json"
+          cat "$dir/manifest.json" 2>&1 || true
+          echo "::endgroup::"
 
       # A failed leg still writes steps.csv, calibration.csv and the manifest
       # for inspection, so the summary and the upload run unless cancelled.
