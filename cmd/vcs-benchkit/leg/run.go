@@ -233,6 +233,17 @@ type Manifest struct {
 
 	Bounds sweep.Bounds `json:"bounds"`
 
+	// BotFeatures is what `vcs-loadbot features` listed ("v2" with none for a
+	// bot without the subcommand); BotFlags the extra flags the kit then passed
+	// to `run`; GeneratorEnv the variables added to each generator process, and
+	// ServerEnv the ones put in the kit's own environment for the server to
+	// inherit (grpc transport log only; the server binary is untouched).
+	BotVersion   int                 `json:"bot_version,omitempty"`
+	BotFeatures  []string            `json:"bot_features"`
+	BotFlags     []string            `json:"bot_flags,omitempty"`
+	GeneratorEnv map[string][]string `json:"generator_env,omitempty"`
+	ServerEnv    []string            `json:"server_env,omitempty"`
+
 	EnvProbe json.RawMessage `json:"env_probe,omitempty"`
 
 	Result       string   `json:"result,omitempty"`
@@ -372,12 +383,19 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	}
 	m.PortRange, m.UlimitN = portRange, ulimitN
 
+	// 1b. What this load bot can do (v2 has no `features`): it decides which v3
+	// flags every later run passes. Probed once per leg, before calibration.
+	feats := ProbeFeatures(o.LoadbotBin, ProbeTimeout)
+	m.BotVersion, m.BotFeatures, m.BotFlags = feats.Version, feats.Names(), BotRunArgs(feats)
+	m.GeneratorEnv = map[string][]string{"run": GeneratorEnv("run"), "calibrate": GeneratorEnv("calibrate"), "reflect": GeneratorEnv("reflect")}
+	logf("load bot v%d, features %v", feats.Version, feats.Names())
+
 	// 2. Calibration: the generator's receive side on its own.
 	legStart := time.Now()
 	logf("calibration: reflector on %s, generator on %s", o.ServerSet, o.GenSet)
 	cal, err = RunCalibration(ctx, CalConfig{
 		LoadbotBin: o.LoadbotBin, ServerSet: o.ServerSet, GenSet: o.GenSet, Seed: o.Seed,
-		Steps: o.CalSteps, Hold: o.CalHold, Senders: len(serverCPUs), StderrDir: o.OutDir,
+		Steps: o.CalSteps, Hold: o.CalHold, Senders: len(serverCPUs), StderrDir: o.OutDir, Features: feats,
 		OnLine: func(kind string, raw []byte) {
 			switch kind {
 			case "calibration":
@@ -427,9 +445,19 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 		return fail(fmt.Errorf("scratch dir: %w", err))
 	}
 	defer os.RemoveAll(scratch)
+	// The server inherits the kit's environment (topology passes os.Environ()), so
+	// its grpc transport log says why it closes a connection. Set only now: the
+	// reflector, which speaks no gRPC, has already run.
+	for _, kv := range ServerEnv() {
+		k, v, _ := strings.Cut(kv, "=")
+		if err := os.Setenv(k, v); err != nil {
+			return fail(fmt.Errorf("set %s: %w", k, err))
+		}
+	}
+	m.ServerEnv = ServerEnv()
 	env := &hostEnv{
 		serverBin: o.ServerBin, loadbotBin: o.LoadbotBin, outDir: o.OutDir, scratchDir: scratch, scenario: o.Scenario, seed: o.Seed,
-		serverPin: serverPin, serverGOMAXPROCS: 1, serverCPUs: serverCPUs, genSet: o.GenSet, genNCPU: len(genCPUs),
+		serverPin: serverPin, serverGOMAXPROCS: 1, serverCPUs: serverCPUs, genSet: o.GenSet, genNCPU: len(genCPUs), features: feats,
 		onProgress: func(p Progress) { say(FormatRampProgress(tag, p)) },
 	}
 	d := NewDriver(env, Config{

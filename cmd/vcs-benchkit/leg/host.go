@@ -29,6 +29,9 @@ type hostEnv struct {
 	serverCPUs       []int // the whole server set, for softirq
 	genSet           string
 	genNCPU          int
+	// features is what the load bot's probe reported; it decides which v3 flags
+	// the kit passes (a v2 bot rejects unknown flags) and gates Burst.
+	features Features
 	// onProgress receives the load bot's progress lines; nil drops them.
 	onProgress func(Progress)
 
@@ -82,17 +85,17 @@ func (e *hostEnv) Start(ctx context.Context) (System, error) {
 		return nil, err
 	}
 	control, voiceAddr := top.Addr(topology.Control), top.Addr(topology.Standalone)
-	name, argv, env, err := PinCommand(runtime.GOOS, e.loadbotBin, []string{
+	name, argv, pinEnv, err := PinCommand(runtime.GOOS, e.loadbotBin, append([]string{
 		"run", "--scenario", e.scenario, "--arm", "S",
 		"--control", control, "--voice", voiceAddr, "--allow", control + "," + voiceAddr,
 		"--passwords", pw, "--unit", "LDBT", "--seed", strconv.FormatInt(e.seed, 10),
-	}, e.genSet)
+	}, BotRunArgs(e.features)...), e.genSet)
 	if err != nil {
 		_ = top.Stop()
 		return nil, err
 	}
 	cmd := exec.Command(name, argv...)
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = processEnv(os.Environ(), pinEnv, "run")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		_ = top.Stop()
@@ -116,7 +119,7 @@ func (e *hostEnv) Start(ctx context.Context) (System, error) {
 	}
 	s := &hostSystem{
 		env: e, top: top, cmd: cmd, stdin: stdin, logf: logf,
-		bot:  NewBot(stdin, stdout, BotHooks{OnProgress: e.onProgress}),
+		bot:  NewBot(stdin, stdout, BotHooks{OnProgress: e.onProgress, Features: e.features}),
 		done: make(chan struct{}),
 		sampler: &procSampler{
 			serverPID: top.PIDs()[topology.Standalone], genPID: cmd.Process.Pid,

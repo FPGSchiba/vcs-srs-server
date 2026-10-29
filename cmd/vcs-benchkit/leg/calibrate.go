@@ -28,6 +28,9 @@ type CalConfig struct {
 	// Senders is the reflector's send goroutines on its one socket: one per
 	// CPU of the server set, and at least 2.
 	Senders int
+	// Features is the load bot's probe result. Version 0 (not probed) passes no
+	// --bounds, so the bot's own defaults apply.
+	Features Features
 	// StderrDir receives reflect.log and calibrate.log; "" discards them.
 	StderrDir string
 	// OnLine, when set, receives each stdout line of calibrate as it is read: its
@@ -36,12 +39,12 @@ type CalConfig struct {
 }
 
 func (c CalConfig) command(sub string, args []string, set string) (*exec.Cmd, error) {
-	name, argv, env, err := PinCommand(runtime.GOOS, c.LoadbotBin, append([]string{sub}, args...), set)
+	name, argv, pinEnv, err := PinCommand(runtime.GOOS, c.LoadbotBin, append([]string{sub}, args...), set)
 	if err != nil {
 		return nil, err
 	}
 	cmd := exec.Command(name, argv...)
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = processEnv(os.Environ(), pinEnv, sub)
 	return cmd, nil
 }
 
@@ -95,11 +98,15 @@ func RunCalibration(ctx context.Context, c CalConfig) (*Calibration, error) {
 		return nil, fmt.Errorf("reflector: %w", err)
 	}
 
-	cal, err := c.command("calibrate", []string{
+	calArgs := []string{
 		"--reflector", addr, "--allow", addr,
 		"--seed", strconv.FormatInt(c.Seed, 10),
 		"--steps", c.Steps, "--hold", strconv.FormatFloat(c.Hold.Seconds(), 'f', -1, 64),
-	}, c.GenSet)
+	}
+	if c.Features.Version != 0 {
+		calArgs = append(calArgs, "--bounds", BotBoundsJSON(c.Features))
+	}
+	cal, err := c.command("calibrate", calArgs, c.GenSet)
 	if err != nil {
 		return nil, err
 	}

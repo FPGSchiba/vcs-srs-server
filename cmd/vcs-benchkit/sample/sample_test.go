@@ -220,3 +220,91 @@ func TestParseSNMPUdp(t *testing.T) {
 		}
 	}
 }
+
+const netstatFixture = `TcpExt: SyncookiesSent TCPTimeouts TCPAbortOnData TCPAbortOnClose TCPAbortOnMemory TCPAbortOnTimeout TCPAbortOnLinger
+TcpExt: 0 7 11 12 13 14 15
+IpExt: InNoRoutes InTruncatedPkts
+IpExt: 1 2
+`
+
+func TestParseNetstatTcpExt(t *testing.T) {
+	got, err := ParseNetstatTcpExt([]byte(netstatFixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := TCPCounters{Timeouts: 7, AbortOnData: 11, AbortOnClose: 12, AbortOnMemory: 13, AbortOnTimeout: 14, AbortOnLinger: 15}
+	if got.Ext() != want.Ext() || len(got.Missing) != 0 {
+		t.Errorf("got %+v, want %+v with nothing missing", got, want)
+	}
+
+	// A kernel without TCPAbortOnLinger: the key reads 0 and is listed.
+	short := "TcpExt: TCPTimeouts TCPAbortOnData TCPAbortOnClose TCPAbortOnMemory TCPAbortOnTimeout\nTcpExt: 1 2 3 4 5\n"
+	got, err = ParseNetstatTcpExt([]byte(short))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AbortOnLinger != 0 || len(got.Missing) != 1 || got.Missing[0] != "TCPAbortOnLinger" || got.AbortOnTimeout != 5 {
+		t.Errorf("got %+v", got)
+	}
+
+	for name, bad := range map[string]string{
+		"empty":        "",
+		"no TcpExt":    "IpExt: A\nIpExt: 1\n",
+		"header only":  "TcpExt: TCPTimeouts\n",
+		"misaligned":   "TcpExt: TCPTimeouts TCPAbortOnData\nTcpExt: 1\n",
+		"not a number": "TcpExt: TCPTimeouts\nTcpExt: x\n",
+	} {
+		if _, err := ParseNetstatTcpExt([]byte(bad)); err == nil {
+			t.Errorf("%s: nil error, want one", name)
+		}
+	}
+}
+
+const snmpTcpFixture = `Ip: Forwarding DefaultTTL
+Ip: 1 64
+Tcp: RtoAlgorithm ActiveOpens PassiveOpens AttemptFails EstabResets CurrEstab InSegs OutSegs RetransSegs InErrs OutRsts
+Tcp: 1 100 200 3 9 50 1000 2000 4 0 21
+Udp: InDatagrams NoPorts
+Udp: 1 2
+`
+
+func TestParseSNMPTcp(t *testing.T) {
+	got, err := ParseSNMPTcp([]byte(snmpTcpFixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.EstabResets != 9 || got.OutRsts != 21 || got.AttemptFails != 3 {
+		t.Errorf("got %+v", got)
+	}
+	for name, bad := range map[string]string{
+		"empty":          "",
+		"no Tcp lines":   "Udp: A\nUdp: 1\n",
+		"missing column": "Tcp: EstabResets OutRsts\nTcp: 1 2\n",
+		"misaligned":     "Tcp: EstabResets OutRsts AttemptFails\nTcp: 1 2\n",
+	} {
+		if _, err := ParseSNMPTcp([]byte(bad)); err == nil {
+			t.Errorf("%s: nil error, want one", name)
+		}
+	}
+}
+
+func TestParseSoftnetPerCPU(t *testing.T) {
+	got, err := ParseSoftnetPerCPU([]byte(softnetFixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("rows = %d, want 2 (%+v)", len(got), got)
+	}
+	if got[0].Dropped != 0x10 || got[1].Dropped != 0xff {
+		t.Errorf("dropped = %d, %d", got[0].Dropped, got[1].Dropped)
+	}
+	if got[0].TimeSqueeze != 0x2 {
+		t.Errorf("time_squeeze[0] = %d, want 2", got[0].TimeSqueeze)
+	}
+	for _, bad := range []string{"", "\n", "0000a1b2 00\n", "0000a1b2 00 zz\n"} {
+		if _, err := ParseSoftnetPerCPU([]byte(bad)); err == nil {
+			t.Errorf("ParseSoftnetPerCPU(%q) = nil error, want one", bad)
+		}
+	}
+}

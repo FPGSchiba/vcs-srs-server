@@ -44,10 +44,30 @@ type Window struct {
 	SoftnetDropped, UDPRcvbufErrors, UDPSndbufErrors uint64
 	NetOK                                            bool
 	NetErr                                           string
+	// The kernel TCP abort, timeout and reset counters, and softnet's
+	// time_squeeze, over the window (W6 fix 2): they attribute a lost control
+	// connection to a side. They are informational and are NEVER classified.
+	// Only meaningful when TCPOK; an unread file is TCPErr, shown as unread and
+	// never folded into Err (it must not invalidate a step). TCPMissing lists
+	// the TcpExt keys this kernel does not print (read as 0).
+	TCPAbortOnData, TCPAbortOnClose, TCPAbortOnMemory, TCPAbortOnTimeout, TCPAbortOnLinger, TCPTimeouts uint64
+	EstabResets, OutRsts                                                                                uint64
+	TCPOK                                                                                               bool
+	TCPErr                                                                                              string
+	TCPMissing                                                                                          []string
+	SoftnetSqueezed                                                                                     uint64
+	// SoftnetCPUs is the per-CPU softnet dropped/squeezed increase, in CPU order.
+	SoftnetCPUs []CPUSoftnet
 	// Err is set when a sampler failed (a missing /proc file, ss not
 	// installed, the server socket absent from ss). The step is then invalid:
 	// a zero drop count that was never read is not a measurement.
 	Err string
+}
+
+// CPUSoftnet is one CPU's softnet_stat increase over a window.
+type CPUSoftnet struct {
+	CPU               int
+	Dropped, Squeezed uint64
 }
 
 // System is one running server plus its load bot.
@@ -111,7 +131,7 @@ type Config struct {
 	// loses control (0 = one set_n per step). RateMax and RateScale are the bot's
 	// join-rate rule min(RateMax, RateScale/alive) (0 terms are left out; both 0
 	// = the constant JoinRate), which the time guard prices a ramp with.
-	RampChunk           int
+	RampChunk          int
 	RateMax, RateScale float64
 	// BurstEnabled runs the join-burst phase after the sweep; BurstAdd (150) and
 	// BurstInFlight (16) shape one burst.
@@ -198,9 +218,9 @@ type Driver struct {
 	rebuildAt int
 	// rebuildWhy names what killed the system, for the rebuild note.
 	rebuildWhy string
-	rate      float64
-	start     time.Time
-	out       Outcome
+	rate       float64
+	start      time.Time
+	out        Outcome
 }
 
 // NewDriver fills the defaults a zero Config leaves open.

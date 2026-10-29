@@ -235,3 +235,143 @@ func ParseSNMPUdp(b []byte) (UDPCounters, error) {
 	}
 	return UDPCounters{}, fmt.Errorf("snmp: no Udp: header and value lines")
 }
+
+// TCPCounters are the kernel TCP counters the bench reports next to a
+// control-plane loss: the TcpExt abort and timeout counters from
+// /proc/net/netstat and the Tcp: reset counters from /proc/net/snmp. They are
+// informational and never classify a step. Missing lists the TcpExt keys the
+// kernel did not print (read as 0, never as a measured zero).
+type TCPCounters struct {
+	AbortOnData, AbortOnClose, AbortOnMemory, AbortOnTimeout, AbortOnLinger, Timeouts uint64
+	EstabResets, OutRsts, AttemptFails                                                uint64
+	Missing                                                                           []string
+}
+
+// Ext returns the six TcpExt values in a fixed order, for comparisons.
+func (c TCPCounters) Ext() [6]uint64 {
+	return [6]uint64{c.AbortOnData, c.AbortOnClose, c.AbortOnMemory, c.AbortOnTimeout, c.AbortOnLinger, c.Timeouts}
+}
+
+// headerValueRow finds the first "<proto>:" header line and the value line
+// after it and returns them as column name -> value text.
+func headerValueRow(b []byte, proto string) (map[string]string, error) {
+	var header []string
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 0 || f[0] != proto {
+			continue
+		}
+		if header == nil {
+			header = f[1:]
+			continue
+		}
+		vals := f[1:]
+		if len(vals) != len(header) {
+			return nil, fmt.Errorf("%s %d values for %d columns", proto, len(vals), len(header))
+		}
+		row := make(map[string]string, len(header))
+		for i, name := range header {
+			row[name] = vals[i]
+		}
+		return row, nil
+	}
+	return nil, fmt.Errorf("no %s header and value lines", proto)
+}
+
+// ParseNetstatTcpExt reads the "TcpExt:" header/value pair of /proc/net/netstat.
+// A TcpExt key a kernel does not print is 0 and listed in Missing; a row that
+// does not line up with its header, or a non-numeric value, is an error.
+func ParseNetstatTcpExt(b []byte) (TCPCounters, error) {
+	row, err := headerValueRow(b, "TcpExt:")
+	if err != nil {
+		return TCPCounters{}, fmt.Errorf("netstat: %w", err)
+	}
+	var out TCPCounters
+	for _, k := range []struct {
+		name string
+		dst  *uint64
+	}{
+		{"TCPAbortOnData", &out.AbortOnData},
+		{"TCPAbortOnClose", &out.AbortOnClose},
+		{"TCPAbortOnMemory", &out.AbortOnMemory},
+		{"TCPAbortOnTimeout", &out.AbortOnTimeout},
+		{"TCPAbortOnLinger", &out.AbortOnLinger},
+		{"TCPTimeouts", &out.Timeouts},
+	} {
+		v, ok := row[k.name]
+		if !ok {
+			out.Missing = append(out.Missing, k.name)
+			continue
+		}
+		n, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			return TCPCounters{}, fmt.Errorf("netstat TcpExt %s: %w", k.name, err)
+		}
+		*k.dst = n
+	}
+	return out, nil
+}
+
+// ParseSNMPTcp reads EstabResets, OutRsts and AttemptFails from the "Tcp:"
+// header/value pair of /proc/net/snmp. A missing column is an error.
+func ParseSNMPTcp(b []byte) (TCPCounters, error) {
+	row, err := headerValueRow(b, "Tcp:")
+	if err != nil {
+		return TCPCounters{}, fmt.Errorf("snmp: %w", err)
+	}
+	var out TCPCounters
+	for _, k := range []struct {
+		name string
+		dst  *uint64
+	}{
+		{"EstabResets", &out.EstabResets},
+		{"OutRsts", &out.OutRsts},
+		{"AttemptFails", &out.AttemptFails},
+	} {
+		v, ok := row[k.name]
+		if !ok {
+			return TCPCounters{}, fmt.Errorf("snmp Tcp: no %s column", k.name)
+		}
+		n, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			return TCPCounters{}, fmt.Errorf("snmp Tcp %s: %w", k.name, err)
+		}
+		*k.dst = n
+	}
+	return out, nil
+}
+
+// Softnet is one CPU's row of /proc/net/softnet_stat (hex columns): packets
+// dropped on a full backlog (column 2) and the net_rx_action budget or time
+// squeezes (column 3). Both are 32-bit kernel counters: diff with DropDelta.
+type Softnet struct {
+	Dropped, TimeSqueeze uint64
+}
+
+// ParseSoftnetPerCPU returns one Softnet per row of /proc/net/softnet_stat, in
+// CPU order. A row with fewer than 3 columns or a non-hex value is an error.
+func ParseSoftnetPerCPU(b []byte) ([]Softnet, error) {
+	var out []Softnet
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 0 {
+			continue
+		}
+		if len(f) < 3 {
+			return nil, fmt.Errorf("softnet_stat: row has %d columns, need at least 3", len(f))
+		}
+		d, err := strconv.ParseUint(f[1], 16, 64)
+		if err != nil {
+			return nil, fmt.Errorf("softnet_stat: dropped column: %w", err)
+		}
+		sq, err := strconv.ParseUint(f[2], 16, 64)
+		if err != nil {
+			return nil, fmt.Errorf("softnet_stat: time_squeeze column: %w", err)
+		}
+		out = append(out, Softnet{Dropped: d, TimeSqueeze: sq})
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("softnet_stat: no cpu rows")
+	}
+	return out, nil
+}
