@@ -45,8 +45,11 @@ type Window struct {
 	NetOK                                            bool
 	NetErr                                           string
 	// The kernel TCP abort, timeout and reset counters, and softnet's
-	// time_squeeze, over the window (W6 fix 2): they attribute a lost control
-	// connection to a side. They are informational and are NEVER classified.
+	// time_squeeze, over the window (W6 fix 2): they classify the KIND of abort
+	// (data, close, memory, timeout, linger). They are host-wide and the bots
+	// share the host with the server, so they do not say which side sent a reset;
+	// that attribution comes from the grpc transport logs. They are
+	// informational and are NEVER classified.
 	// Only meaningful when TCPOK; an unread file is TCPErr, shown as unread and
 	// never folded into Err (it must not invalidate a step). TCPMissing lists
 	// the TcpExt keys this kernel does not print (read as 0).

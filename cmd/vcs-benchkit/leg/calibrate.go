@@ -98,14 +98,7 @@ func RunCalibration(ctx context.Context, c CalConfig) (*Calibration, error) {
 		return nil, fmt.Errorf("reflector: %w", err)
 	}
 
-	calArgs := []string{
-		"--reflector", addr, "--allow", addr,
-		"--seed", strconv.FormatInt(c.Seed, 10),
-		"--steps", c.Steps, "--hold", strconv.FormatFloat(c.Hold.Seconds(), 'f', -1, 64),
-	}
-	if c.Features.Version != 0 {
-		calArgs = append(calArgs, "--bounds", BotBoundsJSON(c.Features))
-	}
+	calArgs := calibrateArgs(c, addr)
 	cal, err := c.command("calibrate", calArgs, c.GenSet)
 	if err != nil {
 		return nil, err
@@ -307,4 +300,19 @@ func readReady(ctx context.Context, rd *bufio.Reader, timeout time.Duration) (st
 	case <-ctx.Done():
 		return "", ctx.Err()
 	}
+}
+
+// calibrateArgs is the argv of `vcs-loadbot calibrate`. Any probed bot (v2 or
+// v3) gets --bounds, as both define it on calibrate; an unprobed one (Version 0)
+// gets none, so its own defaults apply.
+func calibrateArgs(c CalConfig, addr string) []string {
+	a := []string{
+		"--reflector", addr, "--allow", addr,
+		"--seed", strconv.FormatInt(c.Seed, 10),
+		"--steps", c.Steps, "--hold", strconv.FormatFloat(c.Hold.Seconds(), 'f', -1, 64),
+	}
+	if c.Features.Version != 0 {
+		a = append(a, "--bounds", BotBoundsJSON(c.Features))
+	}
+	return a
 }

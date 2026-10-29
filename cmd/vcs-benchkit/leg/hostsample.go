@@ -126,7 +126,21 @@ func (w *Window) tcpDeltas(first, last snapshot) {
 	w.TCPTimeouts = counterDelta(f.Timeouts, l.Timeouts)
 	w.EstabResets = counterDelta(f.EstabResets, l.EstabResets)
 	w.OutRsts = counterDelta(f.OutRsts, l.OutRsts)
-	w.TCPMissing = append([]string(nil), first.TCP.Missing...)
+	w.TCPMissing = mergeMissing(first.TCP.Missing, last.TCP.Missing)
+}
+
+// mergeMissing is the union of the two snapshots' missing TcpExt keys, in order
+// of first appearance; nil when both are empty.
+func mergeMissing(a, b []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, k := range append(append([]string(nil), a...), b...) {
+		if !seen[k] {
+			seen[k] = true
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // softnetPerCPU fills the per-CPU softnet increases. Both counters are 32-bit
@@ -229,10 +243,18 @@ func (p *procSampler) takeNet(s *snapshot) (bool, string) {
 // into s. A failure is TCPErr and never an error of the snapshot: these
 // counters attribute a lost control connection, they never decide a step.
 func (p *procSampler) takeTCP(s *snapshot) {
-	if b, err := p.read("/proc/net/softnet_stat"); err == nil {
-		s.SoftnetPerCPU, _ = sample.ParseSoftnetPerCPU(b)
+	// A softnet_stat that cannot be read or parsed is unread, never a measured
+	// zero of SoftnetSqueezed: it fails TCPOK like the other files.
+	b, err := p.read("/proc/net/softnet_stat")
+	if err != nil {
+		s.TCPErr = "/proc/net/softnet_stat: " + err.Error()
+		return
 	}
-	b, err := p.read("/proc/net/netstat")
+	if s.SoftnetPerCPU, err = sample.ParseSoftnetPerCPU(b); err != nil {
+		s.TCPErr = err.Error()
+		return
+	}
+	b, err = p.read("/proc/net/netstat")
 	if err != nil {
 		s.TCPErr = "/proc/net/netstat: " + err.Error()
 		return

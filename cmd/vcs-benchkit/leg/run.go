@@ -388,7 +388,11 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	feats := ProbeFeatures(o.LoadbotBin, ProbeTimeout)
 	m.BotVersion, m.BotFeatures, m.BotFlags = feats.Version, feats.Names(), BotRunArgs(feats)
 	m.GeneratorEnv = map[string][]string{"run": GeneratorEnv("run"), "calibrate": GeneratorEnv("calibrate"), "reflect": GeneratorEnv("reflect")}
-	logf("load bot v%d, features %v", feats.Version, feats.Names())
+	if feats.Version == 2 {
+		logf("load bot v2 (no features subcommand or probe failed)")
+	} else {
+		logf("load bot v%d, features %v", feats.Version, feats.Names())
+	}
 
 	// 2. Calibration: the generator's receive side on its own.
 	legStart := time.Now()

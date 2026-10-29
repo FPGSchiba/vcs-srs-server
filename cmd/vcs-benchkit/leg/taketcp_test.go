@@ -3,6 +3,8 @@ package leg
 import (
 	"errors"
 	"testing"
+
+	"github.com/FPGSchiba/vcs-srs-server/cmd/vcs-benchkit/sample"
 )
 
 func fakeProc(files map[string]string) func(string) ([]byte, error) {
@@ -40,5 +42,30 @@ func TestTakeTCPUnreadIsNotZero(t *testing.T) {
 	p.takeTCP(&s)
 	if s.TCPOK || s.TCPErr == "" {
 		t.Errorf("TCPOK=%v err=%q, want unread with a reason", s.TCPOK, s.TCPErr)
+	}
+}
+
+// An unreadable softnet_stat is flagged, not read as zero squeezes: TCPOK must
+// not claim a measured zero for a value that was never read.
+func TestTakeTCPSoftnetUnreadIsFlagged(t *testing.T) {
+	p := &procSampler{read: fakeProc(map[string]string{
+		"/proc/net/netstat": "TcpExt: TCPTimeouts\nTcpExt: 1\n",
+		"/proc/net/snmp":    "Tcp: AttemptFails EstabResets OutRsts\nTcp: 9 8 7\n",
+	})}
+	var s snapshot
+	p.takeTCP(&s)
+	if s.TCPOK || s.TCPErr == "" {
+		t.Errorf("TCPOK=%v err=%q, want unread with a reason naming softnet_stat", s.TCPOK, s.TCPErr)
+	}
+}
+
+// Missing keys are merged from both snapshots, not taken from the first only.
+func TestTCPMissingMergedFromBothSnapshots(t *testing.T) {
+	a := snapshot{TCPOK: true, TCP: sample.TCPCounters{Missing: []string{"TCPAbortOnLinger"}}}
+	b := snapshot{TCPOK: true, TCP: sample.TCPCounters{Missing: []string{"TCPAbortOnLinger", "TCPTimeouts"}}}
+	var w Window
+	w.tcpDeltas(a, b)
+	if len(w.TCPMissing) != 2 || w.TCPMissing[0] != "TCPAbortOnLinger" || w.TCPMissing[1] != "TCPTimeouts" {
+		t.Errorf("TCPMissing = %v", w.TCPMissing)
 	}
 }
