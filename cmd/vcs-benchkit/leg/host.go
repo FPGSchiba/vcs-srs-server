@@ -39,6 +39,9 @@ type hostEnv struct {
 	bot *BotParams
 	// onProgress receives the load bot's progress lines; nil drops them.
 	onProgress func(Progress)
+	// onControlLost receives each control-lost event as the bot reports it;
+	// nil drops it (the driver still reads them through ControlLost).
+	onControlLost func(ControlLostEvent)
 	// logf receives the heartbeat lines (nil = no heartbeat); heartbeatEvery
 	// overrides the 15 s period (tests).
 	logf           func(format string, a ...any)
@@ -162,7 +165,7 @@ func (e *hostEnv) Start(ctx context.Context) (System, error) {
 	}
 	s := &hostSystem{
 		k: k, env: e, top: top, cmd: cmd, stdin: stdin, logf: logf,
-		bot:  NewBot(stdin, stdout, BotHooks{OnProgress: e.onProgress, Features: e.features}),
+		bot:  NewBot(stdin, stdout, BotHooks{OnProgress: e.onProgress, OnControlLost: e.onControlLost, Features: e.features}),
 		done: make(chan struct{}),
 		sampler: &procSampler{
 			serverPID: top.PIDs()[topology.Standalone], genPID: cmd.Process.Pid,

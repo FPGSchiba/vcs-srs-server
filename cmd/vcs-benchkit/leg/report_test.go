@@ -331,3 +331,17 @@ func TestFormatCapacityLowerBound(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestFormatControlLostLine(t *testing.T) {
+	ev := ControlLostEvent{Bot: 2, Cause: "stream", Code: "Unavailable", Message: "error reading from server: connection reset by peer",
+		Phase: "hold", AgeS: 243.1, SinceLastOKPingS: 3.2, LocalAddr: "127.0.0.1:41234", DeadTotal: 1}
+	want := `[leg 2 S one-big-net] control_lost bot=2 cause=stream code=Unavailable phase=hold age_s=243.1 since_last_ok_ping_s=3.2 local_addr=127.0.0.1:41234 dead_total=1 message="error reading from server: connection reset by peer"`
+	if got := FormatControlLostLine(testTag, ev); got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+	// A v2 hold death carries no ping data or address.
+	v2 := ControlLostFromV2Error("hold: bot 55 died: update stream ended by the server", "settle")
+	if got := FormatControlLostLine(testTag, v2); !strings.Contains(got, "bot=55 cause=stream code=Unknown phase=settle") || !strings.Contains(got, "since_last_ok_ping_s=- local_addr=- dead_total=-") {
+		t.Errorf("v2 line = %s", got)
+	}
+}

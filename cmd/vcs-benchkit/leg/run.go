@@ -494,8 +494,9 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	env := &hostEnv{
 		serverBin: o.ServerBin, loadbotBin: o.LoadbotBin, outDir: o.OutDir, scratchDir: scratch, scenario: o.Scenario, seed: o.Seed,
 		serverPin: serverPin, serverGOMAXPROCS: 1, serverCPUs: serverCPUs, genSet: o.GenSet, genNCPU: len(genCPUs), features: feats, bot: &o.Bot,
-		onProgress: func(p Progress) { say(FormatRampProgress(tag, p)) },
-		logf:       logf,
+		onProgress:    func(p Progress) { say(FormatRampProgress(tag, p)) },
+		onControlLost: func(ev ControlLostEvent) { say(FormatControlLostLine(tag, ev)) },
+		logf:          logf,
 	}
 	rep.src = env
 	// The time guard prices a ramp with the bot's rate rule only when the bot has it.

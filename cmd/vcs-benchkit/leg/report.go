@@ -364,3 +364,25 @@ func WriteResultsMarkdown(w io.Writer, in ResultsInput) error {
 	p("_%s_\n", Label)
 	return nil
 }
+
+// FormatControlLostLine is the log line printed the moment the load bot reports
+// a lost control connection, so the Actions log shows each death live and in
+// order, not only in the step's row. A v2 hold death has no age, ping data,
+// address or running total: those print as "-".
+func FormatControlLostLine(tag string, ev ControlLostEvent) string {
+	age, ping, addr, total := dash, dash, dash, dash
+	if !ev.BotExited {
+		age = strconv.FormatFloat(ev.AgeS, 'f', 1, 64)
+	}
+	if ev.SinceLastOKPingS >= 0 && !ev.BotExited {
+		ping = strconv.FormatFloat(ev.SinceLastOKPingS, 'f', 1, 64)
+	}
+	if ev.LocalAddr != "" {
+		addr = ev.LocalAddr
+	}
+	if ev.DeadTotal > 0 {
+		total = strconv.Itoa(ev.DeadTotal)
+	}
+	return fmt.Sprintf("%s control_lost bot=%d cause=%s code=%s phase=%s age_s=%s since_last_ok_ping_s=%s local_addr=%s dead_total=%s message=%q",
+		tag, ev.Bot, ev.Cause, ev.Code, ev.Phase, age, ping, addr, total, ev.Message)
+}
