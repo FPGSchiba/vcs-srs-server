@@ -2,8 +2,8 @@ package leg
 
 import (
 	"os"
-	"reflect"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"

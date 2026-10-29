@@ -286,8 +286,8 @@ type Manifest struct {
 	BotFlags     []string            `json:"bot_flags,omitempty"`
 	GeneratorEnv map[string][]string `json:"generator_env,omitempty"`
 	// GeneratorGC is "off" (R2-9 GOGC=off GOMEMLIMIT=1GiB) or "default" (Go defaults).
-	GeneratorGC string `json:"generator_gc,omitempty"`
-	ServerEnv    []string            `json:"server_env,omitempty"`
+	GeneratorGC string   `json:"generator_gc,omitempty"`
+	ServerEnv   []string `json:"server_env,omitempty"`
 
 	// Round 2 (W6 fix 2): the ramp and burst shapes, the generator bounds and every
 	// design change with its old and new value.
