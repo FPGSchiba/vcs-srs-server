@@ -3,6 +3,7 @@ package sweep
 import (
 	"fmt"
 	"math"
+	"strings"
 	"time"
 )
 
@@ -111,6 +112,23 @@ type StepData struct {
 	// CannotSettle is set when the settle phase hit its bound
 	// (Settled reported InvalidCannotSettle).
 	CannotSettle bool
+
+	// JoinFailures is the number of bots that failed to join in the ramp that
+	// led to this step. Non-zero short-circuits Classify: the step has no hold,
+	// so LossRatio, ServerCPU and GenCPU are typically NaN.
+	JoinFailures uint64
+	// JoinAttempted is the number of bots the ramp tried to add.
+	JoinAttempted int
+	// JoinStages is the failure count by stage (control, radio, voice_dial,
+	// hello).
+	JoinStages map[string]uint64
+	// HelloTriesMax is the most HELLOs any bot of the ramp sent.
+	HelloTriesMax int
+	// RampGenCPU is the kit-measured generator CPU fraction over the ramp. A
+	// negative or NaN value means not measured. The zero value reads as a
+	// healthy generator, so a driver must always set it from the ramp window
+	// (NaN or -1 when unmeasured) whenever JoinFailures may be non-zero.
+	RampGenCPU float64
 }
 
 // Classify applies the design 6.4.4 criteria to one step. The returned
@@ -121,7 +139,15 @@ type StepData struct {
 // a server breach to the server (D14), and a step that never settled still
 // carries the ramp's load, so neither may produce a knee. The breach
 // indicators of such a step are not listed.
+//
+// A join failure is a server breach unless the kit's own generator CPU over
+// the ramp shows a generator limit (accepted proposal, 2026-10-28);
+// bot-reported ramp scheduler/GC latency is logged only. Join-failure rules
+// run first and return: such a step has no hold to measure.
 func Classify(s StepData, b Bounds) (StepOutcome, []string) {
+	if s.JoinFailures > 0 {
+		return classifyJoinFailure(s, b)
+	}
 	if inv := invalidReasons(s, b); len(inv) > 0 {
 		return Invalid, inv
 	}
@@ -197,4 +223,31 @@ func breachReasons(s StepData, b Bounds) []string {
 		}
 	}
 	return r
+}
+
+// joinStageOrder fixes the order of the stage list in a reason.
+var joinStageOrder = []string{"control", "radio", "voice_dial", "hello"}
+
+func classifyJoinFailure(s StepData, b Bounds) (StepOutcome, []string) {
+	switch {
+	case s.RampGenCPU < 0 || math.IsNaN(s.RampGenCPU):
+		return Invalid, []string{fmt.Sprintf("invalid: generator cpu not measured during the ramp (%d join failures)", s.JoinFailures)}
+	case s.RampGenCPU > b.MaxGenCPU:
+		return Invalid, []string{fmt.Sprintf("generator limit during the ramp: generator cpu %.0f%% above %.0f%% with %d join failures",
+			s.RampGenCPU*100, b.MaxGenCPU*100, s.JoinFailures)}
+	}
+	var stages []string
+	for _, k := range joinStageOrder {
+		if n := s.JoinStages[k]; n > 0 {
+			stages = append(stages, fmt.Sprintf("%s %d", k, n))
+		}
+	}
+	msg := fmt.Sprintf("join failure: %d of %d new bots failed", s.JoinFailures, s.JoinAttempted)
+	if len(stages) > 0 {
+		msg += " (" + strings.Join(stages, ", ") + ")"
+	}
+	if s.HelloTriesMax > 0 {
+		msg += fmt.Sprintf("; hello tries max %d", s.HelloTriesMax)
+	}
+	return Breach, []string{msg}
 }

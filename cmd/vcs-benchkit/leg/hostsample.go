@@ -23,6 +23,14 @@ type snapshot struct {
 	GenTk    uint64 // load bot utime+stime
 	CPU      map[string]sample.CPUTimes
 	Drops    uint64 // server socket d<n>, cumulative
+	// Softnet is the sum of softnet_stat "dropped" over all CPUs; UDP is the
+	// snmp Udp: counters. NetOK is false when either file could not be read
+	// (NetErr says why). The snapshot is kept anyway: a ramp window must not
+	// lose its CPU figures to a missing /proc/net file.
+	Softnet uint64
+	UDP     sample.UDPCounters
+	NetOK   bool
+	NetErr  string
 }
 
 // windowFrom reduces the readings of one hold to a Window. serverNCPU and
@@ -68,7 +76,31 @@ func windowFrom(snaps []snapshot, serverNCPU int, serverCPUs []int, genNCPU int,
 	for i := 1; i < len(snaps); i++ {
 		w.ServerDrops += sample.DropDelta(snaps[i-1].Drops, snaps[i].Drops)
 	}
+	if first.NetOK && last.NetOK {
+		w.NetOK = true
+		// softnet's dropped is a 32-bit counter per CPU, so the sum wraps too.
+		w.SoftnetDropped = sample.DropDelta(first.Softnet, last.Softnet)
+		w.UDPRcvbufErrors = counterDelta(first.UDP.RcvbufErrors, last.UDP.RcvbufErrors)
+		w.UDPSndbufErrors = counterDelta(first.UDP.SndbufErrors, last.UDP.SndbufErrors)
+	} else {
+		w.NetErr = first.NetErr
+		if w.NetErr == "" {
+			w.NetErr = last.NetErr
+		}
+		if w.NetErr == "" {
+			w.NetErr = "network counters not read"
+		}
+	}
 	return w
+}
+
+// counterDelta is cur - prev of a 64-bit kernel counter; a decrease (a reset)
+// is 0, never an underflow that would fake a breach.
+func counterDelta(prev, cur uint64) uint64 {
+	if cur < prev {
+		return 0
+	}
+	return cur - prev
 }
 
 // procSampler reads the counters of one running system.
@@ -118,7 +150,28 @@ func (p *procSampler) take(now time.Time) (snapshot, string) {
 		return s, fmt.Sprintf("ss -uamp: server socket %s not in the output", p.voiceKey)
 	}
 	s.Drops = drops
+	s.NetOK, s.NetErr = p.takeNet(&s)
 	return s, ""
+}
+
+// takeNet reads the host-wide softnet and UDP counters into s. They are
+// world-readable. Failure is returned as text, never as zero counters; the
+// driver treats it as a sampler error only for a hold.
+func (p *procSampler) takeNet(s *snapshot) (bool, string) {
+	b, err := p.read("/proc/net/softnet_stat")
+	if err != nil {
+		return false, "/proc/net/softnet_stat: " + err.Error()
+	}
+	if s.Softnet, err = sample.ParseSoftnetStat(b); err != nil {
+		return false, err.Error()
+	}
+	if b, err = p.read("/proc/net/snmp"); err != nil {
+		return false, "/proc/net/snmp: " + err.Error()
+	}
+	if s.UDP, err = sample.ParseSNMPUdp(b); err != nil {
+		return false, err.Error()
+	}
+	return true, ""
 }
 
 // begin starts the 1 s sampler and returns the func that stops it.

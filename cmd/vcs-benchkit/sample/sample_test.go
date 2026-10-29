@@ -168,3 +168,55 @@ func TestDropDelta(t *testing.T) {
 		}
 	}
 }
+
+// Synthetic, hand-written from the kernel's softnet_seq_show (net/core/net-procfs.c)
+// and snmp(7)-style layout: not captured from a runner. Columns are hex; the
+// second column is the packets dropped because a CPU's backlog was full.
+const softnetFixture = `0000a1b2 00000010 00000002 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+0000ffff 000000ff 00000001 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+`
+
+func TestParseSoftnetStat(t *testing.T) {
+	got, err := ParseSoftnetStat([]byte(softnetFixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 0x10+0xff {
+		t.Errorf("dropped = %d, want %d", got, 0x10+0xff)
+	}
+	for _, bad := range []string{"", "\n", "0000a1b2\n", "0000a1b2 zz 00\n"} {
+		if _, err := ParseSoftnetStat([]byte(bad)); err == nil {
+			t.Errorf("ParseSoftnetStat(%q) = nil error, want one", bad)
+		}
+	}
+}
+
+const snmpFixture = `Ip: Forwarding DefaultTTL InReceives
+Ip: 1 64 999
+Udp: InDatagrams NoPorts InErrors OutDatagrams RcvbufErrors SndbufErrors InCsumErrors IgnoredMulti MemErrors
+Udp: 5000 6 17 4000 11 3 0 0 0
+UdpLite: InDatagrams NoPorts InErrors OutDatagrams RcvbufErrors SndbufErrors InCsumErrors IgnoredMulti MemErrors
+UdpLite: 0 0 0 0 0 0 0 0 0
+`
+
+func TestParseSNMPUdp(t *testing.T) {
+	got, err := ParseSNMPUdp([]byte(snmpFixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != (UDPCounters{RcvbufErrors: 11, SndbufErrors: 3, InErrors: 17}) {
+		t.Errorf("got %+v", got)
+	}
+	for name, bad := range map[string]string{
+		"empty":          "",
+		"no Udp lines":   "Ip: A B\nIp: 1 2\n",
+		"header only":    "Udp: InErrors RcvbufErrors SndbufErrors\n",
+		"missing column": "Udp: InErrors RcvbufErrors\nUdp: 1 2\n",
+		"bad number":     "Udp: InErrors RcvbufErrors SndbufErrors\nUdp: 1 x 3\n",
+		"short values":   "Udp: InErrors RcvbufErrors SndbufErrors\nUdp: 1 2\n",
+	} {
+		if _, err := ParseSNMPUdp([]byte(bad)); err == nil {
+			t.Errorf("%s: nil error, want one", name)
+		}
+	}
+}

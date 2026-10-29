@@ -29,6 +29,8 @@ type hostEnv struct {
 	serverCPUs       []int // the whole server set, for softirq
 	genSet           string
 	genNCPU          int
+	// onProgress receives the load bot's progress lines; nil drops them.
+	onProgress func(Progress)
 
 	mu         sync.Mutex
 	k          int
@@ -114,7 +116,7 @@ func (e *hostEnv) Start(ctx context.Context) (System, error) {
 	}
 	s := &hostSystem{
 		env: e, top: top, cmd: cmd, stdin: stdin, logf: logf,
-		bot:  NewBot(stdin, stdout),
+		bot:  NewBot(stdin, stdout, e.onProgress),
 		done: make(chan struct{}),
 		sampler: &procSampler{
 			serverPID: top.PIDs()[topology.Standalone], genPID: cmd.Process.Pid,
@@ -141,7 +143,10 @@ type hostSystem struct {
 	holds int
 }
 
-func (s *hostSystem) SetN(ctx context.Context, n int) error { return s.bot.SetN(ctx, n) }
+func (s *hostSystem) SetN(ctx context.Context, n int) (Joins, error) { return s.bot.SetN(ctx, n) }
+
+// LastJoins is the bot's most recent joins line (lastJoiner).
+func (s *hostSystem) LastJoins() (Joins, bool) { return s.bot.LastJoins() }
 
 // Hold bounds each call: the hold itself, its 200 ms drain and a margin. The
 // first hold also absorbs the first ramp, which is as long as the bots need.

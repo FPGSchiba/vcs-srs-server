@@ -1,0 +1,6 @@
+true	bot 1669: hello: no HELLO_ACK after 5 tries
+true	bot 7: update radio: rpc error: code = Unavailable desc = x
+true	join LDBT-0042: rpc error: code = DeadlineExceeded desc = x
+false	set_n 3: decreasing N is not supported (have 4)
+false	hold: bot 3 died: update stream ended by the server
+false	hold: talker did not send the expected frames in time

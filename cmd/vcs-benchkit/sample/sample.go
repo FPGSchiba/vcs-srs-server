@@ -156,3 +156,82 @@ func skmemDrops(s string) uint64 {
 func DropDelta(prev, cur uint64) uint64 {
 	return uint64(uint32(cur) - uint32(prev))
 }
+
+// ParseSoftnetStat returns the sum of the "dropped" column (the second, hex)
+// over every per-CPU row of /proc/net/softnet_stat: packets dropped because a
+// CPU's input backlog (netdev_max_backlog) was full. The kernel's counter is a
+// 32-bit unsigned per CPU, so take deltas with DropDelta.
+func ParseSoftnetStat(b []byte) (dropped uint64, err error) {
+	rows := 0
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 0 {
+			continue
+		}
+		if len(f) < 2 {
+			return 0, fmt.Errorf("softnet_stat: row has %d columns, need at least 2", len(f))
+		}
+		n, err := strconv.ParseUint(f[1], 16, 64)
+		if err != nil {
+			return 0, fmt.Errorf("softnet_stat: dropped column: %w", err)
+		}
+		dropped += n
+		rows++
+	}
+	if rows == 0 {
+		return 0, fmt.Errorf("softnet_stat: no cpu rows")
+	}
+	return dropped, nil
+}
+
+// UDPCounters are the /proc/net/snmp Udp: counters the bench reports.
+type UDPCounters struct {
+	RcvbufErrors, SndbufErrors, InErrors uint64
+}
+
+// ParseSNMPUdp reads the "Udp:" header/value line pair of /proc/net/snmp. The
+// "UdpLite:" pair is a different protocol and is ignored. A missing column or a
+// value row that does not line up with its header is an error, never a zero.
+func ParseSNMPUdp(b []byte) (UDPCounters, error) {
+	var header []string
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 0 || f[0] != "Udp:" {
+			continue
+		}
+		if header == nil {
+			header = f[1:]
+			continue
+		}
+		vals := f[1:]
+		if len(vals) != len(header) {
+			return UDPCounters{}, fmt.Errorf("snmp Udp: %d values for %d columns", len(vals), len(header))
+		}
+		var out UDPCounters
+		found := 0
+		for i, name := range header {
+			var dst *uint64
+			switch name {
+			case "RcvbufErrors":
+				dst = &out.RcvbufErrors
+			case "SndbufErrors":
+				dst = &out.SndbufErrors
+			case "InErrors":
+				dst = &out.InErrors
+			default:
+				continue
+			}
+			n, err := strconv.ParseUint(vals[i], 10, 64)
+			if err != nil {
+				return UDPCounters{}, fmt.Errorf("snmp Udp %s: %w", name, err)
+			}
+			*dst = n
+			found++
+		}
+		if found != 3 {
+			return UDPCounters{}, fmt.Errorf("snmp Udp: header lacks RcvbufErrors, SndbufErrors or InErrors")
+		}
+		return out, nil
+	}
+	return UDPCounters{}, fmt.Errorf("snmp: no Udp: header and value lines")
+}

@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"runtime"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -28,6 +30,9 @@ type CalConfig struct {
 	Senders int
 	// StderrDir receives reflect.log and calibrate.log; "" discards them.
 	StderrDir string
+	// OnLine, when set, receives each stdout line of calibrate as it is read: its
+	// "type" and the raw line without the newline.
+	OnLine func(kind string, raw []byte)
 }
 
 func (c CalConfig) command(sub string, args []string, set string) (*exec.Cmd, error) {
@@ -98,33 +103,170 @@ func RunCalibration(ctx context.Context, c CalConfig) (*Calibration, error) {
 	if err != nil {
 		return nil, err
 	}
-	var out bytes.Buffer
-	cal.Stdout = &out
+	// Stdout is read line by line so progress is visible while calibration runs.
+	calOut, err := cal.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	// The stderr tail is kept even without a log file: it is the stop reason of
+	// a v1 bot, which says why it died only there.
+	tail := &tailWriter{max: 4096}
+	cal.Stderr = tail
 	if f, err := c.stderrFile("calibrate.log"); err != nil {
 		return nil, err
 	} else if f != nil {
 		defer f.Close()
-		cal.Stderr = f
+		cal.Stderr = io.MultiWriter(f, tail)
 	}
-	runErr := cal.Run()
-	steps, pps, lb, perr := ParseCalibrate(out.Bytes())
-	if runErr != nil {
-		return nil, fmt.Errorf("vcs-loadbot calibrate: %w (see calibrate.log)", runErr)
+	if err := cal.Start(); err != nil {
+		return nil, fmt.Errorf("start calibrate: %w", err)
 	}
-	if perr != nil {
-		return nil, perr
+	killed := make(chan struct{})
+	defer close(killed)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = cal.Process.Kill()
+		case <-killed:
+		}
+	}()
+	var out bytes.Buffer
+	sc := bufio.NewScanner(calOut)
+	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	for sc.Scan() {
+		line := sc.Bytes()
+		out.Write(line)
+		out.WriteByte('\n')
+		if c.OnLine != nil {
+			c.OnLine(lineType(line), append([]byte(nil), line...))
+		}
 	}
-	res := &Calibration{Steps: steps, ReceivePPS: pps, LowerBound: lb, Senders: senders}
+	// A read error (a line over the limit) stops the scanner, not calibrate:
+	// keep draining so it can exit instead of blocking on a full pipe.
+	scanErr := sc.Err()
+	_, _ = io.Copy(io.Discard, calOut)
+	runErr := cal.Wait()
 
-	// Stop the reflector politely so it prints its stats line.
+	// The reflector is always stopped politely, also after a calibrate
+	// failure, so its drop counters are read either way.
 	_, _ = io.WriteString(rin, `{"quit":true}`+"\n")
 	_ = rin.Close()
 	rest, _ := io.ReadAll(rd)
-	if n, err := ParseReflectorStats(rest); err == nil {
-		res.ReflectorSendErrors = n
-	}
 	stopRefl()
+	rstats, rerr := ParseReflectorStatsFull(rest)
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if scanErr != nil {
+		return nil, fmt.Errorf("read calibrate output: %w", scanErr)
+	}
+	steps, pps, lb, haveCap, stop, perr := parseCalibrateLines(out.Bytes())
+	if perr != nil {
+		return nil, perr
+	}
+	reason := ""
+	if stop != nil {
+		reason = stop.Reason
+	}
+	if reason == "" {
+		reason = stderrReason(tail.String())
+	}
+	if len(steps) == 0 {
+		if reason == "" && runErr != nil {
+			reason = runErr.Error()
+		}
+		if reason == "" {
+			reason = "calibrate printed no calibration step"
+		}
+		return nil, fmt.Errorf("no step completed: %s", reason)
+	}
+	if !haveCap {
+		// The bot died before its receive_capacity line (a v1 bot): the largest
+		// valid completed step, as a lower bound.
+		pps, lb = 0, true
+		for _, s := range steps {
+			if s.Valid && s.EgressPPS > pps {
+				pps = s.EgressPPS
+			}
+		}
+	}
+	res := &Calibration{Steps: steps, ReceivePPS: pps, LowerBound: lb, Senders: senders, StoppedBots: -1}
+	if rerr == nil {
+		res.ReflectorSendErrors = rstats.SendErrors
+		res.ReflectorQueueFull, res.ReflectorWriteErrors = rstats.QueueFullDrops, rstats.WriteErrors
+	}
+	switch {
+	case stop != nil:
+		res.StoppedAt, res.StoppedBots, res.StopReason = stop.N, stop.Bots, reason
+	case runErr != nil:
+		res.StoppedAt = nextStepAbove(c.Steps, steps[len(steps)-1].N)
+		if reason == "" {
+			reason = runErr.Error()
+		}
+		// A v1 bot never says which step failed or why it exited: both are
+		// the kit's inference, so the text must not read as measured.
+		res.StopReason = "inferred: " + reason
+	}
 	return res, nil
+}
+
+// lineType returns the "type" of one NDJSON line, "" when it has none.
+func lineType(line []byte) string {
+	var h struct {
+		Type string `json:"type"`
+	}
+	_ = json.Unmarshal(line, &h)
+	return h.Type
+}
+
+// stderrReason is the last non-empty line of a v1 bot's stderr with its
+// "vcs-loadbot: calibrate: " prefix removed.
+func stderrReason(s string) string {
+	lines := strings.Split(strings.TrimRight(s, "\r\n"), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		l := strings.TrimSpace(lines[i])
+		if l == "" {
+			continue
+		}
+		l = strings.TrimPrefix(l, "vcs-loadbot: calibrate: ")
+		return strings.TrimPrefix(l, "vcs-loadbot: ")
+	}
+	return ""
+}
+
+// nextStepAbove is the first value of the ascending --steps list above n, 0
+// when there is none.
+func nextStepAbove(steps string, n int) int {
+	for _, f := range strings.Split(steps, ",") {
+		if v, err := strconv.Atoi(strings.TrimSpace(f)); err == nil && v > n {
+			return v
+		}
+	}
+	return 0
+}
+
+// tailWriter keeps the last max bytes written to it.
+type tailWriter struct {
+	mu  sync.Mutex
+	max int
+	buf []byte
+}
+
+func (t *tailWriter) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.buf = append(t.buf, p...)
+	if len(t.buf) > t.max {
+		t.buf = t.buf[len(t.buf)-t.max:]
+	}
+	return len(p), nil
+}
+
+func (t *tailWriter) String() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return string(t.buf)
 }
 
 // readReady waits for the reflector's first line, {"type":"ready","addr":...}.

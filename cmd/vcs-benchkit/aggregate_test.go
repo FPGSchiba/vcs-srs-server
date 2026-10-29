@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/csv"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,7 +52,7 @@ func TestAggregateMedianMinMax(t *testing.T) {
 	writeLeg(t, in, "1-one-big-net", "S", "one-big-net", "knee 2400", "knee", "2400", topo)
 	writeLeg(t, in, "2-one-big-net", "S", "one-big-net", "knee 3100", "knee", "3100", topo)
 	writeLeg(t, in, "3-one-big-net", "S", "one-big-net", "knee 2800", "knee", "2800", topo)
-	if err := runAggregate([]string{"--in", in, "--out", out}, os.Stderr); err != nil {
+	if err := runAggregate([]string{"--in", in, "--out", out}, io.Discard, os.Stderr); err != nil {
 		t.Fatal(err)
 	}
 	rows := readAgg(t, out)
@@ -74,7 +75,7 @@ func TestAggregateCensoredIsALowerBound(t *testing.T) {
 	in, out := t.TempDir(), t.TempDir()
 	writeLeg(t, in, "1-one-big-net", "S", "one-big-net", "knee 2400", "knee", "2400", "t")
 	writeLeg(t, in, "2-one-big-net", "S", "one-big-net", "≥ 1800 (generator-bound)", "generator-bound", "1800", "t")
-	if err := runAggregate([]string{"--in", in, "--out", out}, os.Stderr); err != nil {
+	if err := runAggregate([]string{"--in", in, "--out", out}, io.Discard, os.Stderr); err != nil {
 		t.Fatal(err)
 	}
 	r := readAgg(t, out)[0]
@@ -90,7 +91,7 @@ func TestAggregateEvenCountMedianRoundsDown(t *testing.T) {
 	in, out := t.TempDir(), t.TempDir()
 	writeLeg(t, in, "1-x", "S", "one-big-net", "knee 1001", "knee", "1001", "t")
 	writeLeg(t, in, "2-x", "S", "one-big-net", "knee 2000", "knee", "2000", "t")
-	if err := runAggregate([]string{"--in", in, "--out", out}, os.Stderr); err != nil {
+	if err := runAggregate([]string{"--in", in, "--out", out}, io.Discard, os.Stderr); err != nil {
 		t.Fatal(err)
 	}
 	if got := readAgg(t, out)[0]["median_n"]; got != "1500" {
@@ -99,15 +100,15 @@ func TestAggregateEvenCountMedianRoundsDown(t *testing.T) {
 }
 
 func TestAggregateErrors(t *testing.T) {
-	if err := runAggregate([]string{"--in", t.TempDir(), "--out", t.TempDir()}, os.Stderr); err == nil || !strings.Contains(err.Error(), "no knees.csv") {
+	if err := runAggregate([]string{"--in", t.TempDir(), "--out", t.TempDir()}, io.Discard, os.Stderr); err == nil || !strings.Contains(err.Error(), "no knees.csv") {
 		t.Fatalf("empty input: %v", err)
 	}
-	if err := runAggregate([]string{"--in", t.TempDir()}, os.Stderr); err == nil {
+	if err := runAggregate([]string{"--in", t.TempDir()}, io.Discard, os.Stderr); err == nil {
 		t.Fatal("missing --out must error")
 	}
 	in := t.TempDir()
 	writeLeg(t, in, "1-x", "S", "one-big-net", "knee abc", "knee", "abc", "t")
-	if err := runAggregate([]string{"--in", in, "--out", t.TempDir()}, os.Stderr); err == nil {
+	if err := runAggregate([]string{"--in", in, "--out", t.TempDir()}, io.Discard, os.Stderr); err == nil {
 		t.Fatal("non-numeric n must error")
 	}
 }
@@ -116,7 +117,7 @@ func TestAggregateMixedTopologyIsNamed(t *testing.T) {
 	in, out := t.TempDir(), t.TempDir()
 	writeLeg(t, in, "1-x", "S", "one-big-net", "knee 10", "knee", "10", "2 cores")
 	writeLeg(t, in, "2-x", "S", "one-big-net", "knee 12", "knee", "12", "2 hyperthreads of 1 core")
-	if err := runAggregate([]string{"--in", in, "--out", out}, os.Stderr); err != nil {
+	if err := runAggregate([]string{"--in", in, "--out", out}, io.Discard, os.Stderr); err != nil {
 		t.Fatal(err)
 	}
 	if got := readAgg(t, out)[0]["topology"]; !strings.HasPrefix(got, "mixed:") {
@@ -128,7 +129,7 @@ func TestAggregateFlagsUnconfirmedKnee(t *testing.T) {
 	in, out := t.TempDir(), t.TempDir()
 	writeLeg(t, in, "1-x", "S", "one-big-net", "knee 2400", "knee", "2400", "t")
 	writeLeg(t, in, "2-x", "S", "one-big-net", "knee 2800 (unconfirmed: the confirm step did not pass)", "knee", "2800", "t")
-	if err := runAggregate([]string{"--in", in, "--out", out}, os.Stderr); err != nil {
+	if err := runAggregate([]string{"--in", in, "--out", out}, io.Discard, os.Stderr); err != nil {
 		t.Fatal(err)
 	}
 	r := readAgg(t, out)[0]
@@ -138,10 +139,136 @@ func TestAggregateFlagsUnconfirmedKnee(t *testing.T) {
 
 	in2, out2 := t.TempDir(), t.TempDir()
 	writeLeg(t, in2, "1-x", "S", "one-big-net", "knee 2400", "knee", "2400", "t")
-	if err := runAggregate([]string{"--in", in2, "--out", out2}, os.Stderr); err != nil {
+	if err := runAggregate([]string{"--in", in2, "--out", out2}, io.Discard, os.Stderr); err != nil {
 		t.Fatal(err)
 	}
 	if got := readAgg(t, out2)[0]["unconfirmed"]; got != "false" {
 		t.Fatalf("unconfirmed = %q, want false", got)
+	}
+}
+
+// captureStdout runs fn with os.Stdout redirected and returns what it wrote.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	done := make(chan string)
+	go func() { b, _ := io.ReadAll(r); done <- string(b) }()
+	fn()
+	os.Stdout = old
+	_ = w.Close()
+	return <-done
+}
+
+// Run 40752831443: all three legs aborted, so there was no knees.csv and the
+// aggregate job printed nothing but "no knees.csv". It must still show a table.
+func TestAggregateZeroLegsStillPrintsTable(t *testing.T) {
+	in, out := t.TempDir(), t.TempDir()
+	for _, d := range []string{"1-one-big-net", "2-one-big-net", "3-one-big-net"} {
+		if err := os.MkdirAll(filepath.Join(in, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		m := `{"schema":"leg-manifest/1","arm":"S","scenario":"one-big-net","error":"set_n 2076: loadbot: bot 1669: hello: no HELLO_ACK after 5 tries"}`
+		if err := os.WriteFile(filepath.Join(in, d, "manifest.json"), []byte(m), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var err error
+	stdout := captureStdout(t, func() { err = runAggregate([]string{"--in", in, "--out", out}, os.Stdout, io.Discard) })
+	if err == nil {
+		t.Fatal("zero legs must still be an error")
+	}
+	md, rerr := os.ReadFile(filepath.Join(out, "aggregate.md"))
+	if rerr != nil {
+		t.Fatalf("aggregate.md not written (err = %v): %v", err, rerr)
+	}
+	for _, d := range []string{"1-one-big-net", "2-one-big-net", "3-one-big-net"} {
+		if !strings.Contains(string(md), d) {
+			t.Errorf("aggregate.md has no row for %s:\n%s", d, md)
+		}
+		if !strings.Contains(stdout, d) {
+			t.Errorf("stdout has no row for %s:\n%s", d, stdout)
+		}
+	}
+}
+
+// writeFailedLeg writes a leg that aborted: a manifest with an error, no knees.csv.
+func writeFailedLeg(t *testing.T, root, dir, errText string) {
+	t.Helper()
+	d := filepath.Join(root, dir)
+	if err := os.MkdirAll(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := `{"schema":"leg-manifest/1","arm":"S","scenario":"one-big-net","error":"` + errText + `"}`
+	if err := os.WriteFile(filepath.Join(d, "manifest.json"), []byte(m), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// addLegDetail adds calibration.csv and steps.csv to a finished leg.
+func addLegDetail(t *testing.T, root, dir string) {
+	t.Helper()
+	cal := "kind,n,egress_pps,valid,violations,lower_bound\nstep,2048,102350,true,,\nreceive_capacity,,102350,,,true\n"
+	steps := "seq,kind,n,outcome\n1,sweep,1038,pass\n2,sweep,2076,breach\n3,sweep,1557,pass\n"
+	for name, body := range map[string]string{"calibration.csv": cal, "steps.csv": steps} {
+		if err := os.WriteFile(filepath.Join(root, dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestAggregateMarkdownGolden(t *testing.T) {
+	in, out := t.TempDir(), t.TempDir()
+	writeFailedLeg(t, in, "1-one-big-net", "calibration: a|b")
+	writeLeg(t, in, "2-one-big-net", "S", "one-big-net", "knee 1557", "knee", "1557", "t")
+	addLegDetail(t, in, "2-one-big-net")
+	writeLeg(t, in, "3-one-big-net", "S", "one-big-net", "knee 1700", "knee", "1700", "t")
+	if err := runAggregate([]string{"--in", in, "--out", out}, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(out, "aggregate.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile(filepath.Join("testdata", "aggregate.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.ReplaceAll(string(got), "\r\n", "\n") != strings.ReplaceAll(string(want), "\r\n", "\n") {
+		t.Fatalf("aggregate.md differs from testdata/aggregate.md:\n%s", got)
+	}
+}
+
+func TestAggregatePrintsTableToStdout(t *testing.T) {
+	in, out := t.TempDir(), t.TempDir()
+	writeLeg(t, in, "1-x", "S", "one-big-net", "knee 10", "knee", "10", "t")
+	var buf bytes.Buffer
+	if err := runAggregate([]string{"--in", in, "--out", out}, &buf, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	md, _ := os.ReadFile(filepath.Join(out, "aggregate.md"))
+	if buf.String() != string(md) || !strings.Contains(buf.String(), "1 of 1 legs finished") {
+		t.Fatalf("stdout:\n%s", buf.String())
+	}
+}
+
+func TestReadLegInfoShowsCalibrationStopReason(t *testing.T) {
+	in := t.TempDir()
+	writeLeg(t, in, "1-x", "S", "one-big-net", "knee 10", "knee", "10", "t")
+	cal := "kind,n,egress_pps,valid,violations,lower_bound\nstep,2048,102350,true,,\n" +
+		"stopped,4096,,,bot 3702: no HELLO_ACK after 5 tries,\nreceive_capacity,,102350,,,true\n"
+	if err := os.WriteFile(filepath.Join(in, "1-x", "calibration.csv"), []byte(cal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	li, err := readLegInfo(in, "1-x", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(li.calib, "102350") || !strings.Contains(li.calib, "stopped at 4096: bot 3702: no HELLO_ACK after 5 tries") {
+		t.Fatalf("calib cell = %q", li.calib)
 	}
 }

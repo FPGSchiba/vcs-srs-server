@@ -28,6 +28,11 @@ type CalStep struct {
 	EgressPPS  float64  `json:"egress_pps"`
 	Valid      bool     `json:"valid"`
 	Violations []string `json:"violations"`
+	// v2 bot only; zero when the bot did not report them.
+	Bots          int     `json:"bots"`
+	ExpectedPPS   float64 `json:"expected_pps"`
+	HelloTriesMax int     `json:"hello_tries_max"`
+	HelloRetried  int     `json:"hello_retried"`
 }
 
 // Calibration is the generator's receive-side calibration of one leg.
@@ -37,12 +42,21 @@ type Calibration struct {
 	LowerBound          bool
 	ReflectorSendErrors uint64
 	Senders             int
+
+	// StoppedAt is the step N that could not complete, 0 when calibration ran
+	// every step. StoppedBots is the bots up when it stopped, -1 when the bot
+	// did not say (a v1 bot). StopReason is the bot's own words, prefixed "inferred: " for a v1 bot, whose stop step and reason the kit guesses.
+	StoppedAt   int
+	StoppedBots int
+	StopReason  string
+	// Reflector counters of a v2 reflector; nil for a v1 one.
+	ReflectorQueueFull   *uint64
+	ReflectorWriteErrors *uint64
 }
 
-// ParseCalibrate reads `vcs-loadbot calibrate` stdout: one calibration line per
-// step and a final receive_capacity line, which must be present.
-func ParseCalibrate(out []byte) (steps []CalStep, pps float64, lowerBound bool, err error) {
-	haveCap := false
+// parseCalibrateLines reads `vcs-loadbot calibrate` stdout: calibration steps,
+// the optional receive_capacity line and the optional calibration_stopped line.
+func parseCalibrateLines(out []byte) (steps []CalStep, pps float64, lowerBound, haveCap bool, stop *CalStopped, err error) {
 	for _, raw := range bytes.Split(out, []byte("\n")) {
 		if len(bytes.TrimSpace(raw)) == 0 {
 			continue
@@ -53,38 +67,70 @@ func ParseCalibrate(out []byte) (steps []CalStep, pps float64, lowerBound bool, 
 			LowerBound bool    `json:"lower_bound"`
 		}
 		if err := json.Unmarshal(raw, &head); err != nil {
-			return nil, 0, false, fmt.Errorf("calibrate output: %w", err)
+			return nil, 0, false, false, nil, fmt.Errorf("calibrate output: %w", err)
 		}
 		switch head.Type {
 		case "calibration":
 			var s CalStep
 			if err := json.Unmarshal(raw, &s); err != nil {
-				return nil, 0, false, fmt.Errorf("calibrate output: %w", err)
+				return nil, 0, false, false, nil, fmt.Errorf("calibrate output: %w", err)
 			}
 			steps = append(steps, s)
+		case "calibration_stopped":
+			var st CalStopped
+			if err := json.Unmarshal(raw, &st); err != nil {
+				return nil, 0, false, false, nil, fmt.Errorf("calibrate output: %w", err)
+			}
+			stop = &st
 		case "receive_capacity":
 			pps, lowerBound, haveCap = head.PPS, head.LowerBound, true
 		}
 	}
+	return steps, pps, lowerBound, haveCap, stop, nil
+}
+
+// ParseCalibrate reads `vcs-loadbot calibrate` stdout. A missing
+// receive_capacity line is tolerated when at least one step completed (a bot
+// that died mid-calibration): the capacity is then the largest valid step and a
+// lower bound. No completed step at all is an error.
+func ParseCalibrate(out []byte) (steps []CalStep, pps float64, lowerBound bool, err error) {
+	steps, pps, lowerBound, haveCap, _, err := parseCalibrateLines(out)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	if len(steps) == 0 {
+		return nil, 0, false, fmt.Errorf("calibrate output has no completed step")
+	}
 	if !haveCap {
-		return steps, 0, false, fmt.Errorf("calibrate output has no receive_capacity line")
+		pps, lowerBound = 0, true
+		for _, s := range steps {
+			if s.Valid && s.EgressPPS > pps {
+				pps = s.EgressPPS
+			}
+		}
 	}
 	return steps, pps, lowerBound, nil
+}
+
+// ParseReflectorStatsFull reads both the v1 and the v2 reflector_stats line.
+func ParseReflectorStatsFull(out []byte) (ReflectorStats, error) {
+	for _, raw := range bytes.Split(out, []byte("\n")) {
+		var s ReflectorStats
+		var head struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(raw, &head) == nil && head.Type == "reflector_stats" && json.Unmarshal(raw, &s) == nil {
+			return s, nil
+		}
+	}
+	return ReflectorStats{}, fmt.Errorf("reflector output has no reflector_stats line")
 }
 
 // ParseReflectorStats returns the reflector's send-error count from its final
 // reflector_stats line.
 func ParseReflectorStats(out []byte) (uint64, error) {
-	for _, raw := range bytes.Split(out, []byte("\n")) {
-		var s struct {
-			Type       string `json:"type"`
-			SendErrors uint64 `json:"send_errors"`
-		}
-		if json.Unmarshal(raw, &s) == nil && s.Type == "reflector_stats" {
-			return s.SendErrors, nil
-		}
-	}
-	return 0, fmt.Errorf("reflector output has no reflector_stats line")
+	s, err := ParseReflectorStatsFull(out)
+	return s.SendErrors, err
 }
 
 // cell renders a float; NaN (unmeasured) is an empty cell, never a number.
@@ -124,6 +170,12 @@ func WriteStepsCSV(w io.Writer, o *Outcome, topology string) error {
 		"shard_queue_full", "update_stream_behind", "node_feed_behind", "node_deregistered",
 		"gen_cpu", "gen_socket_drops", "gen_rx_lag_p99_us", "gen_wheel_lag_p99_us", "gen_sched_p99_us", "gen_gc_p99_us", "gen_violations",
 		"topology", "label", "payload", "join_label", "not_measured",
+		// Appended by the W6 fix round. The columns above are a contract that
+		// readers index by position: only ever append.
+		"requested", "joined", "join_failures", "join_failures_by_stage", "hello_tries_hist", "failed_acked_by_server",
+		"ramp_s", "ramp_server_cpu", "ramp_gen_cpu", "ramp_server_drops", "ramp_softnet_dropped", "ramp_udp_rcvbuf_errors",
+		"ramp_hello_accepted", "ramp_hello_rejected", "ramp_shard_queue_full",
+		"softnet_dropped", "udp_rcvbuf_errors", "udp_sndbuf_errors",
 	}
 	if err := cw.Write(header); err != nil {
 		return err
@@ -147,6 +199,7 @@ func WriteStepsCSV(w io.Writer, o *Outcome, topology string) error {
 			strconv.FormatInt(r.Step.Health.SchedP99Us, 10), strconv.FormatInt(r.Step.Health.GCPauseP99Us, 10), strings.Join(r.Step.Violations, "; "),
 			topology, Label, PayloadLabel, JoinLabel, NotMeasured,
 		}
+		rec = append(rec, joinCells(r)...)
 		if len(rec) != len(header) {
 			return fmt.Errorf("steps.csv: row has %d cells for %d columns", len(rec), len(header))
 		}
@@ -156,6 +209,47 @@ func WriteStepsCSV(w io.Writer, o *Outcome, topology string) error {
 	}
 	cw.Flush()
 	return cw.Error()
+}
+
+// joinCells are the 18 steps.csv cells appended after not_measured: the ramp's
+// join account, the ramp window and the hold's host network counters. A value
+// that was not measured (no ramp, a v1 bot, an unread /proc file) is an empty
+// cell, never a zero.
+func joinCells(r Row) []string {
+	cells := make([]string, 18)
+	j := r.Joins
+	if j.Schema != "" || j.Source == "v1-error" {
+		cells[0], cells[1], cells[2] = strconv.Itoa(j.Requested), strconv.Itoa(j.Joined), strconv.Itoa(j.JoinFailures)
+		parts := make([]string, 0, len(joinStages))
+		for _, k := range joinStages {
+			parts = append(parts, k+"="+strconv.Itoa(j.FailuresByStage[k]))
+		}
+		cells[3] = strings.Join(parts, ";")
+		if len(j.HelloTriesHist) > 0 {
+			h := make([]string, len(j.HelloTriesHist))
+			for i, v := range j.HelloTriesHist {
+				h[i] = strconv.Itoa(v)
+			}
+			cells[4] = strings.Join(h, ";")
+		}
+		if r.FailedAckedByServer >= 0 {
+			cells[5] = strconv.Itoa(r.FailedAckedByServer)
+		}
+		if j.Schema != "" {
+			cells[6] = cell(j.RampS)
+		}
+	}
+	if rw := r.RampWindow; rw.Seconds > 0 {
+		cells[7], cells[8], cells[9] = cell(rw.ServerCPU), cell(rw.GenCPU), u(rw.ServerDrops)
+		if rw.NetOK {
+			cells[10], cells[11] = u(rw.SoftnetDropped), u(rw.UDPRcvbufErrors)
+		}
+		cells[12], cells[13], cells[14] = u(r.RampLogs.HelloAccepted), u(r.RampLogs.HelloRejected), u(r.RampLogs.ShardQueueFull)
+	}
+	if r.Held && r.Window.NetOK {
+		cells[15], cells[16], cells[17] = u(r.Window.SoftnetDropped), u(r.Window.UDPRcvbufErrors), u(r.Window.UDPSndbufErrors)
+	}
+	return cells
 }
 
 // KneeMeta is the per-arm context of knees.csv.
@@ -218,6 +312,14 @@ func WriteCalibrationCSV(w io.Writer, c *Calibration, topology string) error {
 	for _, s := range c.Steps {
 		if err := cw.Write([]string{
 			"step", strconv.Itoa(s.N), cell(s.EgressPPS), strconv.FormatBool(s.Valid), strings.Join(s.Violations, "; "), "",
+			"", "", topology, Label, PayloadLabel,
+		}); err != nil {
+			return err
+		}
+	}
+	if c.StoppedAt > 0 {
+		if err := cw.Write([]string{
+			"stopped", strconv.Itoa(c.StoppedAt), "", "", c.StopReason, "",
 			"", "", topology, Label, PayloadLabel,
 		}); err != nil {
 			return err

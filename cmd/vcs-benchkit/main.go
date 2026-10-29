@@ -20,7 +20,7 @@ func main() {
 	case "predict":
 		err = runPredict(os.Args[2:], os.Stdout)
 	case "aggregate":
-		err = runAggregate(os.Args[2:], os.Stderr)
+		err = runAggregate(os.Args[2:], os.Stdout, os.Stderr)
 	case "leg":
 		err = runLeg(os.Args[2:], os.Stdout, os.Stderr)
 	default:
