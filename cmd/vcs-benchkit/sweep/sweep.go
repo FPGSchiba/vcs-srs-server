@@ -139,7 +139,8 @@ func (s *Sweep) Next() (int, bool) {
 
 // Record reports the outcome of the step Next returned. It fails when no
 // step is pending, the sweep is finished, or the outcome is not one of
-// Pass, Breach and Invalid; a failed Record leaves the pending step intact.
+// Pass, Breach, Invalid and ControlLost; a failed Record leaves the pending
+// step intact.
 func (s *Sweep) Record(o StepOutcome) error {
 	if s.phase == phaseDone {
 		return errors.New("sweep: finished, nothing to record")

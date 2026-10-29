@@ -246,7 +246,7 @@ func renderAggregateMarkdown(legs []legInfo, rows []aggRow) string {
 // A leg without knees.csv did not finish: it is listed in aggregate.md with
 // its manifest error, and when no leg finished the run still fails, after the
 // table is written.
-// A censored leg (generator-bound, time-bound, below range) contributes its
+// A censored leg (generator-bound, time-bound, below range, control-lost) contributes its
 // bound as n and sets censored=true, so the statistics are lower bounds then.
 // A leg whose knee failed its confirm step keeps result_kind=knee; it sets
 // unconfirmed=true instead, so the flag is not buried in the results text.
