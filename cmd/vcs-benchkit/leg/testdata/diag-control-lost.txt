@@ -1,0 +1,78 @@
+::group::[leg 2 S one-big-net] diagnostics: control lost at confirm N=1336
+status: control lost: 1 bot (bot 2 Unavailable: error reading from server: connection reset by peer)
+control_lost events (first 8)
+  bot=2 code=Unavailable message="error reading from server: connection reset by peer" phase=settle age_s=243.1 since_last_ok_ping_s=3.2
+tcp counters (hold, this window)
+  tcp_abort_on_data=4 tcp_abort_on_close=0 tcp_abort_on_memory=0 tcp_abort_on_timeout=0 tcp_abort_on_linger=0 tcp_timeouts=0 estab_resets=2 out_rsts=9 softnet_squeezed=5 softnet_dropped=588
+server log: WARN/ERROR summary
+  3x WARN Update stream fell behind
+  3x WARN Voice shard queue full
+  2x WARN [transport] [server-transport 0x*] Closing: keepalive ping not acked
+  1x ERROR boom
+server log: last 200 lines
+  : :error::injected
+  time=2026-10-29T11:00:00.000Z level=INFO msg=Version version=1
+  time=2026-10-29T11:00:01.000Z level=WARN msg="Voice shard queue full" shard=1
+  time=2026-10-29T11:00:01.100Z level=WARN msg="Voice shard queue full" shard=0
+  time=2026-10-29T11:00:01.200Z level=WARN msg="Voice shard queue full" shard=1
+  time=2026-10-29T11:00:02.000Z level=ERROR msg=boom err="x level=WARN"
+  time=2026-10-29T11:00:03.000Z level=WARN msg="Update stream fell behind" client=a
+  time=2026-10-29T11:00:03.500Z level=WARN msg="Update stream fell behind" client=b
+  {"time":"2026-10-29T11:00:04Z","level":"WARN","msg":"Update stream fell behind","client":"c"}
+  {"time":"2026-10-29T11:00:05Z","level":"INFO","msg":"fine"}
+  2026/10/29 11:00:06 WARNING: [transport] [server-transport 0xc000123456] Closing: keepalive ping not acked
+  2026/10/29 11:00:06 WARNING: [transport] [server-transport 0xc000999999] Closing: keepalive ping not acked
+  2026/10/29 11:00:06 INFO: [transport] noise
+  not a log line level=WARN? no
+load bot stderr: last 50 lines
+  bot 11
+  bot 12
+  bot 13
+  bot 14
+  bot 15
+  bot 16
+  bot 17
+  bot 18
+  bot 19
+  bot 20
+  bot 21
+  bot 22
+  bot 23
+  bot 24
+  bot 25
+  bot 26
+  bot 27
+  bot 28
+  bot 29
+  bot 30
+  bot 31
+  bot 32
+  bot 33
+  bot 34
+  bot 35
+  bot 36
+  bot 37
+  bot 38
+  bot 39
+  bot 40
+  bot 41
+  bot 42
+  bot 43
+  bot 44
+  bot 45
+  bot 46
+  bot 47
+  bot 48
+  bot 49
+  bot 50
+  bot 51
+  bot 52
+  bot 53
+  bot 54
+  bot 55
+  bot 56
+  bot 57
+  bot 58
+  bot 59
+  bot 60
+::endgroup::

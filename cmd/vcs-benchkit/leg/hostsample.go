@@ -279,6 +279,22 @@ func (p *procSampler) takeTCP(s *snapshot) {
 	s.TCP, s.TCPOK = tcp, true
 }
 
+// peek reads the window so far: the processes' CPU between prev and a fresh
+// reading, for a heartbeat line. It returns the snapshot to pass as the next
+// prev. A failed read keeps prev; a zero prev (nothing read yet) yields no CPU
+// figure (NaN) and starts from the fresh reading.
+func (p *procSampler) peek(prev snapshot) (Window, snapshot) {
+	cur, e := p.take(time.Now())
+	none := Window{ServerCPU: math.NaN(), GenCPU: math.NaN(), Err: e}
+	if e != "" {
+		return none, prev
+	}
+	if prev.At.IsZero() {
+		return none, cur
+	}
+	return windowFrom([]snapshot{prev, cur}, p.serverNCPU, p.serverCPUs, p.genNCPU, nil), cur
+}
+
 // begin starts the 1 s sampler and returns the func that stops it.
 func (p *procSampler) begin(interval time.Duration) func() Window {
 	var (

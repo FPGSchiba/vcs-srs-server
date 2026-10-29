@@ -338,12 +338,16 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 		},
 		Bounds: sweep.DefaultBounds, EnvProbe: probeRaw,
 	}
+	tag := LegTag(o.Seed, o.Arms, o.Scenario)
+	// The reporter prints the diagnostics block into the Actions log; its source
+	// is set once the S arm's environment exists.
+	rep := &diagReporter{w: logw, tag: tag}
 	fail := func(err error) error {
 		m.Error = err.Error()
 		_ = writeManifest(o.OutDir, m)
+		rep.Failure(err)
 		return err
 	}
-	tag := LegTag(o.Seed, o.Arms, o.Scenario)
 	logf := func(f string, a ...any) { fmt.Fprintf(logw, "%s "+f+"\n", append([]any{tag}, a...)...) }
 	say := func(line string) { fmt.Fprintln(logw, line) }
 
@@ -463,13 +467,18 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 		serverBin: o.ServerBin, loadbotBin: o.LoadbotBin, outDir: o.OutDir, scratchDir: scratch, scenario: o.Scenario, seed: o.Seed,
 		serverPin: serverPin, serverGOMAXPROCS: 1, serverCPUs: serverCPUs, genSet: o.GenSet, genNCPU: len(genCPUs), features: feats,
 		onProgress: func(p Progress) { say(FormatRampProgress(tag, p)) },
+		logf:       logf,
 	}
+	rep.src = env
 	d := NewDriver(env, Config{
 		Predicted: o.PredictedKnee, NMax: nMax, JoinRate: o.JoinRate, Budget: remaining,
 		Warmup: o.Warmup, Hold: o.Hold, Confirm: o.Confirm, Overload: o.Overload, ProbeHold: time.Second,
 		Bounds: sweep.DefaultBounds,
-		OnRow:  func(r Row) { say(FormatRowLine(tag, r)) },
-		Logf:   logf,
+		OnRow: func(r Row) {
+			say(FormatRowLine(tag, r))
+			rep.Row(r)
+		},
+		Logf: logf,
 	})
 	var runErr error
 	out, runErr = d.Run(ctx)

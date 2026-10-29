@@ -3,12 +3,15 @@ package leg
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,10 +37,47 @@ type hostEnv struct {
 	features Features
 	// onProgress receives the load bot's progress lines; nil drops them.
 	onProgress func(Progress)
+	// logf receives the heartbeat lines (nil = no heartbeat); heartbeatEvery
+	// overrides the 15 s period (tests).
+	logf           func(format string, a ...any)
+	heartbeatEvery time.Duration
 
 	mu         sync.Mutex
 	k          int
 	serverErrs []string
+	// live is the running system, and lastServerGz and lastBotLog the newest
+	// saved server log and the newest bot stderr file: the diagnostics read the
+	// live log while a system runs and the saved copy after it was closed.
+	live         *hostSystem
+	lastServerGz string
+	lastBotLog   string
+}
+
+// ServerLogText is the newest server log: read from the live process, else from
+// the copy kept in the artifact (diagSource).
+func (e *hostEnv) ServerLogText() (string, error) {
+	e.mu.Lock()
+	live, gz := e.live, e.lastServerGz
+	e.mu.Unlock()
+	if live != nil {
+		return live.LogText()
+	}
+	if gz == "" {
+		return "", errors.New("no server log was kept")
+	}
+	return readGz(gz)
+}
+
+// BotStderrText is the newest load bot's stderr file (diagSource).
+func (e *hostEnv) BotStderrText() (string, error) {
+	e.mu.Lock()
+	p := e.lastBotLog
+	e.mu.Unlock()
+	if p == "" {
+		return "", errors.New("no load bot was started")
+	}
+	b, err := os.ReadFile(p)
+	return string(b), err
 }
 
 func (e *hostEnv) errorsSeen() []string {
@@ -106,7 +146,8 @@ func (e *hostEnv) Start(ctx context.Context) (System, error) {
 		_ = top.Stop()
 		return nil, err
 	}
-	logf, err := os.Create(filepath.Join(e.outDir, fmt.Sprintf("loadbot-%d.log", k)))
+	botLogPath := filepath.Join(e.outDir, fmt.Sprintf("loadbot-%d.log", k))
+	logf, err := os.Create(botLogPath)
 	if err != nil {
 		_ = top.Stop()
 		return nil, err
@@ -118,7 +159,7 @@ func (e *hostEnv) Start(ctx context.Context) (System, error) {
 		return nil, fmt.Errorf("start vcs-loadbot: %w", err)
 	}
 	s := &hostSystem{
-		env: e, top: top, cmd: cmd, stdin: stdin, logf: logf,
+		k: k, env: e, top: top, cmd: cmd, stdin: stdin, logf: logf,
 		bot:  NewBot(stdin, stdout, BotHooks{OnProgress: e.onProgress, Features: e.features}),
 		done: make(chan struct{}),
 		sampler: &procSampler{
@@ -129,10 +170,14 @@ func (e *hostEnv) Start(ctx context.Context) (System, error) {
 		},
 	}
 	go func() { _ = cmd.Wait(); close(s.done) }()
+	e.mu.Lock()
+	e.live, e.lastBotLog = s, botLogPath
+	e.mu.Unlock()
 	return s, nil
 }
 
 type hostSystem struct {
+	k       int
 	env     *hostEnv
 	top     *topology.Topology
 	cmd     *exec.Cmd
@@ -144,15 +189,66 @@ type hostSystem struct {
 
 	mu    sync.Mutex
 	holds int
+	// curN is the bot count the last SetN or Burst asked for (heartbeat lines).
+	curN int
 }
 
-func (s *hostSystem) SetN(ctx context.Context, n int) (Joins, error) { return s.bot.SetN(ctx, n) }
+func (s *hostSystem) SetN(ctx context.Context, n int) (Joins, error) {
+	s.mu.Lock()
+	s.curN = n
+	s.mu.Unlock()
+	defer s.beat("ramp", n)()
+	return s.bot.SetN(ctx, n)
+}
+
+// beat starts the heartbeat of a phase and returns the func that ends it. It
+// prints nothing for a phase shorter than one period, and nothing at all when
+// the env has no log writer.
+func (s *hostSystem) beat(phase string, n int) (stop func()) {
+	e := s.env
+	if e.logf == nil {
+		return func() {}
+	}
+	every := e.heartbeatEvery
+	if every <= 0 {
+		every = heartbeatEvery
+	}
+	prev, _ := s.sampler.take(time.Now())
+	hello := func() uint64 {
+		text, err := s.LogText()
+		if err != nil {
+			return 0
+		}
+		return CountLog(text).HelloAccepted
+	}
+	h := &heartbeat{
+		phase: phase, n: n, start: time.Now(), prevHello: hello(), now: time.Now,
+		sample: func() heartbeatSample {
+			var w Window
+			w, prev = s.sampler.peek(prev)
+			if math.IsNaN(w.ServerCPU) && w.Err != "" {
+				e.logf("heartbeat: sampler: %s", w.Err)
+			}
+			return heartbeatSample{ServerCPU: w.ServerCPU, GenCPU: w.GenCPU, HelloAccepted: hello(), Dead: s.bot.DeadCount()}
+		},
+		emit: func(line string) { e.logf("%s", line) },
+	}
+	t := time.NewTicker(every)
+	stopc, done := make(chan struct{}), make(chan struct{})
+	go func() { defer close(done); runHeartbeat(stopc, t.C, h) }()
+	return func() { t.Stop(); close(stopc); <-done }
+}
 
 // ControlLost is the bot's control-lost events so far (System).
 func (s *hostSystem) ControlLost() []ControlLostEvent { return s.bot.ControlLost() }
 
 // Burst runs a join burst on the bot (System); ErrNotSupported for a v2 bot.
 func (s *hostSystem) Burst(ctx context.Context, add, inFlight int, talker string) (Joins, error) {
+	s.mu.Lock()
+	n := s.curN + add
+	s.curN = n
+	s.mu.Unlock()
+	defer s.beat("burst", n)()
 	return s.bot.Burst(ctx, add, inFlight, talker)
 }
 
@@ -168,7 +264,13 @@ func (s *hostSystem) Hold(ctx context.Context, d time.Duration, label string) (S
 	s.mu.Lock()
 	s.holds++
 	first := s.holds == 1
+	n := s.curN
 	s.mu.Unlock()
+	phase := "hold"
+	if strings.HasPrefix(label, "probe-") {
+		phase = "settle"
+	}
+	defer s.beat(phase, n)()
 	limit := d + 90*time.Second
 	if first {
 		limit += 10 * time.Minute
@@ -196,5 +298,28 @@ func (s *hostSystem) Close() error {
 	s.env.mu.Lock()
 	s.env.serverErrs = append(s.env.serverErrs, errs...)
 	s.env.mu.Unlock()
-	return s.top.Stop()
+	// Read the log before and after the stop: the stop's own lines are worth
+	// keeping, but a log that cannot be read afterwards must not lose the rest.
+	before, berr := s.LogText()
+	stopErr := s.top.Stop()
+	text, err := s.LogText()
+	if err != nil {
+		text, err = before, berr
+	}
+	gz := ""
+	if err == nil {
+		gz, err = SaveServerLog(s.env.outDir, s.k, text)
+	}
+	if err != nil && s.env.logf != nil {
+		s.env.logf("server log not kept: %v", err)
+	}
+	s.env.mu.Lock()
+	if s.env.live == s {
+		s.env.live = nil
+	}
+	if gz != "" {
+		s.env.lastServerGz = gz
+	}
+	s.env.mu.Unlock()
+	return stopErr
 }
