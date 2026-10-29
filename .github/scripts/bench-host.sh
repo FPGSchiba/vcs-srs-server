@@ -379,13 +379,13 @@ pipeline_native() {
 
   local started dirty rmem0 wmem0
   started="$(now_utc)"
-  dirty="${BENCH_HOST_FAKE_DIRTY:-}"
+  dirty="${BENCH_HOST_SERVER_DIRTY:-${BENCH_HOST_FAKE_DIRTY:-}}"
   if [ -z "$dirty" ]; then
     if ! git -C "$repo" rev-parse --git-dir >/dev/null 2>&1; then dirty=null
     elif [ -n "$(git -C "$repo" status --porcelain 2>/dev/null)" ]; then dirty=true
     else dirty=false; fi
   fi
-  case "$dirty" in true|false|null) ;; *) die "BENCH_HOST_FAKE_DIRTY must be true, false or null" ;; esac
+  case "$dirty" in true|false|null) ;; *) die "BENCH_HOST_SERVER_DIRTY must be true, false or null" ;; esac
   rmem0="${BENCH_HOST_FAKE_RMEM:-$(cat /proc/sys/net/core/rmem_max 2>/dev/null || true)}"
   wmem0="${BENCH_HOST_FAKE_WMEM:-$(cat /proc/sys/net/core/wmem_max 2>/dev/null || true)}"
   local go_version="${BENCH_HOST_FAKE_GO_VERSION:-dry-run}" client_go_version="${BENCH_HOST_FAKE_CLIENT_GO_VERSION:-dry-run}"
@@ -400,8 +400,8 @@ pipeline_native() {
   local sysctl_flag="--sysctl=true"
   if [ -n "${BENCH_HOST_IN_CONTAINER:-}" ]; then sysctl_flag="--sysctl=false"; fi
 
-  # BENCH_HOST_FAKE_SHA is the test hook and also how docker mode passes the host's commit in.
-  local server_sha="${BENCH_HOST_FAKE_SHA:-}"
+  # BENCH_HOST_SERVER_SHA / BENCH_HOST_SERVER_DIRTY carry the host commit into a container (no .git there); the FAKE_ names are kept as aliases.
+  local server_sha="${BENCH_HOST_SERVER_SHA:-${BENCH_HOST_FAKE_SHA:-}}"
   if [ -z "$server_sha" ]; then
     server_sha="$(git -C "$repo" rev-parse HEAD 2>/dev/null || echo unknown)"
   fi

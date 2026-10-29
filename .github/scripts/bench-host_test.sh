@@ -375,6 +375,11 @@ env -u BENCH_HOST_IMAGE -u BENCH_HOST_DOCKER_VERSION BENCH_HOST_NPROC=24 BENCH_H
 set -e
 if jq -e '.image == null and .docker_version == null and .server_dirty == false and .leg_args == [] and .note == ""
           and .host_label == "local-linux"' "$tmp/out/host.json" >/dev/null; then pass host-json-nulls; else fail "host-json-nulls ($(cat "$tmp/out/host.json"))"; fi
+# BENCH_HOST_SERVER_SHA/DIRTY are the real channel (container has no .git) and win over the FAKE aliases
+set +e
+env -u BENCH_HOST_IN_CONTAINER BENCH_HOST_NPROC=24 BENCH_HOST_SERVER_SHA=feed1234 BENCH_HOST_SERVER_DIRTY=true BENCH_HOST_FAKE_SHA=old BENCH_HOST_FAKE_DIRTY=false BENCH_HOST_FAKE_RMEM= BENCH_HOST_FAKE_WMEM=   bash "$script" native --host-label local-linux --server-set 0 --gen-set 4-11 --out "$(fresh_out)" --dry-run >/dev/null 2>&1
+set -e
+if jq -e '.server_sha == "feed1234" and .server_dirty == true' "$tmp/out/host.json" >/dev/null; then pass host-json-server-sha-names; else fail "host-json-server-sha-names ($(cat "$tmp/out/host.json"))"; fi
 
 recs --gogc both --repeats 2 --leg-arg --n-max=200 --note 'High performance | apps closed'
 if jq -e '(keys - ["server_sha","go_version","client_sha","client_go_version","server_dirty"]) == []
