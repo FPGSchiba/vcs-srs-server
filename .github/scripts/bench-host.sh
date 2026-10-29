@@ -442,7 +442,7 @@ pipeline_native() {
     case "$v" in *" $PROTOC_VERSION"|*" $PROTOC_VERSION.0") ;; *) die "expected protoc $PROTOC_VERSION, got: $v" ;; esac
   fi
   local pb_ver
-  pb_ver="$(awk '$1=="google.golang.org/protobuf"{print $2; exit}' go.mod)"
+  pb_ver="$(awk '$1=="google.golang.org/protobuf"{print $2; exit}' go.mod | tr -d '\r')"
   [ -n "$pb_ver" ] || die "google.golang.org/protobuf not found in go.mod"
   run env "GOBIN=$bin" go install "google.golang.org/protobuf/cmd/protoc-gen-go@$pb_ver"
   run env "GOBIN=$bin" go install "$PROTOC_GEN_GO_GRPC"

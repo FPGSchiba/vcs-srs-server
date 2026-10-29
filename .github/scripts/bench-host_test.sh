@@ -229,6 +229,15 @@ in_order build-order \
 for b in "go build -tags headless" "go build -trimpath" "go build -tags purego"; do
   holds "build-cgo-off-[$b]" "$b" 'env CGO_ENABLED=0'
 done
+# a CRLF go.mod (Windows checkout) must not leak a carriage return into the pinned protoc-gen-go version
+crt="$(mktemp -d)"; mkdir -p "$crt/.github" "$crt/o"; cp -r "$repo/.github/scripts" "$crt/.github/"
+printf 'module x\r\n\r\nrequire (\r\n\tgoogle.golang.org/protobuf v1.36.12\r\n)\r\n' > "$crt/go.mod"
+crout="$(env -u BENCH_HOST_IN_CONTAINER BENCH_HOST_NPROC=24 BENCH_HOST_FAKE_DIRTY=false bash "$crt/.github/scripts/bench-host.sh" native \
+  --host-label local-docker --server-set 0 --gen-set 4-11 --out "$crt/o" --dry-run 2>&1 || true)"
+if printf '%s\n' "$crout" | grep -F 'protoc-gen-go@v1.36.12' | grep -q "$(printf '\r')$"; then fail build-protobuf-version-no-cr
+elif printf '%s\n' "$crout" | grep -qF 'protoc-gen-go@v1.36.12'; then pass build-protobuf-version-no-cr
+else fail "build-protobuf-version-no-cr (version line missing)"; fi
+rm -rf "$crt"
 holds build-server-target 'go build -tags headless' 'vcs-server .'
 holds build-loadbot-target 'go build -tags purego' './cmd/vcs-loadbot'
 holds build-kit-target 'go build -trimpath' './cmd/vcs-benchkit'
