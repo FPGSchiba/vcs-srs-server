@@ -72,6 +72,12 @@ type fakeWorld struct {
 	noBurst       bool
 	burstFailLive int
 	bursts        []fakeBurst
+	// gapDeathN kills bot 2 in the gap after the first measured hold at that
+	// bot count: on the second ControlLost read after the hold (the first is
+	// the driver's post-hold check, the second its next step's baseline).
+	gapDeathN int
+	gapArmed  bool
+	gapReads  int
 }
 
 // fakeDeath kills a bot when the nth (1-based) occurrence of phase (ramp, settle
@@ -122,6 +128,13 @@ func (s *fakeSystem) die(phase string) {
 func (s *fakeSystem) ControlLost() []ControlLostEvent {
 	s.w.mu.Lock()
 	defer s.w.mu.Unlock()
+	if s.w.gapArmed {
+		if s.w.gapReads++; s.w.gapReads == 2 {
+			s.w.gapArmed = false
+			s.lost = append(s.lost, ControlLostEvent{Bot: 2, Name: "LDBT-0002", Cause: "stream", Code: "Unavailable",
+				Message: "error reading from server: connection reset by peer", Phase: "gap", DeadTotal: len(s.lost) + 1})
+		}
+	}
 	return append([]ControlLostEvent(nil), s.lost...)
 }
 
@@ -231,6 +244,9 @@ func (s *fakeSystem) Hold(ctx context.Context, d time.Duration, label string) (S
 		s.die("settle")
 	} else if measured {
 		s.die("hold")
+		if s.w.gapDeathN == s.n {
+			s.w.gapDeathN, s.w.gapArmed, s.w.gapReads = 0, true, 0
+		}
 	}
 	if s.w.noisy {
 		s.w.updates += 7
@@ -1250,5 +1266,25 @@ func TestDriverBurstNeedsRebuildWhenAbove(t *testing.T) {
 	}
 	if w.starts < 2 {
 		t.Errorf("starts = %d, want a reboot for the burst", w.starts)
+	}
+}
+
+// A bot that dies after one step's final check and before the next step reads
+// its baseline must be attributed to the next step, not folded into the
+// baseline.
+func TestDriverDeathInStepGapIsNotFoldedIntoBaseline(t *testing.T) {
+	w := &fakeWorld{kneeN: 1 << 30, gapDeathN: 1336}
+	out, err := NewDriver(w, oneStepConfig(1336)).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lost int
+	for _, r := range out.Rows {
+		if r.Outcome == sweep.ControlLost {
+			lost++
+		}
+	}
+	if lost == 0 {
+		t.Fatalf("a death in the gap between steps was never reported: rows %d", len(out.Rows))
 	}
 }

@@ -189,6 +189,9 @@ type Driver struct {
 
 	sys    System
 	joined int
+	// seenLost is the count of control-lost events already attributed to a row
+	// (reset when the system is rebuilt).
+	seenLost int
 	// rebuild is set after a join failure: the server and bot are no longer
 	// trusted, so the next step boots fresh. rebuildAt is the failing N.
 	rebuild   bool
@@ -244,6 +247,7 @@ func (d *Driver) boot(ctx context.Context) error {
 	d.sys = sys
 	d.out.Starts++
 	d.joined = 0
+	d.seenLost = 0
 	if j, err := sys.SetN(ctx, 2); err != nil {
 		return fmt.Errorf("pre-flight: %w", err)
 	} else if j.JoinFailures > 0 {
@@ -334,6 +338,8 @@ func (d *Driver) lostSince(dead0 int, extra *ControlLostEvent) []ControlLostEven
 	var evs []ControlLostEvent
 	if all := d.sys.ControlLost(); len(all) > dead0 {
 		evs = append(evs, all[dead0:]...)
+	} else {
+		d.seenLost = len(all)
 	}
 	if len(evs) == 0 && extra != nil {
 		evs = append(evs, *extra)
@@ -411,7 +417,10 @@ func (d *Driver) ensure(ctx context.Context, n int) (ramp, error) {
 			return r, err
 		}
 	}
-	r.Dead0 = len(d.sys.ControlLost())
+	// The baseline is the high-water mark of deaths already attributed to a
+	// row, not the count now: a bot that died between the previous step's final
+	// check and this point belongs to this step.
+	r.Dead0 = min(d.seenLost, len(d.sys.ControlLost()))
 	if n == d.joined {
 		return r, nil
 	}
