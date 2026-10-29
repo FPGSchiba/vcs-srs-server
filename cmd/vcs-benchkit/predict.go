@@ -362,7 +362,11 @@ func runPredict(args []string, stdout io.Writer) error {
 	micro := fs.String("micro", "", "go test -bench output file (required)")
 	logger := fs.String("logger", "bus", "logger arm to model (text or bus)")
 	csvOut := fs.String("csv", "", "optional path to write the micro CSV")
+	lbl := fs.String("label", label, "label written to predict.json; must say \"relative only\"")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := checkLabel(*lbl); err != nil {
 		return err
 	}
 	if *micro == "" {
@@ -399,5 +403,5 @@ func runPredict(args []string, stdout io.Writer) error {
 	return enc.Encode(struct {
 		Label       string       `json:"label"`
 		Predictions []Prediction `json:"predictions"`
-	}{label, preds})
+	}{*lbl, preds})
 }

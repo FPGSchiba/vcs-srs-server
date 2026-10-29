@@ -229,7 +229,7 @@ type aggRow struct {
 
 // renderAggregateMarkdown builds aggregate.md: one row per leg directory, so a
 // failed leg is visible, then the statistics table when any leg finished.
-func renderAggregateMarkdown(legs []legInfo, rows []aggRow) string {
+func renderAggregateMarkdown(legs []legInfo, rows []aggRow, label string) string {
 	var b bytes.Buffer
 	finished := 0
 	for _, l := range legs {
@@ -279,7 +279,11 @@ func runAggregate(args []string, stdout, stderr io.Writer) error {
 	fl.SetOutput(stderr)
 	in := fl.String("in", "", "directory holding the downloaded leg results (required)")
 	out := fl.String("out", "", "output directory (required)")
+	lbl := fl.String("label", label, "label written to aggregate.csv and aggregate.md; must say \"relative only\"")
 	if err := fl.Parse(args); err != nil {
+		return err
+	}
+	if err := checkLabel(*lbl); err != nil {
 		return err
 	}
 	if *in == "" || *out == "" || fl.NArg() > 0 {
@@ -333,11 +337,11 @@ func runAggregate(args []string, stdout, stderr io.Writer) error {
 	}
 	var rows []aggRow
 	if len(legs) > 0 {
-		if err := writeAggregateCSV(*out, groups, keys, &rows); err != nil {
+		if err := writeAggregateCSV(*out, groups, keys, &rows, *lbl); err != nil {
 			return err
 		}
 	}
-	md := renderAggregateMarkdown(infos, rows)
+	md := renderAggregateMarkdown(infos, rows, *lbl)
 	if err := os.WriteFile(filepath.Join(*out, "aggregate.md"), []byte(md), 0o644); err != nil {
 		return err
 	}
@@ -352,7 +356,7 @@ func runAggregate(args []string, stdout, stderr io.Writer) error {
 }
 
 // writeAggregateCSV writes aggregate.csv and appends one aggRow per group.
-func writeAggregateCSV(out string, groups map[string][]legKnee, keys []string, rows *[]aggRow) error {
+func writeAggregateCSV(out string, groups map[string][]legKnee, keys []string, rows *[]aggRow, label string) error {
 	f, err := os.Create(filepath.Join(out, "aggregate.csv"))
 	if err != nil {
 		return err

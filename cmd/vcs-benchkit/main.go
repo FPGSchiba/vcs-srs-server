@@ -3,12 +3,22 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 )
 
 // label is stamped on every bench artefact.
 const label = "Shared GitHub runner (4 vCPU), loopback, relative only. Not a capacity figure."
+
+// checkLabel refuses a --label that drops the "relative only" caveat.
+func checkLabel(l string) error {
+	if !strings.Contains(l, "relative only") {
+		return errors.New(`--label must say "relative only"`)
+	}
+	return nil
+}
 
 func main() {
 	if len(os.Args) < 2 {
