@@ -506,7 +506,7 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	}); err != nil {
 		return fail(err)
 	}
-	logf("result: %s (calibration receive capacity %.0f pps, lower bound %v)", out.Result, cal.ReceivePPS, cal.LowerBound)
+	logf("result: %s (calibration %s)", out.Result, FormatCapacity(cal))
 	return writeManifest(o.OutDir, m)
 }
 

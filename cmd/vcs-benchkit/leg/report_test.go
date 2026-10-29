@@ -320,3 +320,14 @@ func TestFormatBurstLineControlLostHasNoJoinData(t *testing.T) {
 		t.Errorf("got  %s\nwant %s", got, want)
 	}
 }
+
+func TestFormatCapacityLowerBound(t *testing.T) {
+	c := &Calibration{ReceivePPS: 25000, LowerBound: true, LowerBoundReason: "reflector dropped 3"}
+	got := FormatCapacity(c)
+	if got != "receive capacity >= 25000 pps (lower bound: reflector dropped 3)" {
+		t.Fatalf("got %q", got)
+	}
+	if got := FormatCapacity(&Calibration{ReceivePPS: 100}); got != "receive capacity 100 pps" {
+		t.Fatalf("got %q", got)
+	}
+}

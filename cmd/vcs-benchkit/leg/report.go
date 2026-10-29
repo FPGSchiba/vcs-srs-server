@@ -69,6 +69,20 @@ func FormatCalLine(tag string, s CalStep) string {
 		tag, s.N, s.EgressPPS, expectedPPS(s), pct(delivered(s), 0), s.Valid, s.HelloTriesMax, v)
 }
 
+// FormatCapacity renders the calibration receive capacity for the log. It uses
+// the ASCII ">=" on purpose (log lines stay grep-able); results.md uses the
+// unicode form.
+func FormatCapacity(c *Calibration) string {
+	if !c.LowerBound {
+		return fmt.Sprintf("receive capacity %.0f pps", c.ReceivePPS)
+	}
+	s := fmt.Sprintf("receive capacity >= %.0f pps (lower bound", c.ReceivePPS)
+	if c.LowerBoundReason != "" {
+		s += ": " + c.LowerBoundReason
+	}
+	return s + ")"
+}
+
 // FormatCalStopped is the line printed when calibration ended before its last
 // step: where, why, and what receive capacity the completed steps still give.
 func FormatCalStopped(tag string, c *Calibration) string {
@@ -76,14 +90,7 @@ func FormatCalStopped(tag string, c *Calibration) string {
 	if c.StoppedBots >= 0 {
 		bots = strconv.Itoa(c.StoppedBots)
 	}
-	capacity := fmt.Sprintf("receive capacity %.0f pps", c.ReceivePPS)
-	if c.LowerBound {
-		capacity = fmt.Sprintf("receive capacity >= %.0f pps (lower bound", c.ReceivePPS)
-		if c.LowerBoundReason != "" {
-			capacity += ": " + c.LowerBoundReason
-		}
-		capacity += ")"
-	}
+	capacity := FormatCapacity(c)
 	return fmt.Sprintf("%s calibration stopped at N=%d (%s bots up): %s; %s from %d completed steps",
 		tag, c.StoppedAt, bots, c.StopReason, capacity, len(c.Steps))
 }
