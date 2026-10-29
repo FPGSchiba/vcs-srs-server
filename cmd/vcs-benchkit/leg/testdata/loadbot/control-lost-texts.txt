@@ -1,0 +1,6 @@
+true	hold: bot 2 died: rpc error: code = Unavailable desc = error reading from server: connection reset by peer
+true	loadbot: hold: bot 55 died: update stream ended by the server
+true	hold: bot 7 died: resync: rpc error: code = Unauthenticated desc = session not found
+false	hold: talker did not send the expected frames in time
+false	hold: a listener lost its ledger
+false	bot 1669: hello: no HELLO_ACK after 5 tries
