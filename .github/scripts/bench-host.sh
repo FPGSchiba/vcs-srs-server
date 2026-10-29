@@ -171,9 +171,13 @@ if [ -n "$host_nproc" ]; then
   done
 fi
 
-# Sibling warning: a shared physical core skews both sides. A warning, not an error.
+# Sibling warning: a shared physical core skews both sides. A warning, not an error. In docker mode
+# the Docker host's /sys is not the container VM's topology, so without the BENCH_HOST_SYSFS test
+# hook the check is skipped here and native mode inside the container does the real one.
 sysfs_root="${BENCH_HOST_SYSFS:-}"
-for s in "${server_cpus[@]}"; do
+sib_scan=("${server_cpus[@]}")
+if [ "$mode" = "docker" ] && [ -z "$sysfs_root" ]; then sib_scan=(); fi
+for s in ${sib_scan[@]+"${sib_scan[@]}"}; do
   sib="$sysfs_root/sys/devices/system/cpu/cpu$s/topology/thread_siblings_list"
   [ -r "$sib" ] || continue
   sl="$(tr -d "[:space:]" < "$sib")"

@@ -144,6 +144,11 @@ cpus 0 2,3 sysfs-smt
 if [ "$rc" -eq 0 ] && [[ "$out" != *WARNING* ]]; then pass sibling-none; else fail "sibling-none (rc=$rc out=$out)"; fi
 cpus 0 1,2,3 sysfs-no-smt
 if [ "$rc" -eq 0 ] && [[ "$out" != *WARNING* ]]; then pass sibling-no-smt; else fail "sibling-no-smt (rc=$rc out=$out)"; fi
+# docker mode with the hook still checks siblings (the hook-less skip reads no host /sys at all)
+set +e
+out="$(BENCH_HOST_NPROC=24 BENCH_HOST_SYSFS="$fx/sysfs-smt" bash "$script" docker --host-label local-docker   --server-set 0 --gen-set 1,2,3 --out "$(fresh_out)" --dry-run 2>&1)"; rc=$?
+set -e
+expect sibling-docker-hooked 0 "WARNING: server cpu 0 shares"
 
 echo
 echo "$failures failures"
