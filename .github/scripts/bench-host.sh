@@ -42,7 +42,7 @@ EC2 (no extra tooling; the instance is yours to provide):
   git archive HEAD | ssh <host> 'mkdir -p vcs && tar -x -C vcs'
   ssh <host> 'cd vcs && bash .github/scripts/bench-host.sh native --host-label aws-<type> --server-set 0 --gen-set 4-11 --out ~/bench'
   scp -r <host>:bench .
-Native mode needs Go 1.21 or newer with GOTOOLCHAIN=auto, plus jq, unzip, curl, git and taskset.
+Native mode needs Go 1.21 or newer with GOTOOLCHAIN=auto, plus jq, unzip, curl, git, taskset and ss (iproute2).
 USAGE
 }
 
@@ -369,8 +369,8 @@ pipeline_native() {
 
   if [ "$dry_run" -eq 0 ]; then
     local t
-    for t in jq unzip curl git taskset go sha256sum; do
-      have_tool "$t" || die "needs $t (native mode needs jq, unzip, curl, git, taskset and Go; see --help)"
+    for t in jq unzip ss curl git taskset go sha256sum; do
+      have_tool "$t" || die "needs $t (native mode needs jq, unzip, curl, git, taskset, ss and Go; see --help)"
     done
   fi
 
@@ -617,7 +617,7 @@ pipeline_docker() {
   fi
 
   # The container command, one line. jq and unzip come from apt (the image lacks them) and their versions are recorded.
-  local c="set -euo pipefail; export DEBIAN_FRONTEND=noninteractive; apt-get update -qq >/dev/null; apt-get install -y -qq --no-install-recommends jq unzip >/dev/null"
+  local c="set -euo pipefail; export DEBIAN_FRONTEND=noninteractive; apt-get update -qq >/dev/null; apt-get install -y -qq --no-install-recommends jq unzip iproute2 >/dev/null"
   c="$c; BENCH_HOST_TOOL_VERSIONS=\"jq \$(jq --version | head -n 1), \$(unzip -v | head -n 1 | cut -d, -f1)\"; export BENCH_HOST_TOOL_VERSIONS"
   c="$c; mkdir -p /work/src; tar -x -C /work/src -f /out/.src.tar; rm -f /out/.src.tar"
   if [ "$privileged_sysctl" -eq 1 ]; then

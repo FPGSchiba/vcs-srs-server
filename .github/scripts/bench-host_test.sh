@@ -326,6 +326,11 @@ out="$(BENCH_HOST_HIDE_TOOLS=jq BENCH_HOST_NPROC=24 bash "$script" native --host
 set -e
 expect tools-missing 2 "bench-host: needs jq"
 if [ -e "$tmp/out/.work" ]; then fail tools-missing-no-build; else pass tools-missing-no-build; fi
+# the kit's sampler runs `ss -uamp`; without iproute2 every sweep is invalid (found by the H-T9 smoke run)
+set +e
+out="$(BENCH_HOST_HIDE_TOOLS=ss BENCH_HOST_NPROC=24 bash "$script" native --host-label local-docker --server-set 0 --gen-set 4-11 --out "$(fresh_out)" 2>&1)"; rc=$?
+set -e
+expect tools-missing-ss 2 "bench-host: needs ss"
 
 # dry-run is side-effect free except for the three run records (H-T7)
 pipe
@@ -456,7 +461,7 @@ if [[ "$out" == *"WARNING: --privileged"* ]]; then fail docker-default-no-warnin
 if [[ "$dline" == *"BENCH_HOST_SERVER_SHA=0123abcd"* && "$dline" == *"BENCH_HOST_SERVER_DIRTY=false"* \
   && "$dline" == *"BENCH_HOST_IMAGE=$img"* && "$dline" == *"BENCH_HOST_DOCKER_VERSION=29.7.2"* ]]; then pass docker-env-facts
 else fail "docker-env-facts ($dline)"; fi
-if [[ "$dline" == *"apt-get install -y -qq --no-install-recommends jq unzip"* && "$dline" == *"BENCH_HOST_TOOL_VERSIONS"* ]]; then pass docker-installs-jq-unzip
+if [[ "$dline" == *"apt-get install -y -qq --no-install-recommends jq unzip iproute2"* && "$dline" == *"BENCH_HOST_TOOL_VERSIONS"* ]]; then pass docker-installs-jq-unzip-iproute2
 else fail "docker-installs-jq-unzip ($dline)"; fi
 if [[ "$dline" == *"8388608"* || "$dline" == *"trap"* ]]; then fail docker-default-no-sysctl-code; else pass docker-default-no-sysctl-code; fi
 
