@@ -229,7 +229,7 @@ type aggRow struct {
 
 // renderAggregateMarkdown builds aggregate.md: one row per leg directory, so a
 // failed leg is visible, then the statistics table when any leg finished.
-func renderAggregateMarkdown(legs []legInfo, rows []aggRow, label string) string {
+func renderAggregateMarkdown(legs []legInfo, rows []aggRow, lbl string) string {
 	var b bytes.Buffer
 	finished := 0
 	for _, l := range legs {
@@ -260,7 +260,7 @@ func renderAggregateMarkdown(legs []legInfo, rows []aggRow, label string) string
 				mdCell(r.arm), mdCell(r.scenario), r.repeats, r.median, r.min, r.max, r.censored, r.unconfirmed)
 		}
 	}
-	fmt.Fprintf(&b, "\n_%s_\n", label)
+	fmt.Fprintf(&b, "\n_%s_\n", lbl)
 	return b.String()
 }
 
@@ -356,7 +356,7 @@ func runAggregate(args []string, stdout, stderr io.Writer) error {
 }
 
 // writeAggregateCSV writes aggregate.csv and appends one aggRow per group.
-func writeAggregateCSV(out string, groups map[string][]legKnee, keys []string, rows *[]aggRow, label string) error {
+func writeAggregateCSV(out string, groups map[string][]legKnee, keys []string, rows *[]aggRow, lbl string) error {
 	f, err := os.Create(filepath.Join(out, "aggregate.csv"))
 	if err != nil {
 		return err
@@ -398,7 +398,7 @@ func writeAggregateCSV(out string, groups map[string][]legKnee, keys []string, r
 		if err := cw.Write([]string{
 			g[0].arm, g[0].scenario, strconv.Itoa(len(g)),
 			strconv.Itoa(med), strconv.Itoa(ns[0]), strconv.Itoa(ns[len(ns)-1]),
-			strconv.FormatBool(censored), strconv.FormatBool(unconfirmed), strings.Join(results, "; "), g[0].predicted, topo, label,
+			strconv.FormatBool(censored), strconv.FormatBool(unconfirmed), strings.Join(results, "; "), g[0].predicted, topo, lbl,
 		}); err != nil {
 			return err
 		}
