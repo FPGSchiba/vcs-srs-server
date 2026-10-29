@@ -392,8 +392,8 @@ pipeline_native() {
   started="$(now_utc)"
   dirty="${BENCH_HOST_SERVER_DIRTY:-${BENCH_HOST_FAKE_DIRTY:-}}"
   if [ -z "$dirty" ]; then
-    if ! git -C "$repo" rev-parse --git-dir >/dev/null 2>&1; then dirty=null
-    elif [ -n "$(git -C "$repo" status --porcelain 2>/dev/null)" ]; then dirty=true
+    if ! (cd "$repo" && git rev-parse --git-dir) >/dev/null 2>&1; then dirty=null
+    elif [ -n "$(cd "$repo" && git status --porcelain 2>/dev/null)" ]; then dirty=true
     else dirty=false; fi
   fi
   case "$dirty" in true|false|null) ;; *) die "BENCH_HOST_SERVER_DIRTY must be true, false or null" ;; esac
@@ -414,7 +414,7 @@ pipeline_native() {
   # BENCH_HOST_SERVER_SHA / BENCH_HOST_SERVER_DIRTY carry the host commit into a container (no .git there); the FAKE_ names are kept as aliases.
   local server_sha="${BENCH_HOST_SERVER_SHA:-${BENCH_HOST_FAKE_SHA:-}}"
   if [ -z "$server_sha" ]; then
-    server_sha="$(git -C "$repo" rev-parse HEAD 2>/dev/null || echo unknown)"
+    server_sha="$(cd "$repo" && git rev-parse HEAD 2>/dev/null || echo unknown)"
   fi
   local client_sha="$client_ref"
 
@@ -573,11 +573,11 @@ pipeline_docker() {
 
   # The commit under test comes from the host: a worktree's .git file points at a host path that does not exist in the container.
   sha="${BENCH_HOST_SERVER_SHA:-${BENCH_HOST_FAKE_SHA:-}}"
-  [ -n "$sha" ] || sha="$(git -C "$repo" rev-parse HEAD 2>/dev/null || echo unknown)"
+  [ -n "$sha" ] || sha="$(cd "$repo" && git rev-parse HEAD 2>/dev/null || echo unknown)"
   dirty="${BENCH_HOST_SERVER_DIRTY:-${BENCH_HOST_FAKE_DIRTY:-}}"
   if [ -z "$dirty" ]; then
-    if ! git -C "$repo" rev-parse --git-dir >/dev/null 2>&1; then dirty=null
-    elif [ -n "$(git -C "$repo" status --porcelain 2>/dev/null)" ]; then dirty=true
+    if ! (cd "$repo" && git rev-parse --git-dir) >/dev/null 2>&1; then dirty=null
+    elif [ -n "$(cd "$repo" && git status --porcelain 2>/dev/null)" ]; then dirty=true
     else dirty=false; fi
   fi
   case "$dirty" in true|false|null) ;; *) die "BENCH_HOST_SERVER_DIRTY must be true, false or null" ;; esac

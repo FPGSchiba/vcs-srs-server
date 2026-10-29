@@ -488,6 +488,18 @@ if git -C "$repo_root" rev-parse HEAD >/dev/null 2>&1; then
     --host-label local-docker --server-set 0 --gen-set 4-11 --out "$o" --dry-run 2>&1)"; rc=$?
   set -e
   if [[ "$out" == *"BENCH_HOST_SERVER_SHA=$head_sha"* ]]; then pass docker-sha-from-git; else fail "docker-sha-from-git"; fi
+  # Git Bash with MSYS_NO_PATHCONV=1 gives git.exe a /d/... path it cannot open, so `git -C <repo>` fails there
+  # (found by the H-T9 smoke run: server_sha "unknown", server_dirty null). The script must cd instead.
+  mkdir -p "$tmp/shim"
+  real_git="$(command -v git)"
+  printf '#!/usr/bin/env bash\nif [ "${1:-}" = "-C" ]; then echo "fatal: cannot change to $2" >&2; exit 128; fi\nexec "%s" "$@"\n' "$real_git" > "$tmp/shim/git"
+  chmod +x "$tmp/shim/git"
+  set +e
+  out="$(env -u BENCH_HOST_IN_CONTAINER -u BENCH_HOST_FAKE_SHA -u BENCH_HOST_FAKE_DIRTY PATH="$tmp/shim:$PATH" BENCH_HOST_FAKE_UNAME=Linux BENCH_HOST_NPROC=24 bash "$script" docker \
+    --host-label local-docker --server-set 0 --gen-set 4-11 --out "$(fresh_out)" --dry-run 2>&1)"; rc=$?
+  set -e
+  if [[ "$out" == *"BENCH_HOST_SERVER_SHA=$head_sha"* && ( "$out" == *"BENCH_HOST_SERVER_DIRTY=true"* || "$out" == *"BENCH_HOST_SERVER_DIRTY=false"* ) ]]; then
+    pass docker-sha-without-git-C; else fail "docker-sha-without-git-C"; fi
 fi
 
 # docker-flags-forwarded: verbatim, except --out, --privileged-sysctl and --dry-run; --predict is staged
