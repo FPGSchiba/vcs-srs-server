@@ -95,7 +95,7 @@ done
 [ "$have_gen_set" -eq 1 ] || die "--gen-set is required"
 [ "$have_out" -eq 1 ] || die "--out is required"
 
-host_label_re='^(local-docker|local-linux|aws-[a-z0-9]+\.[a-z0-9]+)$'
+host_label_re='^(local-docker|local-linux|aws-[a-z0-9-]+\.[a-z0-9]+)$'
 [[ "$host_label" =~ $host_label_re ]] || die "--host-label must be local-docker, local-linux or aws-<type> (got '$host_label')"
 case "$arms" in
   S) ;;
@@ -107,7 +107,8 @@ esac
 case "$gogc" in off|default|both) ;; *) die "--gogc must be off, default or both (got '$gogc')" ;; esac
 [[ "$client_ref" =~ ^[0-9a-f]{40}$ ]] || die "--client-ref must be a full 40-hex SHA"
 case "$micro" in run|skip) ;; *) die "--micro must be run or skip (got '$micro')" ;; esac
-[ -n "$budget" ] || die "--budget must not be empty"
+budget_re='^([0-9]+(ns|us|ms|s|m|h))+$'
+[[ "$budget" =~ $budget_re ]] || die "--budget must be a Go duration such as 100m or 1h30m (got '$budget')"
 if [ -n "$predict" ] && [ ! -f "$predict" ]; then die "--predict $predict is not a file"; fi
 if [ "$privileged_sysctl" -eq 1 ] && [ "$mode" != "docker" ]; then
   die "--privileged-sysctl is for docker mode only"

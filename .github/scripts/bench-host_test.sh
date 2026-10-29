@@ -57,7 +57,7 @@ host --dry-run;          expect mode-missing 2 "bench-host: mode must be docker 
 host bogus --dry-run;    expect mode-unknown 2 "bench-host: mode must be docker or native"
 
 # host-label-regex
-for l in local-docker local-linux aws-c7i.4xlarge; do
+for l in local-docker local-linux aws-c7i.4xlarge aws-c7i-flex.large; do
   base native --host-label "$l"; expect "host-label-ok-$l" 0 ""
 done
 for l in aws github aws-C7I.4XL "local docker"; do
@@ -93,10 +93,14 @@ echo '{}' > "$tmp/p.json"
 base native --micro skip --predict "$tmp/p.json";         expect micro-skip-predict 0 ""
 base native --micro skip --predict "$tmp/missing.json";   expect micro-skip-predict-missing 2 "bench-host: --predict"
 base native --micro skip --leg-arg --predicted-knee=900;  expect micro-skip-knee 0 ""
+base native --micro run --predict "$tmp/p.json";          expect micro-run-predict-ok 0 ""
+base native --micro run --predict "$tmp/missing.json";    expect micro-run-predict-missing 2 "bench-host: --predict"
 
 # budget and misc values
 base native --budget 100m; expect budget-ok 0 ""
 base native --budget "";   expect budget-empty 2 "bench-host: --budget"
+for b in 1h30m 90s 250ms 100m; do base native --budget "$b"; expect "budget-ok-$b" 0 ""; done
+for b in abc 10 m 1x; do base native --budget "$b"; expect "budget-bad-$b" 2 "bench-host: --budget"; done
 
 # privileged-sysctl is docker-only
 base docker --privileged-sysctl; expect privileged-docker 0 ""
