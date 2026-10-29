@@ -386,6 +386,7 @@ jobs:
         run: |
           dir="results/${REPEAT}-${SCENARIO}"
           for f in "$dir"/loadbot-*.log "$dir"/calibrate.log "$dir"/reflect.log; do
+            [ -e "$f" ] || continue
             echo "::group::$f (last 50 lines)"
             tail -n 50 "$f" 2>&1 || true
             echo "::endgroup::"
