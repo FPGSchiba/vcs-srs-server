@@ -2,8 +2,11 @@ package main
 
 import (
 	"io"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/FPGSchiba/vcs-srs-server/cmd/vcs-benchkit/leg"
 )
 
 func TestParseLegFlagsDefaults(t *testing.T) {
@@ -67,5 +70,25 @@ func TestParseLegFlagsRound2(t *testing.T) {
 		o.Bot.PingEvery != 0 || o.BurstAdd != 60 || o.BurstInFlight != 8 || o.Bursts ||
 		o.Bot.GCPauseP99 != 7*time.Millisecond || o.Bot.GCPauseWarnP99 != 3*time.Millisecond || o.Bot.GRPCLog != "off" {
 		t.Errorf("overrides = %+v", o)
+	}
+}
+
+func TestParseLegFlagsLabel(t *testing.T) {
+	base := []string{"--server-bin", "s", "--loadbot-bin", "l", "--out", "o"}
+	o, err := parseLegFlags(base, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.Label != leg.Label {
+		t.Errorf("default Label = %q, want leg.Label", o.Label)
+	}
+	const want = "x, relative only. Not a capacity figure."
+	o, err = parseLegFlags(append(append([]string{}, base...), "--label", want), io.Discard)
+	if err != nil || o.Label != want {
+		t.Fatalf("Label = %q err = %v", o.Label, err)
+	}
+	_, err = parseLegFlags(append(append([]string{}, base...), "--label", "a capacity figure"), io.Discard)
+	if err == nil || !strings.Contains(err.Error(), `--label must say "relative only"`) {
+		t.Errorf("err = %v, want the relative-only refusal", err)
 	}
 }

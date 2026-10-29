@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/FPGSchiba/vcs-srs-server/cmd/vcs-benchkit/leg"
@@ -27,6 +29,7 @@ func parseLegFlags(args []string, errw io.Writer) (leg.Options, error) {
 	fs.StringVar(&o.ProbeFile, "probe", "", "gate-0 env-probe.json (cpu sets and topology label)")
 	fs.StringVar(&o.ServerSet, "server-set", "", "server cpu set (overrides --probe)")
 	fs.StringVar(&o.GenSet, "gen-set", "", "generator cpu set (overrides --probe)")
+	fs.StringVar(&o.Label, "label", leg.Label, "label written to the CSVs, results.md and manifest; must say \"relative only\"")
 	fs.StringVar(&o.Topology, "topology", "", "topology label (overrides --probe)")
 	fs.StringVar(&o.PredictFile, "predict", "", "predict.json from `vcs-benchkit predict`")
 	fs.IntVar(&o.PredictedKnee, "predicted-knee", 0, "B-0 predicted knee (overrides --predict)")
@@ -60,6 +63,9 @@ func parseLegFlags(args []string, errw io.Writer) (leg.Options, error) {
 	}
 	if fs.NArg() > 0 {
 		return o, fmt.Errorf("unexpected argument %q (all inputs are flags)", fs.Arg(0))
+	}
+	if !strings.Contains(o.Label, "relative only") {
+		return o, errors.New(`--label must say "relative only"`)
 	}
 	return o, nil
 }

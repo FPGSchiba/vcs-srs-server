@@ -249,3 +249,13 @@ func TestValidateRejectsUnknownGRPCLog(t *testing.T) {
 		t.Errorf("off must be valid: %v", err)
 	}
 }
+
+func TestManifestLabel(t *testing.T) {
+	const L = "local-docker, relative only. Not a capacity figure."
+	if got := newManifest(Options{Label: L}, nil, nil).Label; got != L {
+		t.Errorf("manifest label = %q, want %q", got, L)
+	}
+	if got := newManifest(Options{}, nil, nil).Label; got != Label {
+		t.Errorf("default manifest label = %q, want leg.Label", got)
+	}
+}

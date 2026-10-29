@@ -230,3 +230,82 @@ func TestWriteCalibrationCSVLowerBoundReason(t *testing.T) {
 		t.Fatalf("step row has %d columns, header %d", len(recs[1]), len(h))
 	}
 }
+
+func labelColumn(t *testing.T, csvText string) []string {
+	t.Helper()
+	recs, err := csv.NewReader(strings.NewReader(csvText)).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	col := -1
+	for i, h := range recs[0] {
+		if h == "label" {
+			col = i
+		}
+	}
+	if col < 0 {
+		t.Fatalf("no label column in %v", recs[0])
+	}
+	var out []string
+	for _, r := range recs[1:] {
+		out = append(out, r[col])
+	}
+	if len(out) == 0 {
+		t.Fatal("no rows")
+	}
+	return out
+}
+
+func TestResultsCSVUseOptionLabel(t *testing.T) {
+	const L = "local-docker, relative only. Not a capacity figure."
+	cal := &Calibration{Steps: []CalStep{{N: 64, EgressPPS: 3150, Valid: true}}, ReceivePPS: 3150, StoppedAt: 4096, StopReason: "x"}
+	out := &Outcome{Rows: []Row{{Seq: 1, Kind: "sweep", N: 10}}}
+	var s, k, c bytes.Buffer
+	if err := WriteStepsCSVLabeled(&s, out, "t", L); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteKneesCSV(&k, out, KneeMeta{Arm: "S", Topology: "t", Label: L}); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteCalibrationCSVLabeled(&c, cal, "t", L); err != nil {
+		t.Fatal(err)
+	}
+	for name, b := range map[string]*bytes.Buffer{"steps": &s, "knees": &k, "calibration": &c} {
+		for _, v := range labelColumn(t, b.String()) {
+			if v != L {
+				t.Errorf("%s label = %q, want %q", name, v, L)
+			}
+		}
+	}
+}
+
+func TestLegLabelDefaultIsLegLabel(t *testing.T) {
+	cal := &Calibration{Steps: []CalStep{{N: 64, Valid: true}}}
+	out := &Outcome{Rows: []Row{{Seq: 1, Kind: "sweep", N: 10}}}
+	var s, k, c, r bytes.Buffer
+	if err := WriteStepsCSV(&s, out, "t"); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteKneesCSV(&k, out, KneeMeta{Arm: "S"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteCalibrationCSV(&c, cal, "t"); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteResultsMarkdown(&r, ResultsInput{Arm: "S"}); err != nil {
+		t.Fatal(err)
+	}
+	for name, b := range map[string]*bytes.Buffer{"steps": &s, "knees": &k, "calibration": &c} {
+		for _, v := range labelColumn(t, b.String()) {
+			if v != Label {
+				t.Errorf("%s label = %q, want leg.Label", name, v)
+			}
+		}
+	}
+	if !strings.HasSuffix(r.String(), "_"+Label+"_\n") {
+		t.Errorf("results.md foot = %q", r.String())
+	}
+	if (Options{}).LabelOrDefault() != Label {
+		t.Error("empty Options.Label must resolve to leg.Label")
+	}
+}

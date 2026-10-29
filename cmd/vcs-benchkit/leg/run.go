@@ -43,6 +43,9 @@ type Options struct {
 	// NMaxCap lowers the N_max the time and port budgets give (0 = no extra cap).
 	NMaxCap              int
 	ServerSHA, ClientSHA string
+	// Label replaces Label in the CSVs, results.md and the manifest (empty =
+	// Label, the Actions-runner default).
+	Label string
 
 	Budget   time.Duration
 	JoinRate float64
@@ -62,6 +65,9 @@ type Options struct {
 	BurstAdd, BurstInFlight int
 	Bot                     BotParams
 }
+
+// LabelOrDefault is the label the leg writes: Label unless --label set one.
+func (o Options) LabelOrDefault() string { return LabelOr(o.Label) }
 
 // Probe is the part of gate 0's env-probe.json the leg needs.
 type Probe struct {
@@ -128,6 +134,22 @@ func PredictedKnee(b []byte, scenario, arm string) (int, error) {
 		}
 	}
 	return 0, fmt.Errorf("predict.json: no prediction for %s/%s", scenario, arm)
+}
+
+// newManifest is the manifest a leg starts from, before any result is known.
+func newManifest(o Options, pins map[string]PinRecord, probeRaw []byte) *Manifest {
+	return &Manifest{
+		Schema: "leg-manifest/1", Label: o.LabelOrDefault(), Payload: PayloadLabel, JoinLabel: JoinLabel, NotMeasured: NotMeasured,
+		Arm: o.Arms, Scenario: o.Scenario, Seed: o.Seed, Q6: o.Q6, Topology: o.Topology,
+		ServerSHA: o.ServerSHA, ClientSHA: o.ClientSHA, KitGoVersion: runtime.Version(),
+		Pins:          pins,
+		PredictedKnee: o.PredictedKnee, JoinRate: o.JoinRate, Budget: o.Budget.String(),
+		Durations: map[string]string{
+			"warmup": o.Warmup.String(), "hold": o.Hold.String(), "confirm": o.Confirm.String(),
+			"overload": o.Overload.String(), "calibration_hold": o.CalHold.String(),
+		},
+		Bounds: sweep.DefaultBounds, EnvProbe: probeRaw,
+	}
 }
 
 // Validate checks resolved options. S4 builds the S arm of one-big-net only.
@@ -355,18 +377,7 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	}
 	serverPin := pins["server"].CPUs
 
-	m := &Manifest{
-		Schema: "leg-manifest/1", Label: Label, Payload: PayloadLabel, JoinLabel: JoinLabel, NotMeasured: NotMeasured,
-		Arm: o.Arms, Scenario: o.Scenario, Seed: o.Seed, Q6: o.Q6, Topology: o.Topology,
-		ServerSHA: o.ServerSHA, ClientSHA: o.ClientSHA, KitGoVersion: runtime.Version(),
-		Pins:          pins,
-		PredictedKnee: o.PredictedKnee, JoinRate: o.JoinRate, Budget: o.Budget.String(),
-		Durations: map[string]string{
-			"warmup": o.Warmup.String(), "hold": o.Hold.String(), "confirm": o.Confirm.String(),
-			"overload": o.Overload.String(), "calibration_hold": o.CalHold.String(),
-		},
-		Bounds: sweep.DefaultBounds, EnvProbe: probeRaw,
-	}
+	m := newManifest(o, pins, probeRaw)
 	tag := LegTag(o.Seed, o.Arms, o.Scenario)
 	// The reporter prints the diagnostics block into the Actions log; its source
 	// is set once the S arm's environment exists.
@@ -387,7 +398,7 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	defer func() {
 		in := ResultsInput{
 			Seed: o.Seed, Arm: o.Arms, Scenario: o.Scenario, Result: m.Result, Error: m.Error,
-			Cal: cal, Out: out, Predicted: o.PredictedKnee, NMax: m.NMax,
+			Cal: cal, Out: out, Predicted: o.PredictedKnee, NMax: m.NMax, Label: o.Label,
 		}
 		var buf bytes.Buffer
 		if err := WriteResultsMarkdown(&buf, in); err != nil {
@@ -457,7 +468,7 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 		calNotes = append(calNotes, note)
 		say(FormatCalStopped(tag, cal))
 	}
-	if err := writeFile(o.OutDir, "calibration.csv", func(w io.Writer) error { return WriteCalibrationCSV(w, cal, o.Topology) }); err != nil {
+	if err := writeFile(o.OutDir, "calibration.csv", func(w io.Writer) error { return WriteCalibrationCSVLabeled(w, cal, o.Topology, o.Label) }); err != nil {
 		return fail(err)
 	}
 
@@ -531,14 +542,14 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	}
 
 	// 9. Files, written even after a failure so the partial run is inspectable.
-	if err := writeFile(o.OutDir, "steps.csv", func(w io.Writer) error { return WriteStepsCSV(w, out, o.Topology) }); err != nil {
+	if err := writeFile(o.OutDir, "steps.csv", func(w io.Writer) error { return WriteStepsCSVLabeled(w, out, o.Topology, o.Label) }); err != nil {
 		return fail(err)
 	}
 	if runErr != nil {
 		return fail(runErr)
 	}
 	if err := writeFile(o.OutDir, "knees.csv", func(w io.Writer) error {
-		return WriteKneesCSV(w, out, KneeMeta{Arm: o.Arms, Scenario: o.Scenario, Topology: o.Topology, Predicted: o.PredictedKnee, NMax: nMax})
+		return WriteKneesCSV(w, out, KneeMeta{Arm: o.Arms, Scenario: o.Scenario, Topology: o.Topology, Predicted: o.PredictedKnee, NMax: nMax, Label: o.Label})
 	}); err != nil {
 		return fail(err)
 	}
