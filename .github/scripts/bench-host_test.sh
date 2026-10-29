@@ -116,6 +116,35 @@ base native --nope;      expect unknown-flag 2 "bench-host: unknown flag --nope"
 base native stray;       expect positional 2 "bench-host: unexpected argument stray"
 host native --host-label; expect missing-value 2 "bench-host: --host-label needs a value"
 
+
+# cpu sets (H-T5). Fixtures: BENCH_HOST_SYSFS is a root holding sys/devices/system/cpu/...
+fx="$here/testdata/bench-host"
+cpus() { # <server-set> <gen-set> [sysfs fixture]: native dry-run with those sets
+  local sysfs="${3:-sysfs-no-smt}"
+  set +e
+  out="$(BENCH_HOST_NPROC=24 BENCH_HOST_SYSFS="$fx/$sysfs" bash "$script" native --host-label local-docker \
+    --server-set "$1" --gen-set "$2" --out "$(fresh_out)" --dry-run 2>&1)"; rc=$?
+  set -e
+}
+cpus 0 4-11;      expect cpus-ok 0 ""
+cpus 0-1 1-3;     expect cpus-overlap 2 "bench-host: server and generator cpu sets overlap on 1"
+cpus 0-1 1-3,5;   expect cpus-overlap-list 2 "overlap on 1"
+cpus 0 20-30;     expect cpus-range 2 "cpu 24 is not online"
+cpus 24 4-11;     expect cpus-range-server 2 "cpu 24 is not online"
+for bad in a 3-1 1,,2 "" 1- -1 1-a; do
+  cpus 0 "$bad";  expect "cpus-malformed-gen-[$bad]" 2 "bench-host: --gen-set"
+done
+cpus a 4-11;      expect cpus-malformed-server 2 "bench-host: --server-set"
+cpus "" 4-11;     expect cpus-empty-server 2 "bench-host: --server-set"
+cpus 0-2 4-11;    expect server-size 2 "server set must be 1 or 2 cpus"
+cpus 0,1 4-11;    expect server-size-two-ok 0 ""
+cpus 0 1,2,3 sysfs-smt
+expect sibling-warning 0 "WARNING: server cpu 0 shares a physical core with generator cpu 1"
+cpus 0 2,3 sysfs-smt
+if [ "$rc" -eq 0 ] && [[ "$out" != *WARNING* ]]; then pass sibling-none; else fail "sibling-none (rc=$rc out=$out)"; fi
+cpus 0 1,2,3 sysfs-no-smt
+if [ "$rc" -eq 0 ] && [[ "$out" != *WARNING* ]]; then pass sibling-no-smt; else fail "sibling-no-smt (rc=$rc out=$out)"; fi
+
 echo
 echo "$failures failures"
 [ "$failures" -eq 0 ]

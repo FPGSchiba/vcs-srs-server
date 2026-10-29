@@ -122,6 +122,72 @@ if [ "$micro" = "skip" ]; then
     die "--micro skip needs --predict FILE or --leg-arg --predicted-knee=N"
   fi
 fi
+
+# cpu_expand FLAG LIST: expands a taskset list ("0-1,4") into the global array CPUS. Same rules as
+# leg.CPUList: no empty list or element, no negative number, no descending range. Bash 3.2 safe.
+CPUS=()
+cpu_expand() {
+  local flag="$1" list="$2" el lo hi c
+  CPUS=()
+  [ -n "$list" ] || die "$flag: empty cpu list"
+  local parts
+  IFS=',' read -ra parts <<< "$list"
+  # a trailing comma leaves no empty last element in read -a, so check the raw string too
+  case "$list" in ,*|*,|*,,*) die "$flag: cpu list '$list' has an empty element" ;; esac
+  for el in "${parts[@]}"; do
+    if [[ "$el" =~ ^[0-9]{1,5}$ ]]; then
+      CPUS+=("$((10#$el))")
+    elif [[ "$el" =~ ^([0-9]{1,5})-([0-9]{1,5})$ ]]; then
+      lo=$((10#${BASH_REMATCH[1]})); hi=$((10#${BASH_REMATCH[2]}))
+      [ "$hi" -ge "$lo" ] || die "$flag: cpu list '$list' has a bad range '$el'"
+      c="$lo"
+      while [ "$c" -le "$hi" ]; do CPUS+=("$c"); c=$((c + 1)); done
+    else
+      die "$flag: cpu list '$list' has a bad element '$el'"
+    fi
+  done
+}
+
+cpu_expand --server-set "$server_set"; server_cpus=("${CPUS[@]}")
+cpu_expand --gen-set "$gen_set";       gen_cpus=("${CPUS[@]}")
+[ "${#server_cpus[@]}" -ge 1 ] && [ "${#server_cpus[@]}" -le 2 ] || die "server set must be 1 or 2 cpus (got ${#server_cpus[@]} in '$server_set')"
+
+overlap=""
+for s in "${server_cpus[@]}"; do
+  for g in "${gen_cpus[@]}"; do
+    if [ "$s" -eq "$g" ]; then overlap="${overlap:+$overlap,}$s"; fi
+  done
+done
+[ -z "$overlap" ] || die "server and generator cpu sets overlap on $overlap"
+
+# Range check against the online cpu count. BENCH_HOST_NPROC is the test hook. In docker mode the
+# host's own count is not the container VM's, so without the hook the check is left to native mode
+# inside the container.
+host_nproc="${BENCH_HOST_NPROC:-}"
+if [ -z "$host_nproc" ] && [ "$mode" = "native" ]; then host_nproc="$(nproc)"; fi
+if [ -n "$host_nproc" ]; then
+  for c in "${server_cpus[@]}" "${gen_cpus[@]}"; do
+    [ "$c" -lt "$host_nproc" ] || die "cpu $c is not online (host has $host_nproc cpus, valid 0-$((host_nproc - 1)))"
+  done
+fi
+
+# Sibling warning: a shared physical core skews both sides. A warning, not an error.
+sysfs_root="${BENCH_HOST_SYSFS:-}"
+for s in "${server_cpus[@]}"; do
+  sib="$sysfs_root/sys/devices/system/cpu/cpu$s/topology/thread_siblings_list"
+  [ -r "$sib" ] || continue
+  sl="$(tr -d "[:space:]" < "$sib")"
+  ( cpu_expand "cpu$s siblings" "$sl" ) >/dev/null 2>&1 || continue
+  cpu_expand "cpu$s siblings" "$sl"
+  for t in "${CPUS[@]}"; do
+    for g in "${gen_cpus[@]}"; do
+      if [ "$t" -eq "$g" ] && [ "$t" -ne "$s" ]; then
+        echo "bench-host: WARNING: server cpu $s shares a physical core with generator cpu $g" >&2
+      fi
+    done
+  done
+done
+
 if [ -e "$out_dir" ]; then
   [ -d "$out_dir" ] || die "--out $out_dir is not a directory"
   [ -z "$(ls -A "$out_dir")" ] || die "--out $out_dir must be empty"
