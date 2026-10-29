@@ -1,9 +1,9 @@
 package leg
 
 import (
-	"errors"
 	"bufio"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
