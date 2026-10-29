@@ -145,6 +145,16 @@ func (o *Options) Validate() error {
 		return errors.New("a topology label is required (--probe or --topology)")
 	case o.PredictedKnee <= 0:
 		return errors.New("a predicted knee is required (--predict or --predicted-knee)")
+	case o.Bot.PingEvery < 0:
+		return fmt.Errorf("--ping-every %v: must not be negative", o.Bot.PingEvery)
+	case o.RampChunk < 0:
+		return fmt.Errorf("--ramp-chunk %d: must not be negative", o.RampChunk)
+	case o.BurstAdd < 0:
+		return fmt.Errorf("--burst-add %d: must not be negative", o.BurstAdd)
+	case o.BurstInFlight < 0:
+		return fmt.Errorf("--burst-in-flight %d: must not be negative", o.BurstInFlight)
+	case o.Bot.GCPauseWarnP99 > 0 && o.Bot.GCPauseP99 > 0 && o.Bot.GCPauseWarnP99 > o.Bot.GCPauseP99:
+		return fmt.Errorf("gc warn bound %v exceeds the hard bound %v", o.Bot.GCPauseWarnP99, o.Bot.GCPauseP99)
 	case o.Bot.GRPCLog != "" && o.Bot.GRPCLog != "off" && o.Bot.GRPCLog != "info" && o.Bot.GRPCLog != "warning" && o.Bot.GRPCLog != "error":
 		return fmt.Errorf("--grpc-log %q: want info, warning, error or off", o.Bot.GRPCLog)
 	}
@@ -410,6 +420,7 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	// flags every later run passes. Probed once per leg, before calibration.
 	feats := ProbeFeatures(o.LoadbotBin, ProbeTimeout)
 	m.recordRound2(o, feats)
+	logf("%s", Round2Summary(o, feats))
 	if feats.Version == 2 {
 		logf("load bot v2 (no features subcommand or probe failed)")
 	} else {
@@ -608,6 +619,26 @@ func (o *Options) normalizeRound2() {
 	}
 }
 
+// Round2Summary is one log line of the effective round-2 parameters, so the
+// Actions log shows what a leg ran with without opening manifest.json.
+func Round2Summary(o Options, feats Features) string {
+	o.normalizeRound2()
+	rate := "rate rule not applied (bot lacks join_rate)"
+	if feats.Has("join_rate") {
+		rate = fmt.Sprintf("rate min(%s,%s/N), in-flight %d", fmtFloat(o.Bot.JoinRateMax), fmtFloat(o.Bot.JoinRateScale), o.Bot.MaxInFlight)
+	}
+	ping := "ping off"
+	if feats.Has("ping") && o.Bot.PingEvery > 0 {
+		ping = "ping " + o.Bot.PingEvery.String()
+	}
+	bursts := "bursts off"
+	if o.Bursts && feats.Has("burst") {
+		bursts = fmt.Sprintf("bursts on (add %d, in-flight %d)", o.BurstAdd, o.BurstInFlight)
+	}
+	return fmt.Sprintf("round 2: chunk %d, %s, ramp talker %s, %s, %s, gc %v/%v, grpc-log %s",
+		o.RampChunk, rate, o.Bot.RampTalker, ping, bursts, o.Bot.GCPauseWarnP99, o.Bot.GCPauseP99, o.Bot.GRPCLog)
+}
+
 // recordRound2 fills the manifest's bot, generator, ramp, burst and decision
 // fields from the options and the probed bot features.
 func (m *Manifest) recordRound2(o Options, feats Features) {
@@ -619,8 +650,14 @@ func (m *Manifest) recordRound2(o Options, feats Features) {
 		"reflect":   GeneratorEnvWith("reflect", o.Bot.GRPCLog),
 	}
 	m.ServerEnv = ServerEnvWith(o.Bot.GRPCLog)
-	m.Ramp = &RampRecord{Chunk: o.RampChunk, RateMax: o.Bot.JoinRateMax, RateScale: o.Bot.JoinRateScale, MaxInFlight: o.Bot.MaxInFlight, Talker: o.Bot.RampTalker}
-	m.Burst = &BurstRecord{Add: o.BurstAdd, InFlight: o.BurstInFlight, Enabled: o.Bursts}
+	// The rate rule and the bursts are applied only when the bot has the feature;
+	// record what ran, not what the flags asked for.
+	ramp := &RampRecord{Chunk: o.RampChunk, Talker: o.Bot.RampTalker}
+	if feats.Has("join_rate") {
+		ramp.RateMax, ramp.RateScale, ramp.MaxInFlight = o.Bot.JoinRateMax, o.Bot.JoinRateScale, o.Bot.MaxInFlight
+	}
+	m.Ramp = ramp
+	m.Burst = &BurstRecord{Add: o.BurstAdd, InFlight: o.BurstInFlight, Enabled: o.Bursts && feats.Has("burst")}
 	m.BoundsGenerator = &GenBoundsRecord{GCPauseP99Us: o.Bot.GCPauseP99.Microseconds(), GCPauseWarnP99Us: o.Bot.GCPauseWarnP99.Microseconds()}
 	m.DecisionsRound2 = decisionsRound2()
 }
