@@ -254,6 +254,87 @@ BENCHSTAT='golang.org/x/perf/cmd/benchstat@v0.0.0-20261009192801-be2c69fb417e'
 CLIENT_URL='https://github.com/FPGSchiba/vcs-srs-client.git'
 MICRO_RE='^Benchmark(SocketSend|GetListeningClients|HandleVoicePacket)$'
 
+now_utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+num_or_null() { case "$1" in ''|*[!0-9]*) echo null ;; *) echo "$1" ;; esac; }
+str_or_null() { if [ -n "$1" ]; then jq -n --arg v "$1" '$v'; else echo null; fi; }
+
+# write_build_json and write_records read pipeline_native's locals through bash dynamic scope
+# (server_sha, client_sha, dirty, go_version, label, started, variants, ...), so they are only called
+# from there. All JSON is built with jq --arg/--argjson, never by string splicing.
+write_build_json() {
+  mkdir -p "$out_dir"
+  jq -n --arg server_sha "$server_sha" --arg go_version "$go_version" \
+    --arg client_sha "$client_sha" --arg client_go_version "$client_go_version" \
+    --argjson server_dirty "$dirty" \
+    '{server_sha: $server_sha, go_version: $go_version, client_sha: $client_sha,
+      client_go_version: $client_go_version, server_dirty: $server_dirty}' > "$out_dir/build.json"
+}
+
+BOT_LABEL_NOTE="The pinned load bot (client b55823e) writes its own raw NDJSON lines in loadbot-*.log with the Actions label (Shared GitHub runner). That is the client's string and stays in the raw logs only; the kit's tables, CSVs and manifests carry the label above."
+
+write_records() {
+  mkdir -p "$out_dir"
+  local ended legs_json a nproc_v kernel
+  ended="$(now_utc)"
+  legs_json='[]'
+  for a in ${leg_args[@]+"${leg_args[@]}"}; do
+    legs_json="$(printf '%s' "$legs_json" | jq -c --arg a "$a" '. + [$a]')"
+  done
+  nproc_v="${BENCH_HOST_NPROC:-$(nproc 2>/dev/null || true)}"
+  kernel="${BENCH_HOST_FAKE_KERNEL:-$(uname -r 2>/dev/null || echo unknown)}"
+  jq -n --arg host_label "$host_label" --arg mode "$mode" \
+    --argjson image "$(str_or_null "${BENCH_HOST_IMAGE:-}")" \
+    --argjson docker_version "$(str_or_null "${BENCH_HOST_DOCKER_VERSION:-}")" \
+    --arg kernel "$kernel" --argjson nproc "$(num_or_null "$nproc_v")" \
+    --arg server_set "$server_set" --arg gen_set "$gen_set" --arg gogc "$gogc" \
+    --arg client_ref "$client_ref" --arg server_sha "$server_sha" --argjson server_dirty "$dirty" \
+    --argjson rmem_max "$(num_or_null "$rmem0")" --argjson wmem_max "$(num_or_null "$wmem0")" \
+    --argjson leg_args "$legs_json" --arg note "$note" \
+    --arg started_utc "$started" --arg ended_utc "$ended" \
+    --arg label "$label" --arg bot_label_note "$BOT_LABEL_NOTE" \
+    '{host_label: $host_label, mode: $mode, image: $image, docker_version: $docker_version,
+      kernel: $kernel, nproc: $nproc, server_set: $server_set, gen_set: $gen_set, gogc: $gogc,
+      client_ref: $client_ref, server_sha: $server_sha, server_dirty: $server_dirty,
+      rmem_max: $rmem_max, wmem_max: $wmem_max, leg_args: $leg_args, note: $note,
+      started_utc: $started_utc, ended_utc: $ended_utc,
+      relative_only: true, label: $label, bot_label_note: $bot_label_note}' > "$out_dir/host.json"
+
+  local sum="$out_dir/summary.md" v k dir f
+  {
+    echo "# Bench host run: $host_label"
+    echo
+    echo "$label"
+    echo
+    echo "| fact | value |"
+    echo "|---|---|"
+    jq -r '. as $h | ["host_label","mode","image","docker_version","kernel","nproc","server_set","gen_set","gogc","client_ref","server_sha","server_dirty","rmem_max","wmem_max","leg_args","note","started_utc","ended_utc"][]
+      | "| \(.) | \($h[.] | if type == "array" then join(" ") elif . == null then "-" else tostring end | gsub("\\|"; "\\|") | gsub("\n"; " ")) |"' "$out_dir/host.json"
+    echo
+    echo "$BOT_LABEL_NOTE"
+    for v in $variants; do
+      dir="$out_dir/gogc-$v"
+      echo
+      echo "## GOGC $v"
+      k=1
+      while [ "$k" -le "$repeats" ]; do
+        f="$dir/results/$k-$scenario/results.md"
+        echo
+        echo "### Leg $k results"
+        echo
+        if [ -f "$f" ]; then cat "$f"; else echo "_no results.md (the leg did not finish)_"; fi
+        k=$((k + 1))
+      done
+      f="$dir/aggregate/aggregate.md"
+      echo
+      echo "### Aggregate"
+      echo
+      if [ -f "$f" ]; then cat "$f"; else echo "_no aggregate.md_"; fi
+    done
+  } > "$sum"
+  echo "== summary =="
+  cat "$sum"
+}
+
 # The same backstop as bench.yml's "Diagnostics (failed leg)" step, with plain headers.
 leg_diagnostics() { # LEG_DIR
   local d="$1" f srv
@@ -274,8 +355,6 @@ pipeline_native() {
   local here repo work bin
   here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   repo="$(cd "$here/../.." && pwd)"
-  work="$out_dir/.work"
-  bin="$work/bin"
 
   if [ "$dry_run" -eq 0 ]; then
     local t
@@ -283,6 +362,33 @@ pipeline_native() {
       have_tool "$t" || die "needs $t (native mode needs jq, unzip, curl, git, taskset and Go; see --help)"
     done
   fi
+
+  # The work dir (protoc, binaries, the client clone, about 1 GB) lives outside --out so it is never
+  # packaged and --out stays empty-checkable on a rerun. BENCH_HOST_WORK overrides it and is kept.
+  if [ -n "${BENCH_HOST_WORK:-}" ]; then
+    work="$BENCH_HOST_WORK"
+  elif [ "$dry_run" -eq 1 ]; then
+    work="${TMPDIR:-/tmp}/vcs-bench-host.work"
+  else
+    work="$(mktemp -d "${TMPDIR:-/tmp}/vcs-bench-host.XXXXXX")"
+    WORK_TO_REMOVE="$work"
+    trap 'rm -rf "$WORK_TO_REMOVE"' EXIT
+  fi
+  bin="$work/bin"
+  [ "$dry_run" -eq 1 ] || mkdir -p "$out_dir"
+
+  local started dirty rmem0 wmem0
+  started="$(now_utc)"
+  dirty="${BENCH_HOST_FAKE_DIRTY:-}"
+  if [ -z "$dirty" ]; then
+    if ! git -C "$repo" rev-parse --git-dir >/dev/null 2>&1; then dirty=null
+    elif [ -n "$(git -C "$repo" status --porcelain 2>/dev/null)" ]; then dirty=true
+    else dirty=false; fi
+  fi
+  case "$dirty" in true|false|null) ;; *) die "BENCH_HOST_FAKE_DIRTY must be true, false or null" ;; esac
+  rmem0="${BENCH_HOST_FAKE_RMEM:-$(cat /proc/sys/net/core/rmem_max 2>/dev/null || true)}"
+  wmem0="${BENCH_HOST_FAKE_WMEM:-$(cat /proc/sys/net/core/wmem_max 2>/dev/null || true)}"
+  local go_version="${BENCH_HOST_FAKE_GO_VERSION:-dry-run}" client_go_version="${BENCH_HOST_FAKE_CLIENT_GO_VERSION:-dry-run}"
 
   local nsrv ngen label topology smt extra=""
   nsrv="${#server_cpus[@]}"; ngen="${#gen_cpus[@]}"
@@ -342,7 +448,10 @@ pipeline_native() {
   run_in "$work/client" env CGO_ENABLED=0 GOTOOLCHAIN=auto go build -tags purego -trimpath -o "$bin/vcs-loadbot" ./cmd/vcs-loadbot
   if [ "$dry_run" -eq 0 ]; then
     client_sha="$(git -C "$work/client" rev-parse HEAD)"
+    go_version="$(go env GOVERSION)"
+    client_go_version="$(cd "$work/client" && GOTOOLCHAIN=auto go env GOVERSION)"
   fi
+  write_build_json
 
   echo "== probe =="
   run bash "$here/bench-probe_test.sh"
@@ -397,6 +506,10 @@ pipeline_native() {
         "$sysctl_flag")
       if [ "${#leg_args[@]}" -gt 0 ]; then cmd+=("${leg_args[@]}"); fi
       echo "== leg $k, GOGC $v =="
+      if [ "$dry_run" -eq 1 ] && [ -n "${BENCH_HOST_FAKE_RESULTS:-}" ]; then
+        mkdir -p "$dir/results/$k-$scenario"
+        printf 'FAKE results GOGC %s leg %s\n' "$v" "$k" > "$dir/results/$k-$scenario/results.md"
+      fi
       if ! run_tee "$dir/leg-$k.log" "${cmd[@]}"; then
         echo "bench-host: leg $k (GOGC $v) failed; continuing" >&2
         failed=1
@@ -416,12 +529,17 @@ pipeline_native() {
         echo "PARTIAL: GOGC $v: $legs_done of $repeats legs aggregated; the statistics cover the surviving legs only"
       fi
     fi
+    if [ "$dry_run" -eq 1 ] && [ -n "${BENCH_HOST_FAKE_RESULTS:-}" ]; then
+      mkdir -p "$dir/aggregate"
+      printf 'FAKE aggregate GOGC %s\n' "$v" > "$dir/aggregate/aggregate.md"
+    fi
     if ! run "$bin/vcs-benchkit" aggregate --in "$dir/results" --out "$dir/aggregate" --label "$label"; then
       echo "bench-host: aggregate (GOGC $v) failed" >&2
       failed=1
     fi
   done
 
+  write_records
   if [ "$failed" -ne 0 ]; then
     echo "bench-host: finished with failures (see above)" >&2
     exit 1

@@ -327,9 +327,83 @@ set -e
 expect tools-missing 2 "bench-host: needs jq"
 if [ -e "$tmp/out/.work" ]; then fail tools-missing-no-build; else pass tools-missing-no-build; fi
 
-# dry-run is side-effect free
+# dry-run is side-effect free except for the three run records (H-T7)
 pipe
-if [ -z "$(ls -A "$tmp/out")" ]; then pass dry-run-writes-nothing; else fail "dry-run-writes-nothing ($(ls -A "$tmp/out"))"; fi
+if [ "$(ls -A "$tmp/out" | tr '
+' ' ')" = "build.json host.json summary.md " ]; then pass dry-run-writes-only-records; else fail "dry-run-writes-only-records ($(ls -A "$tmp/out"))"; fi
+# the work dir (about 1 GB) is outside --out
+has work-outside-out "mkdir -p /"
+if plus | grep -qF "$tmp/out/.work"; then fail work-outside-out-path; else pass work-outside-out-path; fi
+
+# ---------------------------------------------------------------------------
+# run records (H-T7): dry-run writes host.json, build.json and summary.md from injected fake values.
+recs() { # <extra args...>: native dry-run with fake facts and stub results; records stay in $tmp/out
+  local o; o="$(fresh_out)"
+  set +e
+  out="$(env -u BENCH_HOST_IN_CONTAINER BENCH_HOST_NPROC=24 BENCH_HOST_FAKE_SHA=abc123def456 BENCH_HOST_FAKE_DIRTY=true     BENCH_HOST_FAKE_KERNEL=6.18.33.2-microsoft-standard-WSL2 BENCH_HOST_FAKE_RMEM=4194304 BENCH_HOST_FAKE_WMEM=4194304     BENCH_HOST_FAKE_GO_VERSION=go1.27.3 BENCH_HOST_FAKE_CLIENT_GO_VERSION=go1.26.1 BENCH_HOST_FAKE_RESULTS=1     BENCH_HOST_IMAGE=golang:1.27.3@sha256:abc BENCH_HOST_DOCKER_VERSION=29.7.2     bash "$script" native --host-label local-docker --server-set 0 --gen-set 4-11 --out "$o" --dry-run "$@" 2>"$tmp/err")"; rc=$?
+  set -e
+  err="$(cat "$tmp/err")"
+}
+recs --gogc both --repeats 2 --leg-arg --n-max=200 --note 'High performance | apps closed'
+[ "$rc" -eq 0 ] || fail "records-run (rc=$rc err=$err)"
+hj="$tmp/out/host.json"; bj="$tmp/out/build.json"; sm="$tmp/out/summary.md"
+lbl2='local-docker, server cpus 0, generator cpus 4-11, non-default leg args, loopback, relative only. Not a capacity figure.'
+if jq -e --arg l "$lbl2" '
+    (["host_label","mode","image","docker_version","kernel","nproc","server_set","gen_set","gogc","client_ref",
+      "server_sha","server_dirty","rmem_max","wmem_max","leg_args","note","started_utc","ended_utc"] - keys) == []
+    and .relative_only == true and .label == $l and .host_label == "local-docker" and .mode == "native"
+    and .image == "golang:1.27.3@sha256:abc" and .docker_version == "29.7.2"
+    and .kernel == "6.18.33.2-microsoft-standard-WSL2" and .nproc == 24
+    and .server_set == "0" and .gen_set == "4-11" and .gogc == "both"
+    and .server_sha == "abc123def456" and .server_dirty == true
+    and .rmem_max == 4194304 and .wmem_max == 4194304
+    and .leg_args == ["--n-max=200"] and .note == "High performance | apps closed"
+    and (.started_utc | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$"))
+    and (.ended_utc | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$"))
+    and (.bot_label_note | test("raw")) and (.bot_label_note | test("Actions label"))' "$hj" >/dev/null; then
+  pass host-json
+else fail "host-json ($(cat "$hj" 2>&1))"; fi
+cr_ref="$(jq -r .client_ref "$hj")"
+if [ "$cr_ref" = "$cr" ]; then pass host-json-client-ref; else fail "host-json-client-ref ($cr_ref)"; fi
+hn="$(hostname 2>/dev/null || true)"
+if [ "${#hn}" -ge 4 ]; then
+  if grep -rqiF -- "$hn" "$hj" "$bj" "$sm"; then fail host-json-no-hostname; else pass host-json-no-hostname; fi
+else pass host-json-no-hostname; fi
+# unknown facts are null, not invented
+set +e
+env -u BENCH_HOST_IMAGE -u BENCH_HOST_DOCKER_VERSION BENCH_HOST_NPROC=24 BENCH_HOST_FAKE_DIRTY=false BENCH_HOST_FAKE_RMEM= BENCH_HOST_FAKE_WMEM=   bash "$script" native --host-label local-linux --server-set 0 --gen-set 4-11 --out "$(fresh_out)" --dry-run >/dev/null 2>&1
+set -e
+if jq -e '.image == null and .docker_version == null and .server_dirty == false and .leg_args == [] and .note == ""
+          and .host_label == "local-linux"' "$tmp/out/host.json" >/dev/null; then pass host-json-nulls; else fail "host-json-nulls ($(cat "$tmp/out/host.json"))"; fi
+
+recs --gogc both --repeats 2 --leg-arg --n-max=200 --note 'High performance | apps closed'
+if jq -e '(keys - ["server_sha","go_version","client_sha","client_go_version","server_dirty"]) == []
+          and (["server_sha","go_version","client_sha","client_go_version","server_dirty"] - keys) == []
+          and .server_sha == "abc123def456" and .go_version == "go1.27.3"
+          and .client_sha == "'"$cr"'" and .client_go_version == "go1.26.1" and .server_dirty == true' "$bj" >/dev/null; then
+  pass build-json
+else fail "build-json ($(cat "$bj" 2>&1))"; fi
+
+# summary-md: heading, label line, facts table, then per variant a "## GOGC" heading with each results.md and the aggregate
+in_order_file() { # <name> <file> <pattern>...: fixed-string patterns on rising line numbers
+  local name="$1" f="$2"; shift 2
+  local last=0 pat n ok=1
+  for pat in "$@"; do
+    n="$(grep -nF -- "$pat" "$f" | awk -F: -v l="$last" '$1>l{print $1; exit}' || true)"
+    if [ -z "$n" ]; then ok=0; echo "  $name: no line after $last containing: $pat"; break; fi
+    last="$n"
+  done
+  if [ "$ok" -eq 1 ]; then pass "$name"; else fail "$name"; fi
+}
+in_order_file summary-md "$sm"   "# Bench host run: local-docker"   "$lbl2"   "| fact | value |"   "| host_label | local-docker |"   "| server_dirty | true |"   "## GOGC off"   "FAKE results GOGC off leg 1"   "FAKE results GOGC off leg 2"   "FAKE aggregate GOGC off"   "## GOGC default"   "FAKE results GOGC default leg 1"   "FAKE results GOGC default leg 2"   "FAKE aggregate GOGC default"
+if [ "$(sed -n 1p "$sm")" = "# Bench host run: local-docker" ]; then pass summary-md-first-line; else fail summary-md-first-line; fi
+if grep -qF 'High performance \| apps closed' "$sm"; then pass summary-md-escapes-pipes; else fail summary-md-escapes-pipes; fi
+# the summary is also printed to stdout at the end
+if printf '%s
+' "$out" | grep -qF "FAKE aggregate GOGC default"; then pass summary-printed; else fail summary-printed; fi
+# a leg that has not finished still gets a section
+pipe --gogc default
+if grep -qF '_no results.md' "$tmp/out/summary.md"; then pass summary-md-missing-results; else fail summary-md-missing-results; fi
 
 echo
 echo "$failures failures"
