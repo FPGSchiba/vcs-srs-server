@@ -52,6 +52,7 @@ arms="S"; scenario="one-big-net"; repeats="1"; gogc="off"
 client_ref="$DEFAULT_CLIENT_REF"; micro="run"; predict=""; budget="100m"; note=""
 privileged_sysctl=0; dry_run=0
 leg_args=()
+fwd=()   # flags forwarded verbatim into the container (docker mode); --out and --predict are rewritten there
 
 mode=""
 case "${1:-}" in
@@ -69,6 +70,7 @@ while [ $# -gt 0 ]; do
     --host-label|--server-set|--gen-set|--arms|--scenario|--repeats|--gogc|--client-ref|--out|--micro|--predict|--budget|--leg-arg|--note)
       [ $# -ge 2 ] || die "$flag needs a value"
       val="$2"; shift 2
+      case "$flag" in --out|--predict) ;; *) fwd+=("$flag" "$val") ;; esac
       case "$flag" in
         --host-label) host_label="$val"; have_host_label=1 ;;
         --server-set) server_set="$val"; have_server_set=1 ;;
@@ -194,7 +196,12 @@ done
 
 if [ -e "$out_dir" ]; then
   [ -d "$out_dir" ] || die "--out $out_dir is not a directory"
-  [ -z "$(ls -A "$out_dir")" ] || die "--out $out_dir must be empty"
+  if [ -n "${BENCH_HOST_IN_CONTAINER:-}" ]; then
+    # the docker launcher stages the source archive and a --predict file in --out; nothing else may be there
+    [ -z "$(ls -A "$out_dir" | grep -v -x -e .src.tar -e .predict.json || true)" ] || die "--out $out_dir must be empty"
+  else
+    [ -z "$(ls -A "$out_dir")" ] || die "--out $out_dir must be empty"
+  fi
 fi
 
 if [ "$dry_run" -eq 1 ]; then
@@ -285,6 +292,8 @@ write_records() {
   jq -n --arg host_label "$host_label" --arg mode "$mode" \
     --argjson image "$(str_or_null "${BENCH_HOST_IMAGE:-}")" \
     --argjson docker_version "$(str_or_null "${BENCH_HOST_DOCKER_VERSION:-}")" \
+    --argjson tool_versions "$(str_or_null "${BENCH_HOST_TOOL_VERSIONS:-}")" \
+    --argjson sysctl_raise "$(str_or_null "${BENCH_HOST_SYSCTL_RAISE:-}")" \
     --arg kernel "$kernel" --argjson nproc "$(num_or_null "$nproc_v")" \
     --arg server_set "$server_set" --arg gen_set "$gen_set" --arg gogc "$gogc" \
     --arg client_ref "$client_ref" --arg server_sha "$server_sha" --argjson server_dirty "$dirty" \
@@ -293,6 +302,7 @@ write_records() {
     --arg started_utc "$started" --arg ended_utc "$ended" \
     --arg label "$label" --arg bot_label_note "$BOT_LABEL_NOTE" \
     '{host_label: $host_label, mode: $mode, image: $image, docker_version: $docker_version,
+      tool_versions: $tool_versions, sysctl_raise: $sysctl_raise,
       kernel: $kernel, nproc: $nproc, server_set: $server_set, gen_set: $gen_set, gogc: $gogc,
       client_ref: $client_ref, server_sha: $server_sha, server_dirty: $server_dirty,
       rmem_max: $rmem_max, wmem_max: $wmem_max, leg_args: $leg_args, note: $note,
@@ -307,7 +317,7 @@ write_records() {
     echo
     echo "| fact | value |"
     echo "|---|---|"
-    jq -r '. as $h | ["host_label","mode","image","docker_version","kernel","nproc","server_set","gen_set","gogc","client_ref","server_sha","server_dirty","rmem_max","wmem_max","leg_args","note","started_utc","ended_utc"][]
+    jq -r '. as $h | ["host_label","mode","image","docker_version","tool_versions","sysctl_raise","kernel","nproc","server_set","gen_set","gogc","client_ref","server_sha","server_dirty","rmem_max","wmem_max","leg_args","note","started_utc","ended_utc"][]
       | "| \(.) | \($h[.] | if type == "array" then join(" ") elif . == null then "-" else tostring end | gsub("\\|"; "\\|") | gsub("\n"; " ")) |"' "$out_dir/host.json"
     echo
     echo "$BOT_LABEL_NOTE"
@@ -546,8 +556,94 @@ pipeline_native() {
   fi
 }
 
+# The pinned image: the exact tag of the repo Dockerfile's builder stage, by index digest (resolved
+# 2026-10-29). bench-host_test.sh fails when the tag drifts from the Dockerfile.
+IMAGE='golang:1.27.3@sha256:2920bb124f1a2e12a1d39f0cab756ae0068441ee1da7655dec7f5e374944095b'
+
+pipeline_docker() {
+  local here repo ts out_abs host_out sha dirty dver a
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  repo="$(cd "$here/../.." && pwd)"
+
+  if [ "$dry_run" -eq 0 ]; then
+    have_tool docker || die "docker mode needs docker on PATH (see --help; native mode runs without it)"
+    have_tool git || die "docker mode needs git (it archives HEAD for the container)"
+  fi
+
+  # The commit under test comes from the host: a worktree's .git file points at a host path that does not exist in the container.
+  sha="${BENCH_HOST_SERVER_SHA:-${BENCH_HOST_FAKE_SHA:-}}"
+  [ -n "$sha" ] || sha="$(git -C "$repo" rev-parse HEAD 2>/dev/null || echo unknown)"
+  dirty="${BENCH_HOST_SERVER_DIRTY:-${BENCH_HOST_FAKE_DIRTY:-}}"
+  if [ -z "$dirty" ]; then
+    if ! git -C "$repo" rev-parse --git-dir >/dev/null 2>&1; then dirty=null
+    elif [ -n "$(git -C "$repo" status --porcelain 2>/dev/null)" ]; then dirty=true
+    else dirty=false; fi
+  fi
+  case "$dirty" in true|false|null) ;; *) die "BENCH_HOST_SERVER_DIRTY must be true, false or null" ;; esac
+  if [ "$dirty" = "true" ]; then
+    echo "bench-host: WARNING: uncommitted changes are not benched (the container gets git archive HEAD, commit $sha)" >&2
+  fi
+
+  # Only now: MSYS_NO_PATHCONV would stop git.exe from understanding the /d/... paths used above.
+  # Git Bash rewrites /out and /work/src in docker arguments unless told not to, and wants Windows paths for -v.
+  local uname_s="${BENCH_HOST_FAKE_UNAME:-$(uname -s 2>/dev/null || echo unknown)}"
+  mkdir -p "$out_dir"
+  out_abs="$(cd "$out_dir" && pwd)"
+  host_out="$out_abs"
+  case "$uname_s" in
+    MINGW*|MSYS*)
+      export MSYS_NO_PATHCONV=1
+      echo "bench-host: Git Bash detected, MSYS_NO_PATHCONV=1 and Windows paths for docker" >&2
+      host_out="${BENCH_HOST_FAKE_PWDW:-$(cd "$out_dir" && pwd -W)}" ;;
+  esac
+
+  dver="${BENCH_HOST_DOCKER_VERSION:-}"
+  if [ -z "$dver" ]; then
+    if [ "$dry_run" -eq 1 ]; then dver="dry-run"
+    else dver="$(docker version --format '{{.Server.Version}}' 2>/dev/null || true)"; fi
+  fi
+
+  if [ -n "$predict" ]; then cp "$predict" "$out_abs/.predict.json"; fi
+
+  if [ "$privileged_sysctl" -eq 1 ]; then
+    echo "bench-host: WARNING: --privileged-sysctl runs the container privileged and changes the host's net.core.rmem_max/wmem_max until reboot; the script restores the old values on exit" >&2
+  fi
+
+  # The container command, one line. jq and unzip come from apt (the image lacks them) and their versions are recorded.
+  local c="set -euo pipefail; export DEBIAN_FRONTEND=noninteractive; apt-get update -qq >/dev/null; apt-get install -y -qq --no-install-recommends jq unzip >/dev/null"
+  c="$c; BENCH_HOST_TOOL_VERSIONS=\"jq \$(jq --version | head -n 1), \$(unzip -v | head -n 1 | cut -d, -f1)\"; export BENCH_HOST_TOOL_VERSIONS"
+  c="$c; mkdir -p /work/src; tar -x -C /work/src -f /out/.src.tar; rm -f /out/.src.tar"
+  if [ "$privileged_sysctl" -eq 1 ]; then
+    c="$c; old_r=\"\$(cat /proc/sys/net/core/rmem_max 2>/dev/null || true)\"; old_w=\"\$(cat /proc/sys/net/core/wmem_max 2>/dev/null || true)\""
+    c="$c; restore_sysctl() { [ -z \"\$old_r\" ] || echo \"\$old_r\" > /proc/sys/net/core/rmem_max 2>/dev/null || true; [ -z \"\$old_w\" ] || echo \"\$old_w\" > /proc/sys/net/core/wmem_max 2>/dev/null || true; }; trap restore_sysctl EXIT"
+    c="$c; if sysctl_err=\"\$( ( echo 8388608 > /proc/sys/net/core/rmem_max && echo 8388608 > /proc/sys/net/core/wmem_max ) 2>&1 )\"; then BENCH_HOST_SYSCTL_RAISE=raised; else BENCH_HOST_SYSCTL_RAISE=\"refused: \$(printf '%s' \"\$sysctl_err\" | tr '\n' ' ')\"; fi; export BENCH_HOST_SYSCTL_RAISE"
+  fi
+  c="$c; cd /work/src; bash .github/scripts/bench-host.sh native"
+  for a in ${fwd[@]+"${fwd[@]}"}; do c="$c $(q1 "$a")"; done
+  if [ -n "$predict" ]; then c="$c --predict /out/.predict.json"; fi
+  c="$c --out /out"
+  # no exec: with --privileged-sysctl the EXIT trap has to run after the native run
+
+  ts="$(date -u +%Y%m%d%H%M%S)"
+  local dargs=(docker run --rm --init --name "vcs-bench-host-$ts")
+  if [ "$privileged_sysctl" -eq 1 ]; then dargs+=(--privileged --network host); fi
+  dargs+=(-e BENCH_HOST_IN_CONTAINER=1 -e "BENCH_HOST_SERVER_SHA=$sha" -e "BENCH_HOST_SERVER_DIRTY=$dirty"
+    -e "BENCH_HOST_IMAGE=$IMAGE" -e "BENCH_HOST_DOCKER_VERSION=$dver"
+    -v "$host_out:/out" -v vcs-bench-gomod:/go/pkg/mod -v vcs-bench-gocache:/root/.cache/go-build
+    "$IMAGE" bash -c "$c")
+
+  # core.autocrlf=false: git archive converts to the working-tree form, and CRLF scripts do not run in the container
+  run_in "$repo" git -c core.autocrlf=false archive --format=tar HEAD -o "$host_out/.src.tar"
+  local rc=0
+  run "${dargs[@]}" || rc=$?
+  run rm -f "$host_out/.src.tar"
+  if [ "$rc" -ne 0 ]; then
+    echo "bench-host: the container exited with status $rc" >&2
+    exit "$rc"
+  fi
+}
+
 case "$mode" in
   native) pipeline_native ;;
-  docker)
-    if [ "$dry_run" -eq 0 ]; then die "docker mode is not implemented yet (H-T8)"; fi ;;
+  docker) pipeline_docker ;;
 esac

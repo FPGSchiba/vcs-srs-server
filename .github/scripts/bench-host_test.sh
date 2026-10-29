@@ -410,6 +410,190 @@ if printf '%s
 pipe --gogc default
 if grep -qF '_no results.md' "$tmp/out/summary.md"; then pass summary-md-missing-results; else fail summary-md-missing-results; fi
 
+
+# ---------------------------------------------------------------------------
+# H-T8: docker launcher (dry-run; BENCH_HOST_FAKE_SHA/DIRTY/PWDW/UNAME are the hooks)
+repo_root="$(cd "$here/../.." && pwd)"
+dk() { # <flags...>: docker dry-run; sets out (stdout+stderr), dline (the docker run line), rc
+  local o; o="$(fresh_out)"
+  set +e
+  out="$(env -u BENCH_HOST_IN_CONTAINER BENCH_HOST_NPROC=24 BENCH_HOST_FAKE_SHA=0123abcd BENCH_HOST_FAKE_DIRTY=false \
+    BENCH_HOST_FAKE_UNAME=Linux BENCH_HOST_DOCKER_VERSION=29.7.2 bash "$script" docker --host-label local-docker --server-set 0 --gen-set 4-11 \
+    --out "$o" --dry-run "$@" 2>&1)"; rc=$?
+  set -e
+  dline="$(printf '%s\n' "$out" | grep -F '+ docker run' || true)"
+}
+nocontain() { # <name> <word>: the docker run line must not contain the word
+  if [[ "$dline" == *"$2"* ]]; then fail "$1 (found $2)"; else pass "$1"; fi
+}
+cmd_word() { # prints the single bash -c argument of the docker run line (one shell word, unquoted)
+  local inner
+  inner="$(printf '%s\n' "$dline" | sed -n 's/^.* bash -c \(.*\)$/\1/p')"
+  eval "set -- $inner"
+  printf '%s' "$1"
+}
+
+# image-tag-matches-dockerfile
+dk
+img="$(printf '%s\n' "$dline" | grep -o 'golang:[0-9][0-9.]*@sha256:[0-9a-f]\{64\}' | head -n 1 || true)"
+df_tag="$(sed -n 's/^FROM golang:\([0-9][0-9.]*\)\( .*\)\{0,1\}$/\1/p' "$repo_root/Dockerfile" | head -n 1)"
+if [ -n "$img" ] && [ -n "$df_tag" ] && [ "${img%%@*}" = "golang:$df_tag" ]; then pass image-tag-matches-dockerfile
+else fail "image-tag-matches-dockerfile (image='$img' dockerfile tag='$df_tag')"; fi
+
+# docker-default-unprivileged
+expect docker-default-rc 0 "bench-host: docker arguments ok (dry-run)"
+ok=1
+for w in "docker run --rm --init" "--name vcs-bench-host-" ":/out" "vcs-bench-gomod:/go/pkg/mod" \
+  "vcs-bench-gocache:/root/.cache/go-build" "$img" "bash -c" "bench-host.sh native" "--out /out"; do
+  [[ "$dline" == *"$w"* ]] || { ok=0; echo "  docker line lacks: $w"; }
+done
+if [ "$ok" -eq 1 ]; then pass docker-default-line; else fail "docker-default-line ($dline)"; fi
+for w in --privileged --cap-add --sysctl --network --pid /var/run/docker.sock --device; do
+  nocontain "docker-default-no-${w#--}" "$w"
+done
+if [[ "$dline" == *"BENCH_HOST_IN_CONTAINER=1"* ]]; then pass docker-in-container-env; else fail "docker-in-container-env ($dline)"; fi
+if [[ "$out" == *"WARNING: --privileged"* ]]; then fail docker-default-no-warning; else pass docker-default-no-warning; fi
+if [[ "$dline" == *"BENCH_HOST_SERVER_SHA=0123abcd"* && "$dline" == *"BENCH_HOST_SERVER_DIRTY=false"* \
+  && "$dline" == *"BENCH_HOST_IMAGE=$img"* && "$dline" == *"BENCH_HOST_DOCKER_VERSION=29.7.2"* ]]; then pass docker-env-facts
+else fail "docker-env-facts ($dline)"; fi
+if [[ "$dline" == *"apt-get install -y -qq --no-install-recommends jq unzip"* && "$dline" == *"BENCH_HOST_TOOL_VERSIONS"* ]]; then pass docker-installs-jq-unzip
+else fail "docker-installs-jq-unzip ($dline)"; fi
+if [[ "$dline" == *"8388608"* || "$dline" == *"trap"* ]]; then fail docker-default-no-sysctl-code; else pass docker-default-no-sysctl-code; fi
+
+# docker-src-archive
+a="$(printf '%s\n' "$out" | grep -n 'archive --format=tar HEAD -o ' | head -n 1 | cut -d: -f1 || true)"
+d="$(printf '%s\n' "$out" | grep -n '^+ docker run' | head -n 1 | cut -d: -f1 || true)"
+if [ -n "$a" ] && [ -n "$d" ] && [ "$a" -lt "$d" ] && printf '%s\n' "$out" | grep -qF '/.src.tar'; then pass docker-src-archive-before-run
+else fail "docker-src-archive-before-run (archive line '$a', docker line '$d')"; fi
+if printf '%s
+' "$out" | grep -qF 'git -c core.autocrlf=false archive --format=tar HEAD -o '; then pass docker-src-archive-lf; else fail "docker-src-archive-lf (git archive would give CRLF scripts under core.autocrlf=true)"; fi
+if [[ "$dline" == *"DEBIAN_FRONTEND=noninteractive"* ]]; then pass docker-apt-noninteractive; else fail docker-apt-noninteractive; fi
+if [[ "$dline" == *"tar -x -C /work/src -f /out/.src.tar"* && "$dline" == *"cd /work/src"* && "$dline" == *"rm -f /out/.src.tar"* ]]; then pass docker-src-untar
+else fail "docker-src-untar ($dline)"; fi
+if [[ "$out" == *"WARNING: uncommitted changes are not benched"* ]]; then fail docker-clean-no-dirty-warning; else pass docker-clean-no-dirty-warning; fi
+o="$(fresh_out)"
+set +e
+out="$(env -u BENCH_HOST_IN_CONTAINER BENCH_HOST_NPROC=24 BENCH_HOST_FAKE_SHA=0123abcd BENCH_HOST_FAKE_DIRTY=true bash "$script" docker \
+  --host-label local-docker --server-set 0 --gen-set 4-11 --out "$o" --dry-run 2>&1)"; rc=$?
+set -e
+dline="$(printf '%s\n' "$out" | grep -F '+ docker run' || true)"
+expect docker-dirty-warns 0 "WARNING: uncommitted changes are not benched"
+if [[ "$dline" == *"BENCH_HOST_SERVER_DIRTY=true"* ]]; then pass docker-dirty-forwarded; else fail "docker-dirty-forwarded ($dline)"; fi
+# without the hooks the host's own git is asked
+if git -C "$repo_root" rev-parse HEAD >/dev/null 2>&1; then
+  head_sha="$(git -C "$repo_root" rev-parse HEAD)"
+  o="$(fresh_out)"
+  set +e
+  out="$(env -u BENCH_HOST_IN_CONTAINER -u BENCH_HOST_FAKE_SHA -u BENCH_HOST_FAKE_DIRTY BENCH_HOST_FAKE_UNAME=Linux BENCH_HOST_NPROC=24 bash "$script" docker \
+    --host-label local-docker --server-set 0 --gen-set 4-11 --out "$o" --dry-run 2>&1)"; rc=$?
+  set -e
+  if [[ "$out" == *"BENCH_HOST_SERVER_SHA=$head_sha"* ]]; then pass docker-sha-from-git; else fail "docker-sha-from-git"; fi
+fi
+
+# docker-flags-forwarded: verbatim, except --out, --privileged-sysctl and --dry-run; --predict is staged
+pf="$tmp/predict.json"; echo '{}' > "$pf"
+dk --gogc both --repeats 2 --leg-arg --n-max=200 --leg-arg '--x=a b' --note "it's | odd" --micro skip --predict "$pf" --budget 30m \
+  --client-ref 0123456789012345678901234567890123456789 --arms S --scenario one-big-net
+word="$(cmd_word)"
+ok=1
+for w in "--host-label local-docker" "--server-set 0" "--gen-set 4-11" "--gogc both" "--repeats 2" "--leg-arg --n-max=200" \
+  "--micro skip" "--budget 30m" "--client-ref 0123456789012345678901234567890123456789" "--arms S" "--scenario one-big-net" \
+  "--predict /out/.predict.json" "--out /out"; do
+  [[ "$word" == *"$w"* ]] || { ok=0; echo "  forward lacks: $w"; }
+done
+[[ "$word" == *"--leg-arg '--x=a b'"* ]] || { ok=0; echo "  value with a space was not kept as one word"; }
+[[ "$word" == *"it'\\''s | odd"* ]] || { ok=0; echo "  value with a quote was not escaped"; }
+[[ "$word" != *"--dry-run"* ]] || { ok=0; echo "  --dry-run was forwarded"; }
+[[ "$word" != *"$pf"* ]] || { ok=0; echo "  host predict path leaked into the container"; }
+if [ "$ok" -eq 1 ]; then pass docker-flags-forwarded; else fail "docker-flags-forwarded ($word)"; fi
+if [ -f "$tmp/out/.predict.json" ]; then pass docker-predict-copied; else fail docker-predict-copied; fi
+# the final argument is --out /out
+case "$word" in *"--out /out") pass docker-out-last ;; *) fail "docker-out-last ($word)" ;; esac
+
+# docker-privileged-optin-warns
+dk --privileged-sysctl
+expect docker-privileged-rc 0 "bench-host: docker arguments ok (dry-run)"
+if [[ "$dline" == *"--privileged --network host"* ]]; then pass docker-privileged-flags; else fail "docker-privileged-flags ($dline)"; fi
+nocontain docker-privileged-no-cap-add --cap-add
+nocontain docker-privileged-no-sysctl-flag "--sysctl"
+word="$(cmd_word)"
+if [[ "$word" == *"--privileged-sysctl"* ]]; then fail docker-privileged-not-forwarded; else pass docker-privileged-not-forwarded; fi
+warn="WARNING: --privileged-sysctl runs the container privileged and changes the host's net.core.rmem_max/wmem_max until reboot; the script restores the old values on exit"
+if [[ "$out" == *"$warn"* ]]; then pass docker-privileged-warning-text; else fail "docker-privileged-warning-text ($out)"; fi
+set +e
+errtxt="$(env -u BENCH_HOST_IN_CONTAINER BENCH_HOST_NPROC=24 BENCH_HOST_FAKE_SHA=0123abcd BENCH_HOST_FAKE_DIRTY=false bash "$script" docker \
+  --host-label local-docker --server-set 0 --gen-set 4-11 --out "$(fresh_out)" --dry-run --privileged-sysctl 2>&1 >/dev/null)"
+set -e
+if [[ "$errtxt" == *"$warn"* ]]; then pass docker-privileged-warning-on-stderr; else fail docker-privileged-warning-on-stderr; fi
+if [[ "$word" == *"8388608"* && "$word" == *"trap"* && "$word" == *"EXIT"* && "$word" == *"refused: "* \
+  && "$word" == *"BENCH_HOST_SYSCTL_RAISE"* && "$word" == *"rmem_max"* && "$word" == *"wmem_max"* ]]; then pass docker-privileged-raise-and-restore
+else fail "docker-privileged-raise-and-restore ($word)"; fi
+if [[ "$word" == *"exec bash"* ]]; then fail docker-privileged-no-exec; else pass docker-privileged-no-exec; fi
+
+# the raise/restore code really runs: aim it at fake /proc files, with the real native run stubbed out
+sandbox="$tmp/proc"; mkdir -p "$sandbox"
+echo 4194304 > "$sandbox/rmem_max"; echo 4194304 > "$sandbox/wmem_max"
+sc="${word//\/proc\/sys\/net\/core\//$sandbox/}"
+case "$sc" in *"/proc/sys"*) fail "docker-privileged-sandbox (still touches /proc/sys)" ;; esac
+stub='apt-get() { :; }; tar() { :; }; bash() { echo "SYSCTL_RAISE=$BENCH_HOST_SYSCTL_RAISE"; echo "RMEM_DURING=$(cat '"$sandbox"'/rmem_max)"; }; cd() { :; }; mkdir() { :; }; rm() { :; }; jq() { echo jq-stub; }; unzip() { echo unzip-stub; }; '
+sout="$(env -u BENCH_HOST_TOOL_VERSIONS bash -c "$stub$sc" 2>&1 || true)"
+if [[ "$sout" == *"SYSCTL_RAISE=raised"* && "$sout" == *"RMEM_DURING=8388608"* && "$(cat "$sandbox/rmem_max")" = "4194304" && "$(cat "$sandbox/wmem_max")" = "4194304" ]]; then
+  pass docker-privileged-raise-restores
+else fail "docker-privileged-raise-restores ($sout; rmem now $(cat "$sandbox/rmem_max"))"; fi
+# a refused write is recorded and the run continues. A directory in place of the file refuses the write for any user, root included.
+rm -f "$sandbox/rmem_max"; mkdir "$sandbox/rmem_max"
+sout="$(env -u BENCH_HOST_TOOL_VERSIONS bash -c "$stub$sc" 2>&1 || true)"
+if [[ "$sout" == *"SYSCTL_RAISE=refused: "* ]]; then pass docker-privileged-refusal-recorded; else fail "docker-privileged-refusal-recorded ($sout)"; fi
+
+# docker-msys: Git Bash gets MSYS_NO_PATHCONV and pwd -W paths
+o="$(fresh_out)"
+set +e
+out="$(env -u BENCH_HOST_IN_CONTAINER BENCH_HOST_NPROC=24 BENCH_HOST_FAKE_SHA=0123abcd BENCH_HOST_FAKE_DIRTY=false BENCH_HOST_FAKE_UNAME=MINGW64_NT-10.0 \
+  BENCH_HOST_FAKE_PWDW='C:/Users/x/out' bash "$script" docker --host-label local-docker --server-set 0 --gen-set 4-11 --out "$o" --dry-run 2>&1)"; rc=$?
+set -e
+dline="$(printf '%s\n' "$out" | grep -F '+ docker run' || true)"
+if [[ "$dline" == *"-v C:/Users/x/out:/out"* ]]; then pass docker-msys-pwdw; else fail "docker-msys-pwdw ($dline)"; fi
+if [[ "$out" == *"MSYS_NO_PATHCONV=1"* ]]; then pass docker-msys-no-pathconv-noted; else fail "docker-msys-no-pathconv-noted ($out)"; fi
+dk
+if [[ "$dline" == *"C:/Users"* ]]; then fail docker-nonmsys-plain-path; else pass docker-nonmsys-plain-path; fi
+
+# missing docker: a real docker mode refuses before it archives anything
+set +e
+out="$(env -u BENCH_HOST_IN_CONTAINER BENCH_HOST_HIDE_TOOLS=docker BENCH_HOST_NPROC=24 BENCH_HOST_FAKE_SHA=0123abcd BENCH_HOST_FAKE_DIRTY=false \
+  bash "$script" docker --host-label local-docker --server-set 0 --gen-set 4-11 --out "$(fresh_out)" 2>&1)"; rc=$?
+set -e
+expect docker-missing 2 "bench-host: docker mode needs docker"
+if [ ! -e "$tmp/out/.src.tar" ]; then pass docker-missing-no-archive; else fail docker-missing-no-archive; fi
+
+# native inside the container tolerates the two staged dotfiles in --out, nothing else
+o="$(fresh_out)"; : > "$o/.predict.json"; : > "$o/.src.tar"
+set +e
+out="$(BENCH_HOST_IN_CONTAINER=1 BENCH_HOST_NPROC=24 bash "$script" native --host-label local-docker --server-set 0 --gen-set 4-11 --out "$o" --dry-run 2>&1)"; rc=$?
+set -e
+expect native-container-tolerates-staging 0 ""
+: > "$o/stray"
+set +e
+out="$(BENCH_HOST_IN_CONTAINER=1 BENCH_HOST_NPROC=24 bash "$script" native --host-label local-docker --server-set 0 --gen-set 4-11 --out "$o" --dry-run 2>&1)"; rc=$?
+set -e
+expect native-container-rejects-stray 2 "must be empty"
+o="$(fresh_out)"; : > "$o/.src.tar"
+set +e
+out="$(env -u BENCH_HOST_IN_CONTAINER BENCH_HOST_NPROC=24 bash "$script" native --host-label local-docker --server-set 0 --gen-set 4-11 --out "$o" --dry-run 2>&1)"; rc=$?
+set -e
+expect native-host-rejects-staging 2 "must be empty"
+
+# host.json carries the sysctl outcome and the tool versions (null when unknown)
+set +e
+env -u BENCH_HOST_IN_CONTAINER BENCH_HOST_NPROC=24 BENCH_HOST_FAKE_DIRTY=false BENCH_HOST_SYSCTL_RAISE='refused: Permission denied' \
+  BENCH_HOST_TOOL_VERSIONS='jq 1.7.1, unzip 6.0' bash "$script" native --host-label local-docker --server-set 0 --gen-set 4-11 --out "$(fresh_out)" --dry-run >/dev/null 2>&1
+set -e
+if jq -e '.sysctl_raise == "refused: Permission denied" and .tool_versions == "jq 1.7.1, unzip 6.0"' "$tmp/out/host.json" >/dev/null; then pass host-json-sysctl-tools
+else fail "host-json-sysctl-tools ($(cat "$tmp/out/host.json"))"; fi
+set +e
+env -u BENCH_HOST_IN_CONTAINER -u BENCH_HOST_SYSCTL_RAISE -u BENCH_HOST_TOOL_VERSIONS BENCH_HOST_NPROC=24 BENCH_HOST_FAKE_DIRTY=false bash "$script" native --host-label local-docker --server-set 0 --gen-set 4-11 --out "$(fresh_out)" --dry-run >/dev/null 2>&1
+set -e
+if jq -e '.sysctl_raise == null and .tool_versions == null' "$tmp/out/host.json" >/dev/null; then pass host-json-sysctl-tools-null; else fail host-json-sysctl-tools-null; fi
+
 echo
 echo "$failures failures"
 [ "$failures" -eq 0 ]
