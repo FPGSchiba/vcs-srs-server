@@ -200,3 +200,235 @@ fi
 if [ "$dry_run" -eq 1 ]; then
   echo "bench-host: $mode arguments ok (dry-run)"
 fi
+
+# ---------------------------------------------------------------------------
+# Command helpers. In dry-run every command is printed as one "+ ..." line and nothing runs. Args
+# are single-quoted when they hold anything outside [A-Za-z0-9_@%+=:,./-], so a printed line can
+# be pasted into a shell.
+q1() {
+  case "$1" in
+    "") printf "''" ;;
+    *[!A-Za-z0-9_@%+=:,./-]*) printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+qargs() {
+  local a first=1
+  for a in "$@"; do
+    if [ "$first" -eq 1 ]; then first=0; else printf ' '; fi
+    q1 "$a"
+  done
+}
+run() { if [ "$dry_run" -eq 1 ]; then echo "+ $(qargs "$@")"; else "$@"; fi; }
+run_in() { # DIR argv...
+  local d="$1"; shift
+  if [ "$dry_run" -eq 1 ]; then echo "+ cd $(q1 "$d") && $(qargs "$@")"; else ( cd "$d" && "$@" ); fi
+}
+run_to() { # FILE argv...: stdout to FILE
+  local f="$1"; shift
+  if [ "$dry_run" -eq 1 ]; then echo "+ $(qargs "$@") > $(q1 "$f")"; else "$@" > "$f"; fi
+}
+run_tee() { # FILE argv...: stdout and stderr to the console and to FILE; fails when argv fails (pipefail)
+  local f="$1"; shift
+  if [ "$dry_run" -eq 1 ]; then echo "+ $(qargs "$@") | tee $(q1 "$f")"; else "$@" 2>&1 | tee "$f"; fi
+}
+sha_check() { # FILE SHA256
+  if [ "$dry_run" -eq 1 ]; then
+    echo "+ echo '$2  $1' | sha256sum -c -"
+  else
+    echo "$2  $1" | sha256sum -c -
+  fi
+}
+have_tool() { # BENCH_HOST_HIDE_TOOLS (space list) is the test hook for a missing tool
+  case " ${BENCH_HOST_HIDE_TOOLS:-} " in *" $1 "*) return 1 ;; esac
+  command -v "$1" >/dev/null 2>&1
+}
+
+# Pins. Third copy of .github/actions/generate/action.yml and bench.yml; bench-host_test.sh fails
+# when they drift.
+PROTOC_VERSION='36.2'
+PROTOC_SHA256='121f6c7afe1d4d0e3ea6aab9432038599250134cbf4474cb1167d2c7decd4278'
+PROTOC_GEN_GO_GRPC='google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2'
+BUF='github.com/bufbuild/buf/cmd/buf@v1.47.2'
+BENCHSTAT='golang.org/x/perf/cmd/benchstat@v0.0.0-20261009192801-be2c69fb417e'
+CLIENT_URL='https://github.com/FPGSchiba/vcs-srs-client.git'
+MICRO_RE='^Benchmark(SocketSend|GetListeningClients|HandleVoicePacket)$'
+
+# The same backstop as bench.yml's "Diagnostics (failed leg)" step, with plain headers.
+leg_diagnostics() { # LEG_DIR
+  local d="$1" f srv
+  [ "$dry_run" -eq 0 ] || return 0
+  for f in "$d"/loadbot-*.log "$d"/calibrate.log "$d"/reflect.log; do
+    [ -e "$f" ] || continue
+    echo "== $f (last 50 lines) =="
+    tail -n 50 "$f" 2>&1 || true
+  done
+  srv="$(ls "$d"/server-*.log.gz 2>/dev/null | sort -V | tail -n 1 || true)"
+  echo "== ${srv:-server log} (last 200 lines) =="
+  if [ -n "$srv" ]; then zcat "$srv" 2>&1 | tail -n 200 || true; else echo "no server log kept"; fi
+  echo "== $d/manifest.json =="
+  cat "$d/manifest.json" 2>&1 || true
+}
+
+pipeline_native() {
+  local here repo work bin
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  repo="$(cd "$here/../.." && pwd)"
+  work="$out_dir/.work"
+  bin="$work/bin"
+
+  if [ "$dry_run" -eq 0 ]; then
+    local t
+    for t in jq unzip curl git taskset go sha256sum; do
+      have_tool "$t" || die "needs $t (native mode needs jq, unzip, curl, git, taskset and Go; see --help)"
+    done
+  fi
+
+  local nsrv ngen label topology smt extra=""
+  nsrv="${#server_cpus[@]}"; ngen="${#gen_cpus[@]}"
+  if [ "${#leg_args[@]}" -gt 0 ]; then extra=", non-default leg args"; fi
+  label="$host_label, server cpus $server_set, generator cpus $gen_set$extra, loopback, relative only. Not a capacity figure."
+  # smt comes from the probe's own reading on a real run; dry-run has no probe.
+  smt="${BENCH_HOST_FAKE_SMT:-false}"
+
+  local sysctl_flag="--sysctl=true"
+  if [ -n "${BENCH_HOST_IN_CONTAINER:-}" ]; then sysctl_flag="--sysctl=false"; fi
+
+  # BENCH_HOST_FAKE_SHA is the test hook and also how docker mode passes the host's commit in.
+  local server_sha="${BENCH_HOST_FAKE_SHA:-}"
+  if [ -z "$server_sha" ]; then
+    server_sha="$(git -C "$repo" rev-parse HEAD 2>/dev/null || echo unknown)"
+  fi
+  local client_sha="$client_ref"
+
+  local variants
+  case "$gogc" in both) variants="off default" ;; *) variants="$gogc" ;; esac
+
+  local failed=0
+
+  echo "== build =="
+  cd "$repo"
+  run mkdir -p "$bin"
+  run bash "$here/assert-go-toolchain.sh"
+  local protoc_zip="$work/protoc.zip"
+  run curl -fsSL --proto '=https' --tlsv1.2 -o "$protoc_zip" \
+    "https://github.com/protocolbuffers/protobuf/releases/download/v$PROTOC_VERSION/protoc-$PROTOC_VERSION-linux-x86_64.zip"
+  sha_check "$protoc_zip" "$PROTOC_SHA256"
+  run unzip -o "$protoc_zip" -d "$work/protoc" bin/protoc 'include/*'
+  run rm "$protoc_zip"
+  export PATH="$work/protoc/bin:$bin:$PATH"
+  if [ "$dry_run" -eq 0 ]; then
+    local v; v="$(protoc --version)"
+    echo "$v"
+    case "$v" in *" $PROTOC_VERSION"|*" $PROTOC_VERSION.0") ;; *) die "expected protoc $PROTOC_VERSION, got: $v" ;; esac
+  fi
+  local pb_ver
+  pb_ver="$(awk '$1=="google.golang.org/protobuf"{print $2; exit}' go.mod)"
+  [ -n "$pb_ver" ] || die "google.golang.org/protobuf not found in go.mod"
+  run env "GOBIN=$bin" go install "google.golang.org/protobuf/cmd/protoc-gen-go@$pb_ver"
+  run env "GOBIN=$bin" go install "$PROTOC_GEN_GO_GRPC"
+  run mkdir -p srspb voicecontrolpb vcsauthpb
+  run protoc --go_out=./srspb --go_opt=paths=source_relative --go-grpc_out=./srspb --go-grpc_opt=paths=source_relative srs.proto
+  run protoc --go_out=./voicecontrolpb --go_opt=paths=source_relative --go-grpc_out=./voicecontrolpb --go-grpc_opt=paths=source_relative control.proto
+  run protoc --go_out=./vcsauthpb --go_opt=paths=source_relative --go-grpc_out=./vcsauthpb --go-grpc_opt=paths=source_relative vcs-auth-plugin.proto
+  run go run github.com/99designs/gqlgen generate
+  run env CGO_ENABLED=0 go build -tags headless -trimpath -o "$bin/vcs-server" .
+  run env CGO_ENABLED=0 go build -trimpath -o "$bin/vcs-benchkit" ./cmd/vcs-benchkit
+  # The client is public, so no token. Its toolchain is its own: GOTOOLCHAIN=auto reads its go.mod.
+  run git clone "$CLIENT_URL" "$work/client"
+  run git -C "$work/client" checkout "$client_ref"
+  run_in "$work/client" env GOTOOLCHAIN=auto bash "$here/assert-go-toolchain.sh" "$work/client/go.mod"
+  run_in "$work/client" env GOTOOLCHAIN=auto go run "$BUF" generate
+  run_in "$work/client" env CGO_ENABLED=0 GOTOOLCHAIN=auto go build -tags purego -trimpath -o "$bin/vcs-loadbot" ./cmd/vcs-loadbot
+  if [ "$dry_run" -eq 0 ]; then
+    client_sha="$(git -C "$work/client" rev-parse HEAD)"
+  fi
+
+  echo "== probe =="
+  run bash "$here/bench-probe_test.sh"
+  run_to "$out_dir/env-probe.json" bash "$here/bench-probe.sh"
+  if [ "$dry_run" -eq 0 ]; then
+    smt="$(jq -r .smt "$out_dir/env-probe.json")"
+  fi
+  topology="$host_label: server $server_set ($nsrv cpu), generator $gen_set ($ngen cpu), smt $smt"
+
+  local have_predict=0 predict_file="$out_dir/micro/predict.json"
+  echo "== micro =="
+  run mkdir -p "$out_dir/micro"
+  if [ "$micro" = "run" ]; then
+    have_predict=1
+    run go test -c -tags headless -o "$bin/voice.test" ./voice/
+    run_tee "$out_dir/micro/micro.txt" taskset -c "$server_set" env "GOMAXPROCS=$nsrv" "$bin/voice.test" \
+      -test.run '^$' -test.bench "$MICRO_RE" -test.benchmem -test.count=10
+    run_tee "$out_dir/micro/micro-benchstat.txt" go run "$BENCHSTAT" "$out_dir/micro/micro.txt"
+    run_to "$predict_file" "$bin/vcs-benchkit" predict --micro "$out_dir/micro/micro.txt" --logger bus \
+      --csv "$out_dir/micro/micro.csv" --label "$label"
+  elif [ -n "$predict" ]; then
+    have_predict=1
+    run cp "$predict" "$predict_file"
+  fi
+
+  echo "== legs =="
+  local k v dir cmd
+  k=1
+  while [ "$k" -le "$repeats" ]; do
+    for v in $variants; do
+      dir="$out_dir/gogc-$v"
+      run mkdir -p "$dir/results"
+      cmd=("$bin/vcs-benchkit" leg
+        --server-bin "$bin/vcs-server"
+        --loadbot-bin "$bin/vcs-loadbot"
+        --scenario "$scenario"
+        --arms "$arms"
+        --seed "$k"
+        --out "$dir/results/$k-$scenario"
+        --probe "$out_dir/env-probe.json")
+      if [ "$have_predict" -eq 1 ]; then cmd+=(--predict "$predict_file"); fi
+      cmd+=(--server-sha "$server_sha"
+        --client-sha "$client_sha"
+        --q6 "host run: server $server_set, generator $gen_set (user, 2026-10-29)"
+        --server-set "$server_set"
+        --gen-set "$gen_set"
+        --topology "$topology"
+        --label "$label"
+        --generator-gc "$v"
+        --budget "$budget"
+        "$sysctl_flag")
+      if [ "${#leg_args[@]}" -gt 0 ]; then cmd+=("${leg_args[@]}"); fi
+      echo "== leg $k, GOGC $v =="
+      if ! run_tee "$dir/leg-$k.log" "${cmd[@]}"; then
+        echo "bench-host: leg $k (GOGC $v) failed; continuing" >&2
+        failed=1
+        leg_diagnostics "$dir/results/$k-$scenario"
+      fi
+    done
+    k=$((k + 1))
+  done
+
+  echo "== aggregate =="
+  for v in $variants; do
+    dir="$out_dir/gogc-$v"
+    if [ "$dry_run" -eq 0 ]; then
+      local legs_done
+      legs_done="$(find "$dir/results" -name knees.csv 2>/dev/null | wc -l | tr -d ' ')"
+      if [ "$legs_done" -ne "$repeats" ]; then
+        echo "PARTIAL: GOGC $v: $legs_done of $repeats legs aggregated; the statistics cover the surviving legs only"
+      fi
+    fi
+    if ! run "$bin/vcs-benchkit" aggregate --in "$dir/results" --out "$dir/aggregate" --label "$label"; then
+      echo "bench-host: aggregate (GOGC $v) failed" >&2
+      failed=1
+    fi
+  done
+
+  if [ "$failed" -ne 0 ]; then
+    echo "bench-host: finished with failures (see above)" >&2
+    exit 1
+  fi
+}
+
+case "$mode" in
+  native) pipeline_native ;;
+  docker)
+    if [ "$dry_run" -eq 0 ]; then die "docker mode is not implemented yet (H-T8)"; fi ;;
+esac

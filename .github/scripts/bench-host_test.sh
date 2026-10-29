@@ -150,6 +150,187 @@ out="$(BENCH_HOST_NPROC=24 BENCH_HOST_SYSFS="$fx/sysfs-smt" bash "$script" docke
 set -e
 expect sibling-docker-hooked 0 "WARNING: server cpu 0 shares"
 
+# ---------------------------------------------------------------------------
+# native pipeline, dry-run (H-T6). Every command is one "+ ..." line, in execution order, with
+# args single-quoted when they hold anything outside [A-Za-z0-9_@%+=:,./-].
+repo="$(cd "$here/../.." && pwd)"
+err=""
+pipe() { # <extra args...>: native dry-run; stdout into $out, stderr into $err
+  local o; o="$(fresh_out)"
+  set +e
+  out="$(env -u BENCH_HOST_IN_CONTAINER BENCH_HOST_NPROC=24 bash "$script" native --host-label local-docker \
+    --server-set 0 --gen-set 4-11 --out "$o" --dry-run "$@" 2>"$tmp/err")"; rc=$?
+  set -e
+  err="$(cat "$tmp/err")"
+}
+plus() { printf '%s\n' "$out" | grep '^+ ' || true; }
+# in_order <name> <pattern>...: the patterns (fixed strings) match "+ " lines at strictly rising line numbers.
+in_order() {
+  local name="$1"; shift
+  local last=0 pat n ok=1
+  for pat in "$@"; do
+    n="$(plus | grep -nF -- "$pat" | awk -F: -v l="$last" '$1>l{print $1; exit}' || true)"
+    if [ -z "$n" ]; then ok=0; echo "  $name: no line after $last containing: $pat"; break; fi
+    last="$n"
+  done
+  if [ "$ok" -eq 1 ]; then pass "$name"; else fail "$name"; fi
+}
+has() { # <name> <fixed substring in the + lines>
+  if plus | grep -qF -- "$2"; then pass "$1"; else fail "$1 (missing: $2)"; fi
+}
+# lacks <name> <command filter> <fixed substring>: no "+" line matching the filter holds the substring
+hasnt() {
+  if plus | grep -F -- "$2" | grep -qF -- "$3"; then fail "$1"; else pass "$1"; fi
+}
+holds() { # <name> <command filter> <fixed substring>: some "+" line matching the filter holds it
+  if plus | grep -F -- "$2" | grep -qF -- "$3"; then pass "$1"; else fail "$1 (no '$2' line with '$3')"; fi
+}
+
+pipe
+[ "$rc" -eq 0 ] || fail "pipe-default (rc=$rc err=$err)"
+default_out="$out"
+
+# pins-match-ci: every pin is EXTRACTED from action.yml / bench.yml, never retyped here.
+act="$repo/.github/actions/generate/action.yml"
+wf="$repo/.github/workflows/bench.yml"
+pv="$(grep -o 'protoc-[0-9.]*-linux-x86_64' "$act" | head -1)"
+ps="$(grep -oE '[0-9a-f]{64}  protoc.zip' "$act" | head -1 | cut -d' ' -f1)"
+gg="$(grep -o 'protoc-gen-go-grpc@v[0-9.]*' "$act" | head -1)"
+buf="$(grep -o 'bufbuild/buf/cmd/buf@v[0-9.]*' "$wf" | head -1)"
+bs="$(grep -o 'benchstat@v0[0-9a-z.-]*' "$wf" | head -1)"
+cr="$(awk '/client_ref:/{f=1} f&&/default:/{gsub(/[^0-9a-f]/,"",$2); print $2; exit}' "$wf")"
+for pair in "protoc:$pv" "protoc-sha:$ps" "grpc-gen:$gg" "buf:$buf" "benchstat:$bs" "client-ref:$cr"; do
+  n="${pair%%:*}"; v="${pair#*:}"
+  if [ -z "$v" ]; then fail "pins-match-ci-$n (could not extract from ci files)"; continue; fi
+  out="$default_out"; has "pins-match-ci-$n" "$v"
+done
+[ "${#cr}" -eq 40 ] || fail "pins-match-ci-client-ref-length ($cr)"
+out="$default_out"
+
+# build-order
+in_order build-order \
+  assert-go-toolchain.sh \
+  "$pv" \
+  "sha256sum -c -" \
+  "unzip -o" \
+  "go install google.golang.org/protobuf/cmd/protoc-gen-go@v" \
+  "$gg" \
+  "protoc --go_out=./srspb" \
+  "protoc --go_out=./voicecontrolpb" \
+  "protoc --go_out=./vcsauthpb" \
+  "gqlgen generate" \
+  "go build -tags headless -trimpath -o " \
+  "go build -trimpath -o " \
+  "git clone" \
+  "checkout $cr" \
+  "client/go.mod" \
+  "$buf generate" \
+  "go build -tags purego -trimpath -o "
+for b in "go build -tags headless" "go build -trimpath" "go build -tags purego"; do
+  holds "build-cgo-off-[$b]" "$b" 'env CGO_ENABLED=0'
+done
+holds build-server-target 'go build -tags headless' 'vcs-server .'
+holds build-loadbot-target 'go build -tags purego' './cmd/vcs-loadbot'
+holds build-kit-target 'go build -trimpath' './cmd/vcs-benchkit'
+# the client steps use the client's own toolchain (GOTOOLCHAIN=auto)
+holds build-client-toolchain 'buf@' 'GOTOOLCHAIN=auto'
+holds build-client-assert 'client/go.mod' 'GOTOOLCHAIN=auto'
+
+# probe
+in_order probe "bench-probe_test.sh" "bench-probe.sh"
+holds probe-out '/bench-probe.sh' '/env-probe.json'
+
+# micro
+in_order micro \
+  "go test -c -tags headless -o " \
+  "taskset -c 0 env GOMAXPROCS=1 " \
+  "benchstat" \
+  "vcs-benchkit predict"
+holds micro-run-empty 'taskset' "-test.run '^\$'"
+holds micro-bench-regex 'taskset' "-test.bench '^Benchmark(SocketSend|GetListeningClients|HandleVoicePacket)\$'"
+holds micro-flags 'taskset' '-test.benchmem -test.count=10'
+holds predict-logger 'vcs-benchkit predict' '--logger bus'
+o2="$(fresh_out)"
+set +e
+out="$(env -u BENCH_HOST_IN_CONTAINER BENCH_HOST_NPROC=24 bash "$script" native --host-label local-docker --server-set 0,1 --gen-set 4-11 --out "$o2" --dry-run 2>&1)"; rc=$?
+set -e
+has micro-gomaxprocs-two "taskset -c 0,1 env GOMAXPROCS=2 "
+
+# micro skip with --predict: none of the micro commands run, F is copied to OUT/micro/predict.json
+echo '{}' > "$tmp/pred.json"
+pipe --micro skip --predict "$tmp/pred.json"
+if plus | grep -qE 'voice.test|benchstat|vcs-benchkit predict'; then fail micro-skip-none; else pass micro-skip-none; fi
+has micro-skip-copy "cp $tmp/pred.json $tmp/out/micro/predict.json"
+has micro-skip-leg-predict "--predict $tmp/out/micro/predict.json"
+pipe --micro skip --leg-arg --predicted-knee=300
+hasnt micro-skip-knee-nopredict 'vcs-benchkit leg' '--predict '
+has micro-skip-knee-arg "--predicted-knee=300"
+
+# leg argv is a superset of bench.yml's "Run leg" step, parsed from the workflow
+want="$(awk '/bin\/vcs-benchkit leg/{f=1} f{print} f&&!/\\$/{exit}' "$wf" | grep -oE -- '--[a-z0-9-]+' | sort -u)"
+[ -n "$want" ] || fail "leg-flags-extracted"
+pipe
+legs="$(plus | grep -F 'vcs-benchkit leg' || true)"
+okl=1
+[ -n "$legs" ] || okl=0
+while IFS= read -r line; do
+  [ -n "$line" ] || continue
+  for f in $want --server-set --gen-set --topology --label --generator-gc --budget --sysctl=true; do
+    [[ "$line" == *"$f"* ]] || { okl=0; echo "  leg line lacks $f"; }
+  done
+done <<< "$legs"
+if [ "$okl" -eq 1 ]; then pass leg-argv-superset-of-bench-yml; else fail leg-argv-superset-of-bench-yml; fi
+has leg-hosts "--server-set 0 --gen-set 4-11"
+has leg-budget "--budget 100m"
+has leg-q6 "--q6 'host run: server 0, generator 4-11 (user, 2026-10-29)'"
+has leg-tee "| tee $tmp/out/gogc-off/leg-1.log"
+has leg-out "--out $tmp/out/gogc-off/results/1-one-big-net"
+has leg-gc-off "--generator-gc off"
+
+# gogc both: seeds alternate off/default; aggregate once per variant, never pooled
+pipe --repeats 2 --gogc both
+seq_="$(plus | grep -F 'vcs-benchkit leg' | sed -E 's/.*--seed ([0-9]+).*--generator-gc ([a-z]+).*/\1 \2/' | tr '\n' ',')"
+if [ "$seq_" = "1 off,1 default,2 off,2 default," ]; then pass gogc-both-order; else fail "gogc-both-order ($seq_)"; fi
+has gogc-both-out-off "--out $tmp/out/gogc-off/results/2-one-big-net"
+has gogc-both-out-default "--out $tmp/out/gogc-default/results/1-one-big-net"
+nagg="$(plus | grep -cF 'vcs-benchkit aggregate' || true)"
+if [ "$nagg" -eq 2 ]; then pass gogc-both-two-aggregates; else fail "gogc-both-two-aggregates ($nagg)"; fi
+lbl='local-docker, server cpus 0, generator cpus 4-11, loopback, relative only. Not a capacity figure.'
+has gogc-both-agg-off "--in $tmp/out/gogc-off/results --out $tmp/out/gogc-off/aggregate --label '$lbl'"
+has gogc-both-agg-default "--in $tmp/out/gogc-default/results --out $tmp/out/gogc-default/aggregate --label '$lbl'"
+pipe --gogc default
+hasnt gogc-default-only 'vcs-benchkit leg' '--generator-gc off'
+has gogc-default-only-out "--out $tmp/out/gogc-default/results/1-one-big-net"
+if plus | grep -qF 'gogc-off'; then fail gogc-default-no-off-dir; else pass gogc-default-no-off-dir; fi
+
+# labels
+pipe
+has label-exact "--label '$lbl'"
+has topology-exact "--topology 'local-docker: server 0 (1 cpu), generator 4-11 (8 cpu), smt false'"
+holds predict-label-exact 'vcs-benchkit predict' "--label '$lbl'"
+pipe --leg-arg --n-max=200
+has label-nondefault "local-docker, server cpus 0, generator cpus 4-11, non-default leg args, loopback, relative only. Not a capacity figure."
+has leg-arg-passthrough "--n-max=200"
+
+# native-sysctl: the kit raises the socket buffers itself outside a container, never inside one
+pipe
+has sysctl-outside "--sysctl=true"
+set +e
+out="$(BENCH_HOST_IN_CONTAINER=1 BENCH_HOST_NPROC=24 bash "$script" native --host-label local-docker --server-set 0 --gen-set 4-11 --out "$(fresh_out)" --dry-run 2>&1)"; rc=$?
+set -e
+has sysctl-inside "--sysctl=false"
+
+# tools-missing: a missing tool stops the run before anything is built (BENCH_HOST_HIDE_TOOLS is the hook)
+set +e
+out="$(BENCH_HOST_HIDE_TOOLS=jq BENCH_HOST_NPROC=24 bash "$script" native --host-label local-docker --server-set 0 --gen-set 4-11 --out "$(fresh_out)" 2>&1)"; rc=$?
+set -e
+expect tools-missing 2 "bench-host: needs jq"
+if [ -e "$tmp/out/.work" ]; then fail tools-missing-no-build; else pass tools-missing-no-build; fi
+
+# dry-run is side-effect free
+pipe
+if [ -z "$(ls -A "$tmp/out")" ]; then pass dry-run-writes-nothing; else fail "dry-run-writes-nothing ($(ls -A "$tmp/out"))"; fi
+
 echo
 echo "$failures failures"
 [ "$failures" -eq 0 ]
