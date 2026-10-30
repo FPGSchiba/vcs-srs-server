@@ -1,3 +1,4 @@
 tools/benchsite/sanitize/testdata/** text eol=lf
 .github/scripts/testdata/bench-scan/** text eol=lf
 tools/benchsite/testdata/** text eol=lf
+tools/benchsite/templates/** text eol=lf
