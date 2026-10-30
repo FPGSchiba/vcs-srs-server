@@ -21,8 +21,8 @@ func parseLegFlags(args []string, errw io.Writer) (leg.Options, error) {
 	var o leg.Options
 	fs.StringVar(&o.ServerBin, "server-bin", "", "headless server binary (required)")
 	fs.StringVar(&o.LoadbotBin, "loadbot-bin", "", "vcs-loadbot binary (required)")
-	fs.StringVar(&o.Scenario, "scenario", "one-big-net", "scenario (v1: one-big-net)")
-	fs.StringVar(&o.Arms, "arms", "S", "arms to run: comma list of S, Seq, D2 (the multi-arm leg runs S on one-big-net until F-T5)")
+	fs.StringVar(&o.Scenario, "scenario", "one-big-net", "scenario: one-big-net or org-op (org-op needs a bot with the org_op feature)")
+	fs.StringVar(&o.Arms, "arms", "S", "arms to run: comma list of S, Seq, D2, in a seeded order on one calibration (Seq and D2 need a 2-cpu server set; D2 needs a bot with arm_d2)")
 	fs.Int64Var(&o.Seed, "seed", 1, "seed")
 	fs.StringVar(&o.OutDir, "out", "", "output directory (required)")
 	fs.StringVar(&o.Q6, "q6", "", "the user's Q6 CPU-split decision, recorded verbatim in the manifest")
@@ -36,7 +36,7 @@ func parseLegFlags(args []string, errw io.Writer) (leg.Options, error) {
 	fs.IntVar(&o.NMaxCap, "n-max", 0, "extra cap on N_max (0 = the time and port budgets only)")
 	fs.StringVar(&o.ServerSHA, "server-sha", "", "server commit, recorded in the manifest")
 	fs.StringVar(&o.ClientSHA, "client-sha", "", "client commit, recorded in the manifest")
-	fs.DurationVar(&o.Budget, "budget", 100*time.Minute, "leg time budget (0 = unlimited)")
+	fs.DurationVar(&o.Budget, "budget", 100*time.Minute, "time budget per arm (0 = unlimited); the leg is hard-stopped at arms x (budget + 15m)")
 	fs.Float64Var(&o.JoinRate, "join-rate", 27, "assumed joins per second (design 6.4: ~27/s on one vCPU)")
 	fs.DurationVar(&o.Warmup, "warmup", 30*time.Second, "warm-up hold (discarded)")
 	fs.DurationVar(&o.Hold, "hold", 40*time.Second, "measured hold per step")
@@ -90,10 +90,15 @@ func runLeg(args []string, stdout, stderr io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	if o.Budget > 0 {
-		// The budget bounds the sweep; this is the hard stop with room for
-		// the confirm, overload and teardown it reserves.
+		// The budget bounds each arm's sweep; this is the hard stop for the
+		// whole leg, with room for the confirm, overload and teardown each
+		// arm reserves and for the one calibration.
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, o.Budget+15*time.Minute)
+		nArms := 1
+		if arms, err := leg.ParseArms(o.Arms); err == nil {
+			nArms = len(arms)
+		}
+		ctx, cancel = context.WithTimeout(ctx, leg.HardStop(o.Budget, nArms))
 		defer cancel()
 	}
 	if err := leg.Run(ctx, o, stdout); err != nil {

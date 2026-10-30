@@ -46,7 +46,8 @@ func TestLegSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	for _, f := range []string{"steps.csv", "knees.csv", "calibration.csv", "manifest.json"} {
+	// Per-arm files sit in <out>/S; the calibration and the index belong to the leg.
+	for _, f := range []string{"S/steps.csv", "S/knees.csv", "calibration.csv", "S/manifest.json", "leg.json", "results.md"} {
 		if _, err := os.Stat(filepath.Join(out, f)); err != nil {
 			t.Errorf("missing %s: %v", f, err)
 		}
@@ -58,7 +59,7 @@ func TestLegSmoke(t *testing.T) {
 	}
 	// server-<k>.log.gz is the kept server log (S-T7); a server-<k> directory
 	// would be a data directory.
-	m, _ := filepath.Glob(filepath.Join(out, "server-*"))
+	m, _ := filepath.Glob(filepath.Join(out, "S", "server-*"))
 	logs := 0
 	for _, f := range m {
 		if strings.HasSuffix(f, ".log.gz") {
@@ -70,7 +71,7 @@ func TestLegSmoke(t *testing.T) {
 	if logs == 0 {
 		t.Error("no server-<k>.log.gz in the results directory")
 	}
-	mb, err := os.ReadFile(filepath.Join(out, "manifest.json"))
+	mb, err := os.ReadFile(filepath.Join(out, "S", "manifest.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +84,7 @@ func TestLegSmoke(t *testing.T) {
 	if got := man.Pins["server"]; got.CPUs != "0" || got.GOMAXPROCS != 1 || got.Shards != 2 {
 		t.Errorf("manifest server pin = %+v, want cpus 0 (the first of the server set), gomaxprocs 1, 2 shards", got)
 	}
-	fh, err := os.Open(filepath.Join(out, "knees.csv"))
+	fh, err := os.Open(filepath.Join(out, "S", "knees.csv"))
 	if err != nil {
 		t.Fatal(err)
 	}

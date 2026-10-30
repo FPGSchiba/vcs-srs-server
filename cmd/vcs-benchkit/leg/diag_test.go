@@ -248,7 +248,7 @@ func TestRunFailurePrintsDiagnostics(t *testing.T) {
 	if !strings.Contains(got, "not available: no server was started") {
 		t.Errorf("the block does not say the server log is unavailable:\n%s", got)
 	}
-	b, rerr := os.ReadFile(filepath.Join(out, "manifest.json"))
+	b, rerr := os.ReadFile(filepath.Join(out, "S", "manifest.json"))
 	if rerr != nil {
 		t.Fatal(rerr)
 	}
