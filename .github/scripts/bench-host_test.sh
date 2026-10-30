@@ -66,12 +66,23 @@ done
 
 # arms
 base native --arms S;   expect arms-S 0 ""
-base native --arms Seq; expect arms-Seq 2 "Seq and D2 arrive with kit S5"
-base native --arms D2;  expect arms-D2 2 "Seq and D2 arrive with kit S5"
+base native --arms Seq; expect arms-Seq-1cpu 2 "--arms Seq need a 2-cpu --server-set"
+base native --arms D2;  expect arms-D2-1cpu 2 "--arms D2 need a 2-cpu --server-set"
+base native --arms S,Seq,D2; expect arms-all-1cpu 2 "--arms Seq,D2 need a 2-cpu --server-set"
+base native --arms X;   expect arms-bad 2 "bench-host: --arms"
+base native --arms S,S; expect arms-dup 2 "bench-host: --arms"
+base native --arms 'S,'; expect arms-empty-elem 2 "bench-host: --arms"
+base native --arms '';  expect arms-empty 2 "bench-host: --arms"
 
 # scenario
 base native --scenario one-big-net; expect scenario-ok 0 ""
 base native --scenario other;       expect scenario-bad 2 "bench-host: --scenario"
+base native --scenario org-op;      expect scenario-org-op 0 ""
+base native --scenario one-big-net,org-op; expect scenario-list 0 ""
+base native --scenario all;         expect scenario-all 0 ""
+base native --scenario one-big-net,one-big-net; expect scenario-dup 2 "bench-host: --scenario"
+base native --scenario all,org-op;  expect scenario-all-mixed 2 "bench-host: --scenario"
+base native --scenario '';          expect scenario-empty 2 "bench-host: --scenario"
 
 # repeats
 for r in 1 2 3 4 5; do base native --repeats "$r"; expect "repeats-$r" 0 ""; done
@@ -300,7 +311,7 @@ if [ "$okl" -eq 1 ]; then pass leg-argv-superset-of-bench-yml; else fail leg-arg
 has leg-hosts "--server-set 0 --gen-set 4-11"
 has leg-budget "--budget 100m"
 has leg-q6 "--q6 'host run: server 0, generator 4-11 (user, 2026-10-29)'"
-has leg-tee "| tee $tmp/out/gogc-default/leg-1.log"
+has leg-tee "| tee $tmp/out/gogc-default/leg-1-one-big-net.log"
 has leg-out "--out $tmp/out/gogc-default/results/1-one-big-net"
 # gogc-default-is-default (old: off): a base run writes only gogc-default/ and passes --generator-gc default
 has leg-gc-default "--generator-gc default"
@@ -689,7 +700,7 @@ pipe
 holds micro-stdout-only 'voice.test -test.run' "| tee $tmp/out/micro/micro.txt"
 hasnt micro-no-stderr 'voice.test -test.run' '2>&1'
 hasnt benchstat-no-stderr 'benchstat@' '2>&1'
-holds leg-keeps-stderr 'vcs-benchkit leg' "2>&1 | tee $tmp/out/gogc-default/leg-1.log"
+holds leg-keeps-stderr 'vcs-benchkit leg' "2>&1 | tee $tmp/out/gogc-default/leg-1-one-big-net.log"
 
 # arch: the protoc pin is linux-x86_64 only, so native mode refuses another arch before any build
 set +e
@@ -705,6 +716,74 @@ set -e
 expect arch-x86-ok 0 "+ "
 host --help
 expect help-x86 0 "x86_64"
+
+
+# ---------------------------------------------------------------------------
+# F-T7: arm and scenario lists, per-arm cpu plans, the SMT server-pair check.
+mx() { # <sysfs fixture> <extra args...>: native dry-run of the full matrix on a 2-cpu server set; records stay in $tmp/out
+  local sysfs="$1"; shift
+  local o; o="$(fresh_out)"
+  set +e
+  out="$(env -u BENCH_HOST_IN_CONTAINER BENCH_HOST_NPROC=24 BENCH_HOST_SYSFS="$fx/$sysfs" BENCH_HOST_FAKE_RESULTS=1 \
+    bash "$script" native --host-label aws-c7i.4xlarge --server-set 0,1 --gen-set 2,3 --out "$o" --dry-run "$@" 2>"$tmp/err")"; rc=$?
+  set -e
+  err="$(cat "$tmp/err")"
+}
+mx sysfs-no-smt --arms S,Seq,D2 --scenario all --repeats 1 --gogc default
+[ "$rc" -eq 0 ] || fail "matrix-run (rc=$rc err=$err)"
+nlegs="$(plus | grep -c 'vcs-benchkit leg' || true)"
+if [ "$nlegs" -eq 2 ]; then pass matrix-two-legs; else fail "matrix-two-legs ($nlegs)"; fi
+legline() { plus | grep -F 'vcs-benchkit leg' | grep -F -- "--scenario $1 " || true; }
+for sc in one-big-net org-op; do
+  l="$(legline "$sc")"
+  if [[ "$l" == *"--arms S,Seq,D2 "* && "$l" == *"--out $tmp/out/gogc-default/results/1-$sc "* ]]; then pass "matrix-leg-$sc"; else fail "matrix-leg-$sc ($l)"; fi
+done
+# arms given out of order are passed canonically; scenario lists take either order
+mx sysfs-no-smt --arms D2,S --scenario org-op,one-big-net --repeats 1
+if [ "$rc" -eq 0 ] && [ -n "$(legline org-op | grep -F -- '--arms S,D2 ')" ]; then pass arms-canonical-order; else fail "arms-canonical-order (rc=$rc)"; fi
+# the leg loop is repeats x gogc variants x scenarios
+mx sysfs-no-smt --arms S --scenario all --repeats 2 --gogc both
+nlegs="$(plus | grep -c 'vcs-benchkit leg' || true)"
+if [ "$nlegs" -eq 8 ]; then pass matrix-legs-count; else fail "matrix-legs-count ($nlegs)"; fi
+# the per-arm plan, printed once
+mx sysfs-no-smt --arms S,Seq,D2
+for w in "S: standalone cpu 0" "Seq: standalone cpus 0,1" "D2: control 0,1 / nodeA 0 / nodeB 1 / global 0,1"; do
+  if [[ "$out" == *"$w"* ]]; then pass "plan-$w"; else fail "plan-$w ($out)"; fi
+done
+mx sysfs-no-smt --arms S
+if [[ "$out" == *"Seq: standalone"* || "$out" == *"D2: control"* ]]; then fail plan-only-selected; else pass plan-only-selected; fi
+# server pair: two cores vs two hyperthreads of one core
+hj="$tmp/out/host.json"
+mx sysfs-no-smt --arms S,Seq,D2
+if jq -e '.server_pair == "2 cores"' "$hj" >/dev/null && [[ "$err" != *hyperthreads* ]]; then pass server-pair-cores; else fail "server-pair-cores ($(jq -c .server_pair "$hj") err=$err)"; fi
+mx sysfs-smt --arms S,Seq,D2
+if jq -e '.server_pair == "2 hyperthreads of 1 core"' "$hj" >/dev/null; then pass server-pair-ht; else fail "server-pair-ht ($(jq -c .server_pair "$hj"))"; fi
+if [[ "$err" == *"server cpus 0 and 1 are hyperthreads of one core: Seq and D2 measure SMT, not a second core"* ]]; then pass server-pair-warning; else fail "server-pair-warning ($err)"; fi
+# warning is a warning only, even for an S-only run it stays quiet (S uses one cpu)
+mx sysfs-smt --arms S
+if [ "$rc" -eq 0 ] && [[ "$err" != *"measure SMT"* ]]; then pass server-pair-quiet-for-S; else fail "server-pair-quiet-for-S ($err)"; fi
+# the topology string carries server_pair
+mx sysfs-smt --arms S,Seq,D2
+if plus | grep -F 'vcs-benchkit leg' | grep -qF -- "server pair 2 hyperthreads of 1 core"; then pass topology-server-pair; else fail "topology-server-pair"; fi
+# host.json: arms, scenarios, server_pair, arm_pins
+mx sysfs-no-smt --arms S,Seq,D2 --scenario all
+if jq -e '.arms == ["S","Seq","D2"] and .scenarios == ["one-big-net","org-op"]
+    and .arm_pins == {"S":"standalone cpu 0","Seq":"standalone cpus 0,1","D2":"control 0,1 / nodeA 0 / nodeB 1 / global 0,1"}' "$hj" >/dev/null; then pass host-json-arms; else fail "host-json-arms ($(cat "$hj"))"; fi
+# one cpu: no pair
+base native --arms S
+if jq -e '.server_pair == "n/a (1 cpu)" and .arms == ["S"] and .scenarios == ["one-big-net"] and .arm_pins == {"S":"standalone cpu 0"}' "$tmp/out/host.json" >/dev/null 2>&1; then pass host-json-one-cpu; else fail "host-json-one-cpu ($(cat "$tmp/out/host.json" 2>&1))"; fi
+# summary lists each leg's results.md
+mx sysfs-no-smt --arms S --scenario all --repeats 1
+sm="$tmp/out/summary.md"
+in_order_file summary-md-scenarios "$sm" "## GOGC default" "### Leg 1, one-big-net" "### Leg 1, org-op" "### Aggregate"
+# help: the guidance
+host --help
+ok=1
+for w in "CPU sets per arm" "thread_siblings_list" "two different physical cores" "--server-set 0,1 --gen-set 2-7,10-15" \
+  "--arms S,Seq,D2 --scenario all --repeats 3 --gogc default"; do
+  [[ "$out" == *"$w"* ]] || { ok=0; echo "  help lacks: $w"; }
+done
+if [ "$ok" -eq 1 ]; then pass help-cpu-guidance; else fail help-cpu-guidance; fi
 
 echo
 echo "$failures failures"
