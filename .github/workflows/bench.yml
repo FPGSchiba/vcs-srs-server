@@ -1,5 +1,7 @@
-# Bench v1 (W6 S4): build (server, loadbot, kit), gate-0 runner probe, B-0
-# micro-benchmarks, the S-arm run matrix and aggregate.
+# Bench v2 (W6 S5): build (server, loadbot, kit), gate-0 runner probe, B-0
+# micro-benchmarks, the run matrix (arms S, Seq, D2 x scenarios one-big-net,
+# org-op), aggregate with the publish set and two sanitiser scans, then a gated
+# publish, render and deploy to the Pages site.
 #
 # - MANUAL ONLY. Never on schedule, push or pull_request.
 # - Do NOT queue more than one run: GitHub keeps one running and one pending
@@ -8,15 +10,23 @@
 # - Every artefact is relative only (ratios, knees, curves) and carries the
 #   runner topology label from that run's own probe. No absolute capacity
 #   number is a claim about any other machine.
-# - server_ref must contain cmd/vcs-benchkit with the leg and aggregate
-#   subcommands (S4 or later); an older ref fails the build or run job.
+# - server_ref must contain cmd/vcs-benchkit with the leg, aggregate and
+#   publishset subcommands (S5 or later) and tools/benchsite; an older ref
+#   fails the build or run job.
 # - client_ref is PINNED, not main: a moving client must not change a bench
 #   result. Bump the default deliberately in the PR that needs newer loadbot
-#   behaviour (mirrors client test.yml's pinned server ref). Currently client
-#   main after #54 (Wave 6 C1: internal/loadgen and cmd/vcs-loadbot).
-# - Only the S arm and the one-big-net scenario exist in v1. Seq, D2 and
-#   org-op arrive with S5/C2; there is no publish input or job until then.
-# - This is v1 of three (S2/S4/S5); later inputs and jobs arrive with them.
+#   behaviour (mirrors client test.yml's pinned server ref). The default is
+#   the loadbot v3 commit: it has no org-op scenario and no D2 InitAuth, so
+#   scenarios org-op or both and arm D2 need a v4 client_ref (the C2 loadbot).
+#   The bump to a v4 SHA is a follow-up after the client PR merges.
+# - arms is a comma list of S, Seq, D2 (default all three). Each arm gets a
+#   90 minute sweep budget (--budget 90m); a leg is hard-stopped at
+#   arms x (budget + 15m), so the leg job's 340 minute limit holds 3 arms.
+# - Publishing is OFF by default (publish: false) and runs only from main. The
+#   publish job is the only one with contents: write and pushes only to the
+#   orphan bench-results branch. The deploy job is the only one with pages:
+#   write and id-token: write. The publish set goes through two independent
+#   sanitiser scans (Go, then shell + jq) before it leaves the aggregate job.
 # - R2 (W6 fix 2): the leg keeps the server log as server-<k>.log.gz in the
 #   leg artifact and prints diagnostics itself. The Diagnostics (failed leg)
 #   step is only a backstop for a leg that dies before the kit can print them.
@@ -34,17 +44,17 @@ on:
         type: string
         default: 'b55823e195577506ba5c3fa2c6d16a48a5f9bd5b'
       scenarios:
-        description: Scenario to run (v1 has one-big-net only)
+        description: Scenario to run (org-op and both need a v4 client_ref)
         type: choice
         options:
           - one-big-net
-        default: one-big-net
+          - org-op
+          - both
+        default: both
       arms:
-        description: Arms to run (v1 has S only)
-        type: choice
-        options:
-          - S
-        default: S
+        description: Comma list of arms, any of S, Seq, D2 (D2 needs a v4 client_ref)
+        type: string
+        default: 'S,Seq,D2'
       repeats:
         description: Independent legs per scenario, one runner VM each (1 to 5)
         type: string
@@ -64,6 +74,10 @@ on:
         default: actions-short
       probe_only:
         description: Skip the micro, run and aggregate jobs (build and probe still run)
+        type: boolean
+        default: false
+      publish:
+        description: Publish the sanitised results to the bench-results branch and deploy the site (main only)
         type: boolean
         default: false
 
@@ -90,8 +104,8 @@ jobs:
       repeats: ${{ steps.matrix.outputs.repeats }}
       scenarios: ${{ steps.matrix.outputs.scenarios }}
     steps:
-      # Inputs reach the shell only through env:. Reject anything v1 does not
-      # implement before any runner time is spent.
+      # Inputs reach the shell only through env:. Reject anything malformed
+      # before any runner time is spent.
       - name: Validate inputs
         id: matrix
         env:
@@ -101,11 +115,16 @@ jobs:
           IN_CLIENT_REF: ${{ inputs.client_ref }}
         run: |
           [[ "$IN_REPEATS" =~ ^[1-5]$ ]] || { echo "::error::repeats must be 1 to 5, got '$IN_REPEATS'"; exit 1; }
-          [ "$IN_ARMS" = "S" ] || { echo "::error::v1 runs the S arm only"; exit 1; }
-          [ "$IN_SCENARIOS" = "one-big-net" ] || { echo "::error::v1 runs one-big-net only"; exit 1; }
+          [[ "$IN_ARMS" =~ ^(S|Seq|D2)(,(S|Seq|D2))*$ ]] || { echo "::error::arms must be a comma list of S, Seq, D2, got '$IN_ARMS'"; exit 1; }
+          [ "$(printf '%s' "$IN_ARMS" | tr ',' '\n' | sort | uniq -d | wc -l)" -eq 0 ] || { echo "::error::arms lists an arm twice: '$IN_ARMS'"; exit 1; }
           [[ "$IN_CLIENT_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::client_ref must be a full 40-hex SHA"; exit 1; }
           echo "repeats=$(seq 1 "$IN_REPEATS" | jq -sc .)" >> "$GITHUB_OUTPUT"
-          echo "scenarios=$(jq -nc --arg s "$IN_SCENARIOS" '[$s]')" >> "$GITHUB_OUTPUT"
+          case "$IN_SCENARIOS" in
+            one-big-net|org-op) scenarios="$(jq -nc --arg s "$IN_SCENARIOS" '[$s]')" ;;
+            both) scenarios='["one-big-net","org-op"]' ;;
+            *) echo "::error::scenarios must be one-big-net, org-op or both, got '$IN_SCENARIOS'"; exit 1 ;;
+          esac
+          echo "scenarios=$scenarios" >> "$GITHUB_OUTPUT"
 
       - name: Checkout code
         uses: actions/checkout@v7
@@ -314,11 +333,12 @@ jobs:
           if-no-files-found: error
 
   run:
-    name: S arm leg ${{ matrix.repeat }} (${{ matrix.scenario }})
+    name: Leg ${{ matrix.repeat }} (${{ matrix.scenario }})
     needs: [build, micro]
     if: ${{ !inputs.probe_only }}
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # 3 arms x (90 + 15) min = 315 min, under the 360 min job limit.
+    timeout-minutes: 340
     permissions:
       contents: read
     strategy:
@@ -366,6 +386,7 @@ jobs:
             --loadbot-bin "$PWD/bin/vcs-loadbot" \
             --scenario "$SCENARIO" \
             --arms "$ARMS" \
+            --budget 90m \
             --seed "$REPEAT" \
             --out "results/${REPEAT}-${SCENARIO}" \
             --probe env-probe.json \
@@ -385,13 +406,13 @@ jobs:
           SCENARIO: ${{ matrix.scenario }}
         run: |
           dir="results/${REPEAT}-${SCENARIO}"
-          for f in "$dir"/loadbot-*.log "$dir"/calibrate.log "$dir"/reflect.log; do
+          for f in "$dir"/*/loadbot-*.log "$dir"/calibrate.log "$dir"/reflect.log; do
             [ -e "$f" ] || continue
             echo "::group::$f (last 50 lines)"
             tail -n 50 "$f" 2>&1 || true
             echo "::endgroup::"
           done
-          srv="$(ls "$dir"/server-*.log.gz 2>/dev/null | sort -V | tail -n 1 || true)"
+          srv="$(ls -t "$dir"/*/server-*.log.gz 2>/dev/null | head -n 1 || true)"
           echo "::group::${srv:-server log} (last 200 lines)"
           if [ -n "$srv" ]; then zcat "$srv" 2>&1 | tail -n 200 || true; else echo "no server log kept"; fi
           echo "::endgroup::"
@@ -409,7 +430,6 @@ jobs:
         run: |
           dir="results/${REPEAT}-${SCENARIO}"
           md="$dir/results.md"
-          knees="$dir/knees.csv"
           if [ -f "$md" ]; then
             # The same table the leg already printed to the run log; it
             # carries its own "### Leg" heading.
@@ -418,11 +438,16 @@ jobs:
             {
               echo "### Leg ${REPEAT} ${SCENARIO}"
               echo
-              if [ -f "$knees" ]; then
+              found=0
+              for knees in "$dir"/*/knees.csv; do
+                [ -f "$knees" ] || continue
+                found=1
+                echo "Arm $(basename "$(dirname "$knees")")"
                 echo '```'
                 cat "$knees"
                 echo '```'
-              else
+              done
+              if [ "$found" -eq 0 ]; then
                 echo "No knees.csv: this leg did not finish. Partial files, if any, are in the leg artifact."
               fi
             } >> "$GITHUB_STEP_SUMMARY"
@@ -438,23 +463,53 @@ jobs:
           path: results
           if-no-files-found: warn
 
-  # No sanitiser and no publish yet: both arrive with S5.
+  # The publish set is built here from the aggregate and the build and probe
+  # records, then scanned twice by independent implementations. The artifact
+  # holds the whole aggregate (private, for debugging) plus publish/ (the only
+  # part the publish job ever copies).
   aggregate:
     name: Aggregate
-    needs: run
+    needs: [build, probe, micro, run]
     # Runs after failed legs too, so the surviving legs still aggregate. It is
     # skipped when run itself was skipped (probe_only, or a failed build/micro).
     if: ${{ !cancelled() && needs.run.result != 'skipped' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
+      # Scripts and the benchsite tool come from the workflow's own commit.
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Assert Go toolchain
+        run: bash .github/scripts/assert-go-toolchain.sh
+
       - name: Download build
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: build
           path: bin
+
+      - name: Download probe
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: env-probe
+          path: probe
+
+      - name: Download micro results
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: micro
+          path: micro
 
       - name: Download leg results
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -467,14 +522,15 @@ jobs:
         env:
           OUT: bench-results-${{ github.run_id }}
           IN_REPEATS: ${{ inputs.repeats }}
+          SCENARIOS: ${{ needs.build.outputs.scenarios }}
           RUN_RESULT: ${{ needs.run.result }}
         run: |
           chmod +x bin/vcs-benchkit
-          # v1 has one scenario, so the expected leg count is `repeats`.
-          legs="$(find results -name knees.csv 2>/dev/null | wc -l)"
-          if [ "$legs" -ne "$IN_REPEATS" ]; then
-            echo "::warning::aggregating $legs of $IN_REPEATS legs (run job result: $RUN_RESULT); the statistics cover the surviving legs only"
-            echo "PARTIAL: $legs of $IN_REPEATS legs aggregated (run job result: $RUN_RESULT)" >> "$GITHUB_STEP_SUMMARY"
+          want=$(( IN_REPEATS * $(jq length <<<"$SCENARIOS") ))
+          legs="$(find results -name leg.json 2>/dev/null | wc -l)"
+          if [ "$legs" -ne "$want" ]; then
+            echo "::warning::aggregating $legs of $want legs (run job result: $RUN_RESULT); the statistics cover the surviving legs only"
+            echo "PARTIAL: $legs of $want legs aggregated (run job result: $RUN_RESULT)" >> "$GITHUB_STEP_SUMMARY"
           fi
           # aggregate prints its table to this log; capture its status so the
           # summary is written even when it fails, then fail the step with it.
@@ -495,9 +551,157 @@ jobs:
           fi
           exit "$status"
 
+      # The typed schema is the allowlist: anything it has no field for (host
+      # labels, logs, errors, notes) does not reach publish/.
+      - name: Build publish set
+        env:
+          OUT: bench-results-${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          bin/vcs-benchkit publishset \
+            --in "$OUT" \
+            --micro micro \
+            --build bin/build.json \
+            --probe probe/env-probe.json \
+            --run-url "$RUN_URL" \
+            --out "$OUT/publish"
+
+      # Scan 1 (Go). The runner's own host names are extra literals.
+      - name: Scan publish set (Go)
+        env:
+          OUT: bench-results-${{ github.run_id }}
+        run: |
+          go run ./tools/benchsite scan --dir "$OUT/publish" --extra "$(hostname)" --extra "$(hostname -f 2>/dev/null || hostname)"
+
+      # Scan 2 (shell + jq), after its own fixture self-test. Run here as a
+      # preview so a finding fails the run before the publish job starts.
+      - name: Scan publish set (shell)
+        env:
+          OUT: bench-results-${{ github.run_id }}
+        run: |
+          bash .github/scripts/bench-scan_test.sh
+          bash .github/scripts/bench-scan.sh "$OUT/publish" "$(hostname)" "$(hostname -f 2>/dev/null || hostname)"
+
       - name: Upload aggregate
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bench-results-${{ github.run_id }}
           path: bench-results-${{ github.run_id }}
           if-no-files-found: error
+
+  # The only job with contents: write. It has no Go and no third-party code: it
+  # re-runs the shell scan on what it is about to push, then pushes to the
+  # orphan bench-results branch only (a literal refspec, never an input).
+  publish:
+    name: Publish
+    needs: aggregate
+    if: ${{ inputs.publish && github.ref == 'refs/heads/main' && needs.aggregate.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout scripts
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Download aggregate
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bench-results-${{ github.run_id }}
+          path: aggregate
+
+      - name: Scan publish set (shell)
+        run: |
+          bash .github/scripts/bench-scan_test.sh
+          bash .github/scripts/bench-scan.sh aggregate/publish "$(hostname)" "$(hostname -f 2>/dev/null || hostname)"
+
+      - name: Push to bench-results
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          src="$PWD/aggregate/publish"
+          remote="https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git"
+          dest="runs/$(date -u +%F)-${RUN_ID}"
+          mkdir pub
+          cd pub
+          git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code --heads "$remote" bench-results >/dev/null 2>&1; then
+            git fetch -q --depth 1 "$remote" bench-results
+            git switch -q -c bench-results FETCH_HEAD
+          else
+            git switch -q --orphan bench-results
+          fi
+          mkdir -p "$dest"
+          cp -R "$src"/. "$dest"/
+          git add "$dest"
+          git commit -q -m "bench results: run ${RUN_ID}"
+          git push "$remote" HEAD:refs/heads/bench-results
+
+  render:
+    name: Render site
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Checkout results
+        uses: actions/checkout@v7
+        with:
+          ref: bench-results
+          path: results
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Assert Go toolchain
+        run: bash .github/scripts/assert-go-toolchain.sh
+
+      - name: Render site
+        run: go run ./tools/benchsite render -in results/runs -out site
+
+      - name: Scan site
+        run: go run ./tools/benchsite scan --dir site --extra "$(hostname)" --extra "$(hostname -f 2>/dev/null || hostname)"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+  # The only job with pages: write and id-token: write.
+  deploy:
+    name: Deploy site
+    needs: render
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - name: Deploy to Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
