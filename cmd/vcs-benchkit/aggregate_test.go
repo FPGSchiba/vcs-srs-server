@@ -3,11 +3,16 @@ package main
 import (
 	"bytes"
 	"encoding/csv"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
+
+	legpkg "github.com/FPGSchiba/vcs-srs-server/cmd/vcs-benchkit/leg"
 )
 
 const kneesHeader = "arm,scenario,result,result_kind,n,confirm_n,confirm_outcome,overload_n,overload_outcome,predicted_knee,n_max,topology,label,payload,join_label,not_measured,notes\n"
@@ -416,5 +421,117 @@ func TestAggregateLabelNeedsRelativeOnly(t *testing.T) {
 	err := runAggregate([]string{"--in", in, "--out", t.TempDir(), "--label", "capacity"}, io.Discard, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), `--label must say "relative only"`) {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// writeArmLeg writes the new layout: <root>/<leg>/<arm>/knees.csv.
+func writeArmLeg(t *testing.T, root, leg, arm, scen, kind, n, topo string) {
+	t.Helper()
+	writeLeg(t, root, leg+"/"+arm, arm, scen, "knee "+n, kind, n, topo)
+}
+
+// writeLegJSON writes <root>/<leg>/leg.json from the arms' (kind, n) pairs.
+func writeLegJSON(t *testing.T, root, leg, scen, topo string, arms map[string][2]string) {
+	t.Helper()
+	idx := legpkg.LegIndex{Schema: legpkg.LegIndexSchema, Scenario: scen, Seed: 1, Arms: map[string]legpkg.ArmResult{}, TopologyLabel: topo, Label: label}
+	for a, kn := range arms {
+		n, _ := strconv.Atoi(kn[1])
+		idx.Arms[a] = legpkg.ArmResult{Result: "r", Kind: kn[0], N: n}
+		idx.ArmOrder = append(idx.ArmOrder, a)
+	}
+	sort.Strings(idx.ArmOrder)
+	idx.Ratios, idx.RatioNotes = legpkg.Ratios(idx.Arms)
+	b, err := json.Marshal(idx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, leg, "leg.json"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readCSVRows(t *testing.T, path string) []map[string]string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recs, err := csv.NewReader(bytes.NewReader(b)).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []map[string]string
+	for _, r := range recs[1:] {
+		m := map[string]string{}
+		for i, h := range recs[0] {
+			m[h] = r[i]
+		}
+		rows = append(rows, m)
+	}
+	return rows
+}
+
+func TestAggregateRatiosAcrossLegs(t *testing.T) {
+	in, out := t.TempDir(), t.TempDir()
+	topo := "2 cores"
+	scen := "one-big-net"
+	type leg struct{ s, seq, d2 string; d2kind string }
+	for i, l := range []leg{{"1000", "1500", "2000", "knee"}, {"1000", "1200", "1800", "knee"}, {"1000", "1800", "4000", "generator-bound"}} {
+		dir := strconv.Itoa(i+1) + "-" + scen
+		writeArmLeg(t, in, dir, "S", scen, "knee", l.s, topo)
+		writeArmLeg(t, in, dir, "Seq", scen, "knee", l.seq, topo)
+		writeArmLeg(t, in, dir, "D2", scen, l.d2kind, l.d2, topo)
+		writeLegJSON(t, in, dir, scen, topo, map[string][2]string{"S": {"knee", l.s}, "Seq": {"knee", l.seq}, "D2": {l.d2kind, l.d2}})
+	}
+	if err := runAggregate([]string{"--in", in, "--out", out}, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	by := map[string]map[string]string{}
+	for _, r := range readCSVRows(t, filepath.Join(out, "ratios.csv")) {
+		by[r["ratio"]] = r
+	}
+	seq := by["Seq/S"]
+	if seq["scenario"] != scen || seq["legs"] != "3" || seq["median"] != "1.50" || seq["min"] != "1.20" || seq["max"] != "1.80" || seq["censored_legs"] != "0" || seq["topology"] != topo || seq["label"] != label {
+		t.Fatalf("Seq/S = %v", seq)
+	}
+	d2 := by["D2/S"]
+	if d2["legs"] != "2" || d2["censored_legs"] != "1" || d2["median"] != "1.90" || d2["min"] != "1.80" || d2["max"] != "2.00" {
+		t.Fatalf("D2/S = %v", d2)
+	}
+	md, _ := os.ReadFile(filepath.Join(out, "aggregate.md"))
+	if !strings.Contains(string(md), "Within-leg ratios") || !strings.Contains(string(md), "D2/S") {
+		t.Fatalf("aggregate.md lacks ratios table:\n%s", md)
+	}
+	// the arm rows still aggregate from <leg>/<arm>/knees.csv.
+	if rows := readAgg(t, out); len(rows) != 3 {
+		t.Fatalf("aggregate rows = %d, want 3", len(rows))
+	}
+}
+
+func TestAggregateOldLayoutHasNoRatios(t *testing.T) {
+	in, out := t.TempDir(), t.TempDir()
+	writeLeg(t, in, "1-one-big-net", "S", "one-big-net", "knee 2400", "knee", "2400", "t")
+	if err := runAggregate([]string{"--in", in, "--out", out}, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if rows := readCSVRows(t, filepath.Join(out, "ratios.csv")); len(rows) != 0 {
+		t.Fatalf("ratios = %v, want header only", rows)
+	}
+	if rows := readAgg(t, out); len(rows) != 1 || rows[0]["arm_label"] != "" {
+		t.Fatalf("rows = %v", rows)
+	}
+}
+
+func TestAggregateArmLabelFromManifest(t *testing.T) {
+	in, out := t.TempDir(), t.TempDir()
+	writeArmLeg(t, in, "1-org-op", "D2", "org-op", "knee", "900", "t")
+	if err := os.WriteFile(filepath.Join(in, "1-org-op", "D2", "manifest.json"), []byte(`{"arm":"D2","scenario":"org-op","arm_label":"bot-only; real client: ROADMAP Phase 9"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runAggregate([]string{"--in", in, "--out", out}, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if rows := readAgg(t, out); len(rows) != 1 || rows[0]["arm_label"] != "bot-only; real client: ROADMAP Phase 9" {
+		t.Fatalf("rows = %v", rows)
 	}
 }

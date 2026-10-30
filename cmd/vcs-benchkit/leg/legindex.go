@@ -44,8 +44,8 @@ type LegIndex struct {
 // first arm's knee over the second's.
 var RatioKeys = []string{"Seq/S", "D2/S", "D2/Seq"}
 
-// ratioSides splits "Seq/S" into its numerator and denominator arms.
-func ratioSides(key string) (num, den string) {
+// RatioSides splits "Seq/S" into its numerator and denominator arms.
+func RatioSides(key string) (num, den string) {
 	for i := range key {
 		if key[i] == '/' {
 			return key[:i], key[i+1:]
@@ -77,7 +77,7 @@ func Ratios(arms map[string]ArmResult) (map[string]*float64, map[string]string) 
 		return ""
 	}
 	for _, key := range RatioKeys {
-		num, den := ratioSides(key)
+		num, den := RatioSides(key)
 		var reasons []string
 		if w := why(den); w != "" {
 			reasons = append(reasons, w)
