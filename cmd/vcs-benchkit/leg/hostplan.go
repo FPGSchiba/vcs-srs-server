@@ -20,7 +20,7 @@ const rxPPSPerBot = 50
 const minMemBots = 64
 
 // memoryPreflight is the memory pre-flight. It returns the memory top (0 =
-// unknown), the calibration steps trimmed to it, and a note for the log and the
+// unknown, -1 = below the reserve; also returned with a refusal), the calibration steps trimmed to it, and a note for the log and the
 // manifest. A host that fits fewer than minMemBots bots is refused.
 func memoryPreflight(o Options, mf MemFacts) (memTop int, calSteps, note string, err error) {
 	perBot := int64(o.MemPerBotMiB * (1 << 20))
@@ -29,7 +29,7 @@ func memoryPreflight(o Options, mf MemFacts) (memTop int, calSteps, note string,
 	switch {
 	case memTop == -1 || (memTop > 0 && memTop < minMemBots):
 		fits := max(memTop, 0)
-		return 0, o.CalSteps, "", fmt.Errorf("pre-flight: memory: %s fits %d bots at %s MiB/bot (margin %s, reserve %d MiB); need at least %d",
+		return memTop, o.CalSteps, "", fmt.Errorf("pre-flight: memory: %s fits %d bots at %s MiB/bot (margin %s, reserve %d MiB); need at least %d",
 			mf.Describe(), fits, fmtFloat(o.MemPerBotMiB), fmtFloat(o.MemMargin), o.MemReserveMiB, minMemBots)
 	case memTop == 0:
 		return 0, o.CalSteps, "memory pre-flight skipped: " + mf.Describe(), nil
@@ -52,7 +52,7 @@ func memoryPreflight(o Options, mf MemFacts) (memTop int, calSteps, note string,
 		return memTop, o.CalSteps, "", nil
 	}
 	if len(keep) == 0 {
-		return 0, o.CalSteps, "", fmt.Errorf("pre-flight: memory: every calibration step (%s) is above the memory top %d", o.CalSteps, memTop)
+		return memTop, o.CalSteps, "", fmt.Errorf("pre-flight: memory: every calibration step (%s) is above the memory top %d", o.CalSteps, memTop)
 	}
 	return memTop, strings.Join(keep, ","),
 		fmt.Sprintf("calibration steps above the memory top %d dropped: %s", memTop, strings.Join(dropped, ",")), nil
@@ -131,12 +131,15 @@ type MemoryRecord struct {
 	Margin       float64 `json:"margin"`
 	ReserveMiB   int     `json:"reserve_mib"`
 	MemTop       int     `json:"mem_top"`
+	// Refused is true when the pre-flight refused the host; MemTop is then the
+	// real figure (-1 = below the reserve), not "unknown".
+	Refused bool `json:"refused,omitempty"`
 }
 
-func (m *Manifest) recordMemory(o Options, mf MemFacts, memTop int) {
+func (m *Manifest) recordMemory(o Options, mf MemFacts, memTop int, refused bool) {
 	m.Memory = &MemoryRecord{
 		Source: mf.Source, MemAvailable: mf.MemAvailable, CgroupLimit: mf.CgroupLimit, CgroupUsage: mf.CgroupUsage, Avail: mf.Avail,
-		PerBotMiB: o.MemPerBotMiB, Margin: o.MemMargin, ReserveMiB: o.MemReserveMiB, MemTop: memTop,
+		PerBotMiB: o.MemPerBotMiB, Margin: o.MemMargin, ReserveMiB: o.MemReserveMiB, MemTop: memTop, Refused: refused,
 	}
 }
 

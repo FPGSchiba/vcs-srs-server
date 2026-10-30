@@ -452,7 +452,7 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	// refused, and calibration steps above what memory allows are dropped.
 	mf := ReadMemFacts(o.readFile)
 	memTop, calSteps, memNote, err := memoryPreflight(o, mf)
-	m.recordMemory(o, mf, memTop)
+	m.recordMemory(o, mf, memTop, err != nil)
 	if err != nil {
 		return fail(err)
 	}

@@ -238,3 +238,23 @@ func TestManifestDecisionsRound3(t *testing.T) {
 }
 
 var _ = sweep.Pass
+
+// A refused host must not look like "memory unknown": the preflight returns the
+// real top and the manifest carries an explicit refused marker.
+func TestMemoryPreflightRefusalKeepsTopAndMarks(t *testing.T) {
+	o := hostOpts()
+	mf := ReadMemFacts(fakeReader(map[string]string{"/proc/meminfo": memInfo(600)}))
+	top, _, _, err := memoryPreflight(o, mf)
+	if err == nil || top != 35 {
+		t.Fatalf("top=%d err=%v, want 35 and a refusal", top, err)
+	}
+	m := newManifest(o, nil, nil)
+	m.recordMemory(o, mf, top, err != nil)
+	if m.Memory.MemTop != 35 || !m.Memory.Refused {
+		t.Errorf("memory = %+v", m.Memory)
+	}
+	m.recordMemory(o, ReadMemFacts(fakeReader(map[string]string{"/proc/meminfo": memInfo(64 * 1024)})), 5529, false)
+	if m.Memory.Refused {
+		t.Errorf("fitting host marked refused")
+	}
+}
