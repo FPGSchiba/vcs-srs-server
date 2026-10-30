@@ -46,7 +46,7 @@ func (c CalConfig) command(sub string, args []string, set string) (*exec.Cmd, er
 		return nil, err
 	}
 	cmd := exec.Command(name, argv...)
-	cmd.Env = processEnvWith(os.Environ(), pinEnv, sub, botParamsOr(c.Bot).GRPCLog)
+	cmd.Env = processEnvFor(os.Environ(), pinEnv, sub, botParamsOr(c.Bot).GRPCLog, botParamsOr(c.Bot).GeneratorGC)
 	return cmd, nil
 }
 

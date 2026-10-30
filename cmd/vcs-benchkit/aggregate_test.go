@@ -329,3 +329,56 @@ func TestAggregateRound2(t *testing.T) {
 		t.Errorf("aggregate.csv: %v", r)
 	}
 }
+
+func TestAggregateLabelFlag(t *testing.T) {
+	in, out := t.TempDir(), t.TempDir()
+	topo := "2 hyperthreads of 1 core"
+	writeLeg(t, in, "1-one-big-net", "S", "one-big-net", "knee 2400", "knee", "2400", topo)
+	writeLeg(t, in, "2-one-big-net", "S", "one-big-net", "knee 3100", "knee", "3100", topo)
+	const want = "local-docker, relative only. Not a capacity figure."
+	if err := runAggregate([]string{"--in", in, "--out", out, "--label", want}, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	rows := readAgg(t, out)
+	if len(rows) == 0 {
+		t.Fatal("no rows")
+	}
+	for _, r := range rows {
+		if r["label"] != want {
+			t.Errorf("csv label = %q, want %q", r["label"], want)
+		}
+	}
+	md, err := os.ReadFile(filepath.Join(out, "aggregate.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(string(md), "\n_"+want+"_\n") {
+		t.Errorf("aggregate.md does not end with the label: %q", md)
+	}
+}
+
+func TestAggregateLabelDefault(t *testing.T) {
+	in, out := t.TempDir(), t.TempDir()
+	writeLeg(t, in, "1-one-big-net", "S", "one-big-net", "knee 2400", "knee", "2400", "t")
+	if err := runAggregate([]string{"--in", in, "--out", out}, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range readAgg(t, out) {
+		if r["label"] != label {
+			t.Errorf("csv label = %q, want the default constant", r["label"])
+		}
+	}
+	md, _ := os.ReadFile(filepath.Join(out, "aggregate.md"))
+	if !strings.HasSuffix(string(md), "\n_"+label+"_\n") {
+		t.Errorf("aggregate.md default label missing: %q", md)
+	}
+}
+
+func TestAggregateLabelNeedsRelativeOnly(t *testing.T) {
+	in := t.TempDir()
+	writeLeg(t, in, "1-one-big-net", "S", "one-big-net", "knee 2400", "knee", "2400", "t")
+	err := runAggregate([]string{"--in", in, "--out", t.TempDir(), "--label", "capacity"}, io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), `--label must say "relative only"`) {
+		t.Errorf("err = %v", err)
+	}
+}

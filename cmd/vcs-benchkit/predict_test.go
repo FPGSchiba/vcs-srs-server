@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -231,5 +233,39 @@ func TestParseBenchOutputSkipsBareParentLines(t *testing.T) {
 	}
 	if len(rows) != 1 {
 		t.Fatalf("want 1 row, got %d", len(rows))
+	}
+}
+
+func TestPredictLabelFlag(t *testing.T) {
+	var mb strings.Builder
+	for _, r := range synth("bus") {
+		unit := "ns/send"
+		if r.Bench == benchScan {
+			unit = "ns/scan"
+		}
+		fmt.Fprintf(&mb, "%s/N=%d/L=%d/log=bus/mode=single-2 \t 100 \t 1 ns/op \t %g %s\n", r.Bench, r.N, r.L, r.Metric[unit], unit)
+	}
+	micro := filepath.Join(t.TempDir(), "micro.txt")
+	if err := os.WriteFile(micro, []byte(mb.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	const want = "aws-c7i.4xlarge, relative only. Not a capacity figure."
+	var buf bytes.Buffer
+	if err := runPredict([]string{"--micro", micro, "--label", want}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), `"label": "`+want+`"`) {
+		t.Errorf("predict.json label not %q: %.200s", want, buf.String())
+	}
+	buf.Reset()
+	if err := runPredict([]string{"--micro", micro}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), `"label": "`+label+`"`) {
+		t.Errorf("default label missing")
+	}
+	err := runPredict([]string{"--micro", micro, "--label", "x"}, &buf)
+	if err == nil || !strings.Contains(err.Error(), `--label must say "relative only"`) {
+		t.Errorf("err = %v", err)
 	}
 }

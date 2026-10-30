@@ -43,6 +43,9 @@ type Options struct {
 	// NMaxCap lowers the N_max the time and port budgets give (0 = no extra cap).
 	NMaxCap              int
 	ServerSHA, ClientSHA string
+	// Label replaces Label in the CSVs, results.md and the manifest (empty =
+	// Label, the Actions-runner default).
+	Label string
 
 	Budget   time.Duration
 	JoinRate float64
@@ -62,6 +65,9 @@ type Options struct {
 	BurstAdd, BurstInFlight int
 	Bot                     BotParams
 }
+
+// LabelOrDefault is the label the leg writes: Label unless --label set one.
+func (o Options) LabelOrDefault() string { return LabelOr(o.Label) }
 
 // Probe is the part of gate 0's env-probe.json the leg needs.
 type Probe struct {
@@ -128,6 +134,22 @@ func PredictedKnee(b []byte, scenario, arm string) (int, error) {
 		}
 	}
 	return 0, fmt.Errorf("predict.json: no prediction for %s/%s", scenario, arm)
+}
+
+// newManifest is the manifest a leg starts from, before any result is known.
+func newManifest(o Options, pins map[string]PinRecord, probeRaw []byte) *Manifest {
+	return &Manifest{
+		Schema: "leg-manifest/1", Label: o.LabelOrDefault(), Payload: PayloadLabel, JoinLabel: JoinLabel, NotMeasured: NotMeasured,
+		Arm: o.Arms, Scenario: o.Scenario, Seed: o.Seed, Q6: o.Q6, Topology: o.Topology,
+		ServerSHA: o.ServerSHA, ClientSHA: o.ClientSHA, KitGoVersion: runtime.Version(),
+		Pins:          pins,
+		PredictedKnee: o.PredictedKnee, JoinRate: o.JoinRate, Budget: o.Budget.String(),
+		Durations: map[string]string{
+			"warmup": o.Warmup.String(), "hold": o.Hold.String(), "confirm": o.Confirm.String(),
+			"overload": o.Overload.String(), "calibration_hold": o.CalHold.String(),
+		},
+		Bounds: sweep.DefaultBounds, EnvProbe: probeRaw,
+	}
 }
 
 // Validate checks resolved options. S4 builds the S arm of one-big-net only.
@@ -263,7 +285,9 @@ type Manifest struct {
 	BotFeatures  []string            `json:"bot_features"`
 	BotFlags     []string            `json:"bot_flags,omitempty"`
 	GeneratorEnv map[string][]string `json:"generator_env,omitempty"`
-	ServerEnv    []string            `json:"server_env,omitempty"`
+	// GeneratorGC is "off" (R2-9 GOGC=off GOMEMLIMIT=1GiB) or "default" (Go defaults).
+	GeneratorGC string   `json:"generator_gc,omitempty"`
+	ServerEnv   []string `json:"server_env,omitempty"`
 
 	// Round 2 (W6 fix 2): the ramp and burst shapes, the generator bounds and every
 	// design change with its old and new value.
@@ -355,18 +379,7 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	}
 	serverPin := pins["server"].CPUs
 
-	m := &Manifest{
-		Schema: "leg-manifest/1", Label: Label, Payload: PayloadLabel, JoinLabel: JoinLabel, NotMeasured: NotMeasured,
-		Arm: o.Arms, Scenario: o.Scenario, Seed: o.Seed, Q6: o.Q6, Topology: o.Topology,
-		ServerSHA: o.ServerSHA, ClientSHA: o.ClientSHA, KitGoVersion: runtime.Version(),
-		Pins:          pins,
-		PredictedKnee: o.PredictedKnee, JoinRate: o.JoinRate, Budget: o.Budget.String(),
-		Durations: map[string]string{
-			"warmup": o.Warmup.String(), "hold": o.Hold.String(), "confirm": o.Confirm.String(),
-			"overload": o.Overload.String(), "calibration_hold": o.CalHold.String(),
-		},
-		Bounds: sweep.DefaultBounds, EnvProbe: probeRaw,
-	}
+	m := newManifest(o, pins, probeRaw)
 	tag := LegTag(o.Seed, o.Arms, o.Scenario)
 	// The reporter prints the diagnostics block into the Actions log; its source
 	// is set once the S arm's environment exists.
@@ -387,7 +400,7 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	defer func() {
 		in := ResultsInput{
 			Seed: o.Seed, Arm: o.Arms, Scenario: o.Scenario, Result: m.Result, Error: m.Error,
-			Cal: cal, Out: out, Predicted: o.PredictedKnee, NMax: m.NMax,
+			Cal: cal, Out: out, Predicted: o.PredictedKnee, NMax: m.NMax, Label: o.Label,
 		}
 		var buf bytes.Buffer
 		if err := WriteResultsMarkdown(&buf, in); err != nil {
@@ -457,7 +470,7 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 		calNotes = append(calNotes, note)
 		say(FormatCalStopped(tag, cal))
 	}
-	if err := writeFile(o.OutDir, "calibration.csv", func(w io.Writer) error { return WriteCalibrationCSV(w, cal, o.Topology) }); err != nil {
+	if err := writeFile(o.OutDir, "calibration.csv", func(w io.Writer) error { return WriteCalibrationCSVLabeled(w, cal, o.Topology, o.Label) }); err != nil {
 		return fail(err)
 	}
 
@@ -531,14 +544,14 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	}
 
 	// 9. Files, written even after a failure so the partial run is inspectable.
-	if err := writeFile(o.OutDir, "steps.csv", func(w io.Writer) error { return WriteStepsCSV(w, out, o.Topology) }); err != nil {
+	if err := writeFile(o.OutDir, "steps.csv", func(w io.Writer) error { return WriteStepsCSVLabeled(w, out, o.Topology, o.Label) }); err != nil {
 		return fail(err)
 	}
 	if runErr != nil {
 		return fail(runErr)
 	}
 	if err := writeFile(o.OutDir, "knees.csv", func(w io.Writer) error {
-		return WriteKneesCSV(w, out, KneeMeta{Arm: o.Arms, Scenario: o.Scenario, Topology: o.Topology, Predicted: o.PredictedKnee, NMax: nMax})
+		return WriteKneesCSV(w, out, KneeMeta{Arm: o.Arms, Scenario: o.Scenario, Topology: o.Topology, Predicted: o.PredictedKnee, NMax: nMax, Label: o.Label})
 	}); err != nil {
 		return fail(err)
 	}
@@ -618,6 +631,9 @@ func (o *Options) normalizeRound2() {
 	if o.Bot.GRPCLog == "" {
 		o.Bot.GRPCLog = d.GRPCLog
 	}
+	if o.Bot.GeneratorGC == "" {
+		o.Bot.GeneratorGC = d.GeneratorGC
+	}
 }
 
 // Round2Summary is one log line of the effective round-2 parameters, so the
@@ -636,8 +652,12 @@ func Round2Summary(o Options, feats Features) string {
 	if o.Bursts && feats.Has("burst") {
 		bursts = fmt.Sprintf("bursts on (add %d, in-flight %d)", o.BurstAdd, o.BurstInFlight)
 	}
-	return fmt.Sprintf("round 2: chunk %d, %s, ramp talker %s, %s, %s, gc %v/%v, grpc-log %s",
+	s := fmt.Sprintf("round 2: chunk %d, %s, ramp talker %s, %s, %s, gc %v/%v, grpc-log %s",
 		o.RampChunk, rate, o.Bot.RampTalker, ping, bursts, o.Bot.GCPauseWarnP99, o.Bot.GCPauseP99, o.Bot.GRPCLog)
+	if o.Bot.GeneratorGC != GCOff {
+		s += ", generator GC: default (Go defaults)"
+	}
+	return s
 }
 
 // recordRound2 fills the manifest's bot, generator, ramp, burst and decision
@@ -646,10 +666,11 @@ func (m *Manifest) recordRound2(o Options, feats Features) {
 	o.normalizeRound2()
 	m.BotVersion, m.BotFeatures, m.BotFlags = feats.Version, feats.Names(), BotRunArgsWith(feats, o.Bot)
 	m.GeneratorEnv = map[string][]string{
-		"run":       GeneratorEnvWith("run", o.Bot.GRPCLog),
-		"calibrate": GeneratorEnvWith("calibrate", o.Bot.GRPCLog),
-		"reflect":   GeneratorEnvWith("reflect", o.Bot.GRPCLog),
+		"run":       GeneratorEnvFor("run", o.Bot.GRPCLog, o.Bot.GeneratorGC),
+		"calibrate": GeneratorEnvFor("calibrate", o.Bot.GRPCLog, o.Bot.GeneratorGC),
+		"reflect":   GeneratorEnvFor("reflect", o.Bot.GRPCLog, o.Bot.GeneratorGC),
 	}
+	m.GeneratorGC = o.Bot.GeneratorGC
 	m.ServerEnv = ServerEnvWith(o.Bot.GRPCLog)
 	// The rate rule and the bursts are applied only when the bot has the feature;
 	// record what ran, not what the flags asked for.

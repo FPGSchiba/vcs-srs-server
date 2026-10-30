@@ -3,6 +3,7 @@ package leg
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -207,5 +208,72 @@ func TestBotParamsFlowIntoArgsAndEnv(t *testing.T) {
 	// The defaults are what the round-1 wrappers pass.
 	if g, w := BotRunArgs(v3), BotRunArgsWith(v3, DefaultBotParams()); strings.Join(g, " ") != strings.Join(w, " ") {
 		t.Errorf("BotRunArgs %q != defaults %q", g, w)
+	}
+}
+
+func TestGeneratorGCDefaultIsOff(t *testing.T) {
+	for _, kind := range []string{"run", "calibrate", "reflect"} {
+		if got, want := GeneratorEnvFor(kind, "info", "off"), GeneratorEnvWith(kind, "info"); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: off = %q, want %q", kind, got, want)
+		}
+		if got, want := GeneratorEnvFor(kind, "info", ""), GeneratorEnvWith(kind, "info"); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: empty = %q, want %q", kind, got, want)
+		}
+	}
+}
+
+func TestGeneratorGCDefaultMode(t *testing.T) {
+	for _, kind := range []string{"run", "calibrate"} {
+		env := GeneratorEnvFor(kind, "info", "default")
+		for _, e := range env {
+			if strings.HasPrefix(e, "GOGC=") || strings.HasPrefix(e, "GOMEMLIMIT=") {
+				t.Errorf("%s default env carries %s", kind, e)
+			}
+		}
+		if !envHas(env, "GRPC_GO_LOG_SEVERITY_LEVEL=info") {
+			t.Errorf("%s default env %q lost the grpc log env", kind, env)
+		}
+	}
+	if env := GeneratorEnvFor("reflect", "info", "default"); len(env) != 0 {
+		t.Errorf("reflect default env = %q, want empty", env)
+	}
+}
+
+func TestProcessEnvGeneratorGCDefaultStripsInherited(t *testing.T) {
+	base := []string{"PATH=/bin", "GOGC=50", "GOMEMLIMIT=2GiB"}
+	pin := []string{"GOMAXPROCS=4"}
+	env := processEnvFor(base, pin, "run", "info", "default")
+	for _, e := range env {
+		if strings.HasPrefix(e, "GOGC=") || strings.HasPrefix(e, "GOMEMLIMIT=") {
+			t.Errorf("default env still has %s: %q", e, env)
+		}
+	}
+	if !envHas(env, "PATH=/bin") || !envHas(env, "GOMAXPROCS=4") {
+		t.Errorf("default env lost PATH or GOMAXPROCS: %q", env)
+	}
+	if len(base) != 3 || base[1] != "GOGC=50" {
+		t.Errorf("base was modified: %q", base)
+	}
+	env = processEnvFor(base, pin, "run", "info", "off")
+	last := ""
+	for _, e := range env {
+		if strings.HasPrefix(e, "GOGC=") {
+			last = e
+		}
+	}
+	if last != "GOGC=off" {
+		t.Errorf("off: last GOGC = %q", last)
+	}
+}
+
+func TestParseGeneratorGC(t *testing.T) {
+	for _, ok := range []string{"off", "default"} {
+		if err := ParseGeneratorGC(ok); err != nil {
+			t.Errorf("%q: %v", ok, err)
+		}
+	}
+	err := ParseGeneratorGC("on")
+	if err == nil || !strings.Contains(err.Error(), "off") || !strings.Contains(err.Error(), "default") {
+		t.Errorf("err = %v, want one naming off and default", err)
 	}
 }

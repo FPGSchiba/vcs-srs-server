@@ -345,3 +345,16 @@ func TestFormatControlLostLine(t *testing.T) {
 		t.Errorf("v2 line = %s", got)
 	}
 }
+
+func TestResultsMarkdownFootLabel(t *testing.T) {
+	const L = "local-docker, relative only. Not a capacity figure."
+	in := resultsInput()
+	in.Label = L
+	var buf bytes.Buffer
+	if err := WriteResultsMarkdown(&buf, in); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(buf.String(), "_"+L+"_\n") || strings.Contains(buf.String(), "Shared GitHub runner") {
+		t.Errorf("foot = %q", buf.String()[len(buf.String())-120:])
+	}
+}

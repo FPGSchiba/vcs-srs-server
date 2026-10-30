@@ -166,6 +166,21 @@ func kindName(k sweep.ResultKind) string {
 // WriteStepsCSV writes one row per measured step. Every row carries the label,
 // the payload label, the join-timing qualification and the topology.
 func WriteStepsCSV(w io.Writer, o *Outcome, topology string) error {
+	return WriteStepsCSVLabeled(w, o, topology, "")
+}
+
+// LabelOr returns s, or Label when s is empty: the Actions-runner default.
+func LabelOr(s string) string {
+	if s == "" {
+		return Label
+	}
+	return s
+}
+
+// WriteStepsCSVLabeled is WriteStepsCSV with the label column set to label
+// (empty means Label).
+func WriteStepsCSVLabeled(w io.Writer, o *Outcome, topology, label string) error {
+	label = LabelOr(label)
 	cw := csv.NewWriter(w)
 	header := []string{
 		"seq", "kind", "n", "outcome", "reasons", "held", "settle_s",
@@ -208,7 +223,7 @@ func WriteStepsCSV(w io.Writer, o *Outcome, topology string) error {
 			u(r.Logs.ShardQueueFull), u(r.Logs.UpdateStreamBehind), u(r.Logs.NodeFeedBehind), u(r.Logs.NodeDeregistered),
 			cell(r.Data.GenCPU), u(r.Step.Health.SocketDrops), rx, strconv.FormatInt(r.Step.Health.WheelLagP99Us, 10),
 			strconv.FormatInt(r.Step.Health.SchedP99Us, 10), strconv.FormatInt(r.Step.Health.GCPauseP99Us, 10), strings.Join(r.Step.Violations, "; "),
-			topology, Label, PayloadLabel, JoinLabel, NotMeasured,
+			topology, label, PayloadLabel, JoinLabel, NotMeasured,
 		}
 		rec = append(rec, joinCells(r)...)
 		rec = append(rec, round2Cells(r)...)
@@ -312,6 +327,8 @@ func round2Cells(r Row) []string {
 type KneeMeta struct {
 	Arm, Scenario, Topology string
 	Predicted, NMax         int
+	// Label is the label column; empty means Label.
+	Label string
 }
 
 func rowOf(o *Outcome, kind string) *Row {
@@ -345,7 +362,7 @@ func WriteKneesCSV(w io.Writer, o *Outcome, m KneeMeta) error {
 	rec := []string{
 		m.Arm, m.Scenario, o.Result.String(), kindName(o.Result.Kind), strconv.Itoa(o.Result.N),
 		cn, co, on, oo,
-		strconv.Itoa(m.Predicted), strconv.Itoa(m.NMax), m.Topology, Label, PayloadLabel, JoinLabel, NotMeasured,
+		strconv.Itoa(m.Predicted), strconv.Itoa(m.NMax), m.Topology, LabelOr(m.Label), PayloadLabel, JoinLabel, NotMeasured,
 		strings.Join(o.Notes, "; "),
 	}
 	if err := cw.Write(rec); err != nil {
@@ -357,6 +374,13 @@ func WriteKneesCSV(w io.Writer, o *Outcome, m KneeMeta) error {
 
 // WriteCalibrationCSV writes the calibration steps and the receive-capacity row.
 func WriteCalibrationCSV(w io.Writer, c *Calibration, topology string) error {
+	return WriteCalibrationCSVLabeled(w, c, topology, "")
+}
+
+// WriteCalibrationCSVLabeled is WriteCalibrationCSV with the label column set to
+// label (empty means Label).
+func WriteCalibrationCSVLabeled(w io.Writer, c *Calibration, topology, label string) error {
+	label = LabelOr(label)
 	cw := csv.NewWriter(w)
 	header := []string{
 		"kind", "n", "egress_pps", "valid", "violations", "lower_bound",
@@ -369,7 +393,7 @@ func WriteCalibrationCSV(w io.Writer, c *Calibration, topology string) error {
 	for _, s := range c.Steps {
 		if err := cw.Write([]string{
 			"step", strconv.Itoa(s.N), cell(s.EgressPPS), strconv.FormatBool(s.Valid), strings.Join(s.Violations, "; "), "",
-			"", "", topology, Label, PayloadLabel, "",
+			"", "", topology, label, PayloadLabel, "",
 		}); err != nil {
 			return err
 		}
@@ -377,14 +401,14 @@ func WriteCalibrationCSV(w io.Writer, c *Calibration, topology string) error {
 	if c.StoppedAt > 0 {
 		if err := cw.Write([]string{
 			"stopped", strconv.Itoa(c.StoppedAt), "", "", c.StopReason, "",
-			"", "", topology, Label, PayloadLabel, "",
+			"", "", topology, label, PayloadLabel, "",
 		}); err != nil {
 			return err
 		}
 	}
 	if err := cw.Write([]string{
 		"receive_capacity", "", cell(c.ReceivePPS), "", "", strconv.FormatBool(c.LowerBound),
-		u(c.ReflectorSendErrors), strconv.Itoa(c.Senders), topology, Label, PayloadLabel, c.LowerBoundReason,
+		u(c.ReflectorSendErrors), strconv.Itoa(c.Senders), topology, label, PayloadLabel, c.LowerBoundReason,
 	}); err != nil {
 		return err
 	}

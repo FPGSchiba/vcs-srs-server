@@ -235,6 +235,8 @@ type ResultsInput struct {
 	Cal             *Calibration
 	Out             *Outcome
 	Predicted, NMax int
+	// Label is the footer label; empty means Label.
+	Label string
 }
 
 // mdCell makes a string safe inside one table cell.
@@ -361,7 +363,7 @@ func WriteResultsMarkdown(w io.Writer, in ResultsInput) error {
 		}
 		p("\n")
 	}
-	p("_%s_\n", Label)
+	p("_%s_\n", LabelOr(in.Label))
 	return nil
 }
 
