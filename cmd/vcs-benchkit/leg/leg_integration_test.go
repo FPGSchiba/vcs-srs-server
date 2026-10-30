@@ -159,6 +159,9 @@ func TestLegSmokeArms(t *testing.T) {
 				if w.Nodes.Polls < 1 || w.Nodes.Min != expectedNodes {
 					t.Errorf("node window = %+v, want >=1 poll and %d nodes", w.Nodes, expectedNodes)
 				}
+				if len(w.Nodes.Clients) == 0 {
+					t.Errorf("node clients empty: distributionStatus addresses did not match the topology's (%+v)", w.Nodes)
+				}
 				for _, r := range distRoles {
 					if !strings.Contains(text, "== "+string(r)+" ==") {
 						t.Errorf("no %s section in the D2 log text", r)

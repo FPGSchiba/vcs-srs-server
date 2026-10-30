@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/FPGSchiba/vcs-srs-server/cmd/vcs-benchkit/sweep"
 	"github.com/FPGSchiba/vcs-srs-server/internal/topology"
 )
 
@@ -299,6 +300,19 @@ func (p *nodePoller) start() func() NodeWindow {
 			out.Min = 0
 		}
 		return out
+	}
+}
+
+// noteNodeWindow turns a hold whose every distributionStatus poll failed into a
+// breach: control stopped answering, which must not read as an unmeasured S or
+// Seq hold. A worse outcome (invalid) is kept; the reason is added either way.
+func noteNodeWindow(row *Row, nw NodeWindow) {
+	if nw.Polls > 0 || nw.Errors == 0 {
+		return
+	}
+	row.Reasons = append(row.Reasons, fmt.Sprintf("distributionStatus unreachable (%d failed polls)", nw.Errors))
+	if row.Outcome == sweep.Pass {
+		row.Outcome = sweep.Breach
 	}
 }
 

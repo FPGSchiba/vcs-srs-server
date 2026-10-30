@@ -734,6 +734,7 @@ func (d *Driver) measure(ctx context.Context, kind string, n int, hold time.Dura
 		row.Data.NodesWant, row.Data.NodesMin = expectedNodes, win.Nodes.Min
 	}
 	row.Outcome, row.Reasons = sweep.Classify(row.Data, d.cfg.Bounds)
+	noteNodeWindow(&row, win.Nodes)
 	if win.Err != "" {
 		row.Outcome = sweep.Invalid
 		row.Reasons = append([]string{"invalid: sampler: " + win.Err}, row.Reasons...)

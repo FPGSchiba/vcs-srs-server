@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/FPGSchiba/vcs-srs-server/cmd/vcs-benchkit/sweep"
 	"github.com/FPGSchiba/vcs-srs-server/internal/topology"
 )
 
@@ -243,5 +244,82 @@ func TestNodeCells(t *testing.T) {
 	got := nodeCells(r)
 	if got[0] != "2" || got[1] != "global=0;nodeA=4;nodeB=5" {
 		t.Errorf("cells = %q", got)
+	}
+}
+
+func TestDistSystemCloseKeepsFourRoleLogsAndServerLogTextFallsBack(t *testing.T) {
+	t.Setenv("LEG_FAKE_LOADBOT", "1")
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, _ := PlanArm("D2", "0,1", "2,3")
+	plan.Gen.CPUs = "" // no taskset: this runs on any host
+	ft := &fakeTop{logs: map[topology.Role]string{
+		topology.Control: "c-line\n", topology.NodeA: "a-line\n", topology.NodeB: "b-line\n", topology.Global: "g-line\n",
+	}}
+	old := startTopology
+	startTopology = func(context.Context, topology.Spec) (serverTopology, error) { return ft, nil }
+	defer func() { startTopology = old }()
+	out := t.TempDir()
+	e := NewArmEnv(plan, envBase{serverBin: "srv", loadbotBin: exe, outDir: out, scratchDir: t.TempDir(), scenario: "one-big-net"})
+	sys, err := e.Start(context.Background())
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	live, err := e.(interface{ ServerLogText() (string, error) }).ServerLogText()
+	if err != nil || !strings.Contains(live, "== nodeA ==") || !strings.Contains(live, "a-line") {
+		t.Fatalf("live ServerLogText = %q, %v", live, err)
+	}
+	if err := sys.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if ft.stops != 1 {
+		t.Errorf("topology stopped %d times, want 1", ft.stops)
+	}
+	for _, r := range distRoles {
+		p := filepath.Join(out, "server-1-"+string(r)+".log.gz")
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%s log not kept: %v", r, err)
+		}
+	}
+	// The topology is gone: the text must now come from the kept copies.
+	ft.mu.Lock()
+	ft.logs = nil
+	ft.mu.Unlock()
+	after, err := e.(interface{ ServerLogText() (string, error) }).ServerLogText()
+	if err != nil {
+		t.Fatalf("ServerLogText after Close: %v", err)
+	}
+	for _, want := range []string{"== control ==", "c-line", "== nodeA ==", "a-line", "== nodeB ==", "b-line", "== global ==", "g-line"} {
+		if !strings.Contains(after, want) {
+			t.Errorf("fallback text lacks %q: %q", want, after)
+		}
+	}
+}
+
+func TestNodesUnreachableIsABreachNotAnUnmeasuredHold(t *testing.T) {
+	row := Row{Outcome: sweep.Pass}
+	noteNodeWindow(&row, NodeWindow{Errors: 3})
+	if row.Outcome != sweep.Breach || len(row.Reasons) != 1 || !strings.Contains(row.Reasons[0], "distributionStatus unreachable") {
+		t.Errorf("no answer at all: outcome %v reasons %v", row.Outcome, row.Reasons)
+	}
+	// Some answers: the count is measured, the failures are not a breach.
+	row = Row{Outcome: sweep.Pass}
+	noteNodeWindow(&row, NodeWindow{Polls: 2, Errors: 1, Min: 3})
+	if row.Outcome != sweep.Pass || len(row.Reasons) != 0 {
+		t.Errorf("answered polls: outcome %v reasons %v", row.Outcome, row.Reasons)
+	}
+	// S and Seq poll nothing: not a breach.
+	row = Row{Outcome: sweep.Pass}
+	noteNodeWindow(&row, NodeWindow{})
+	if row.Outcome != sweep.Pass {
+		t.Errorf("no poll: outcome %v", row.Outcome)
+	}
+	// A worse outcome is kept, the reason still added.
+	row = Row{Outcome: sweep.Invalid, Reasons: []string{"invalid: x"}}
+	noteNodeWindow(&row, NodeWindow{Errors: 1})
+	if row.Outcome != sweep.Invalid || len(row.Reasons) != 2 {
+		t.Errorf("invalid kept: outcome %v reasons %v", row.Outcome, row.Reasons)
 	}
 }
