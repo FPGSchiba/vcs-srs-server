@@ -98,9 +98,10 @@ func windowFromServers(snaps []snapshot, servers []serverProc, serverCPUs []int,
 		return float64(b-a) / (clockTicksPerSec * w.Seconds * float64(ncpu))
 	}
 	procs := func(sn snapshot) []procSnap {
-		if len(sn.Procs) == len(servers) {
+		if sn.Procs != nil {
 			return sn.Procs
 		}
+		// Legacy snapshots carry no Procs; only they use the old fields.
 		return []procSnap{{Tk: sn.ServerTk, Drops: sn.Drops, HasDrops: true}}
 	}
 	fp, lp := procs(first), procs(last)

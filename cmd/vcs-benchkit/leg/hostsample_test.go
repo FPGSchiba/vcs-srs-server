@@ -164,8 +164,8 @@ func TestSingleProcessIsUnchanged(t *testing.T) {
 	}
 }
 
-// A counter that goes backwards or a process with fewer ticks is NaN, not zero.
-func TestBusiestIgnoresNoProcessWhenOneIsUnreadable(t *testing.T) {
+// A counter that goes backwards makes the busiest figure NaN, not zero.
+func TestBackwardsCounterMakesBusiestNaN(t *testing.T) {
 	m := &multiProc{
 		ticks: map[int]uint64{10: 500, 11: 500, 12: 500, 13: 500},
 		drops: map[string]uint64{"10.0.0.1:5002": 0, "10.0.0.2:5002": 0, "10.0.0.3:5002": 0},
@@ -175,5 +175,27 @@ func TestBusiestIgnoresNoProcessWhenOneIsUnreadable(t *testing.T) {
 	w := windowFromServers(snaps, p.servers, p.serverCPUs, p.genNCPU, nil)
 	if !math.IsNaN(w.ServerCPU) {
 		t.Errorf("ServerCPU = %v, want NaN when any process's counter went backwards", w.ServerCPU)
+	}
+}
+
+// A snapshot whose Procs does not match the server list is an error, never a
+// silent zero from the legacy single-process fields.
+func TestMismatchedProcsIsAnErrorNotZero(t *testing.T) {
+	one := []serverProc{{Role: "a", NCPU: 1}}
+	at := time.Unix(1000, 0)
+	snaps := []snapshot{
+		{At: at, Procs: []procSnap{{Tk: 0}, {Tk: 0}}},
+		{At: at.Add(time.Second), Procs: []procSnap{{Tk: 50}, {Tk: 50}}},
+	}
+	w := windowFromServers(snaps, one, nil, 1, nil)
+	if w.Err == "" || !math.IsNaN(w.ServerCPU) {
+		t.Errorf("Err = %q ServerCPU = %v, want an error and NaN", w.Err, w.ServerCPU)
+	}
+	ok := []snapshot{
+		{At: at, Procs: []procSnap{{Tk: 0}}},
+		{At: at.Add(time.Second), Procs: []procSnap{{Tk: 50}}},
+	}
+	if w = windowFromServers(ok, one, nil, 1, nil); w.Err != "" {
+		t.Errorf("matching single process errored: %q", w.Err)
 	}
 }
