@@ -135,6 +135,20 @@ func TestWriteResultsMarkdown(t *testing.T) {
 	}
 }
 
+func TestWriteResultsMarkdownStoppedEarly(t *testing.T) {
+	var buf bytes.Buffer
+	in := ResultsInput{Seed: 1, Arm: "S", Scenario: "one-big-net",
+		Result:       sweep.Result{Kind: sweep.Bracketed, N: 3013, Hi: 6027}.String(),
+		StoppedEarly: "set_n 6026: context deadline exceeded"}
+	if err := WriteResultsMarkdown(&buf, in); err != nil {
+		t.Fatal(err)
+	}
+	want := "**Result:** 3013 ≤ knee < 6027 (bracketed); stopped early: set_n 6026: context deadline exceeded"
+	if !strings.Contains(buf.String(), want) {
+		t.Errorf("results.md lacks %q:\n%s", want, buf.String())
+	}
+}
+
 func TestWriteResultsMarkdownDidNotFinish(t *testing.T) {
 	var buf bytes.Buffer
 	in := ResultsInput{Seed: 1, Arm: "S", Scenario: "one-big-net", Error: "calibration: no step completed: x | y"}

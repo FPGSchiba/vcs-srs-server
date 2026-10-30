@@ -279,6 +279,37 @@ func TestResultsCSVUseOptionLabel(t *testing.T) {
 	}
 }
 
+func kneesRow(t *testing.T, res sweep.Result) map[string]string {
+	t.Helper()
+	var k bytes.Buffer
+	if err := WriteKneesCSV(&k, &Outcome{Result: res}, KneeMeta{Arm: "S"}); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := csv.NewReader(&k).ReadAll()
+	if err != nil || len(recs) != 2 {
+		t.Fatalf("knees.csv: %v %v", err, recs)
+	}
+	m := map[string]string{}
+	for i, h := range recs[0] {
+		m[h] = recs[1][i]
+	}
+	if recs[0][len(recs[0])-1] != "upper_n" {
+		t.Errorf("last column = %q, want upper_n", recs[0][len(recs[0])-1])
+	}
+	return m
+}
+
+func TestKneesCSVUpperN(t *testing.T) {
+	m := kneesRow(t, sweep.Result{Kind: sweep.Bracketed, N: 3013, Hi: 6027})
+	if m["upper_n"] != "6027" || m["result_kind"] != "bracketed" || m["n"] != "3013" {
+		t.Errorf("bracketed row = %v", m)
+	}
+	m = kneesRow(t, sweep.Result{Kind: sweep.KneeFound, N: 3013})
+	if m["upper_n"] != "" || m["result_kind"] != "knee" {
+		t.Errorf("knee row = %v", m)
+	}
+}
+
 func TestLegLabelDefaultIsLegLabel(t *testing.T) {
 	cal := &Calibration{Steps: []CalStep{{N: 64, Valid: true}}}
 	out := &Outcome{Rows: []Row{{Seq: 1, Kind: "sweep", N: 10}}}

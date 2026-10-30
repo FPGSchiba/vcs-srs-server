@@ -32,6 +32,10 @@ const (
 	// size. N is the last passing size (0 if none) and At the size that lost
 	// control: the knee is at least N, censored, not attributed to the server.
 	ControlLostBound
+	// Bracketed: the sweep was stopped (the budget guard) after a breach
+	// bracketed the knee. N is the largest pass and Hi the smallest breach:
+	// lo <= knee < hi. Censored: three bisections would have narrowed it.
+	Bracketed
 )
 
 // Result is a sweep's final answer.
@@ -65,6 +69,8 @@ func (r Result) String() string {
 		return fmt.Sprintf("< %d (below range)", r.N)
 	case ControlLostBound:
 		return fmt.Sprintf("≥ %d (control lost at %d)", r.N, r.At)
+	case Bracketed:
+		return fmt.Sprintf("%d ≤ knee < %d (bracketed)", r.N, r.Hi)
 	}
 	return fmt.Sprintf("Result(%d, %d)", int(r.Kind), r.N)
 }
@@ -259,9 +265,8 @@ func (s *Sweep) Bracket() (lo, hi int) { return s.lo, s.hi }
 
 // Stop ends the sweep early (the leg's budget guard) and returns its result.
 // A sweep still doubling has seen no breach, so it is time-bound at its last
-// pass. Once a breach brackets the knee, the last pass is a knee, coarser
-// than three bisections would give but not censored; with no pass at all it
-// is below range. A pending step is discarded. A finished sweep keeps its
+// pass. Once a breach brackets the knee, the result is that bracket
+// (Bracketed: lo <= knee < hi, censored); with no pass at all it is below range. A pending step is discarded. A finished sweep keeps its
 // result.
 func (s *Sweep) Stop() Result {
 	if s.phase == phaseDone {
@@ -274,7 +279,7 @@ func (s *Sweep) Stop() Result {
 	case s.lo == 0:
 		s.finish(Result{Kind: BelowRange, N: s.smallestB})
 	default:
-		s.finish(Result{Kind: KneeFound, N: s.lo})
+		s.finish(Result{Kind: Bracketed, N: s.lo, Hi: s.hi})
 	}
 	return s.result
 }

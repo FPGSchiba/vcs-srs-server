@@ -213,8 +213,8 @@ func TestSweepStop(t *testing.T) {
 	}{
 		{"doubling, no breach yet", []StepOutcome{P, P}, Result{Kind: TimeBound, N: 2000}, [2]int{2000, 0}},
 		{"nothing run yet", nil, Result{Kind: TimeBound, N: 0}, [2]int{0, 0}},
-		{"breach seen, bisection cut short", []StepOutcome{P, P, B}, Result{Kind: KneeFound, N: 2000}, [2]int{2000, 4000}},
-		{"one bisection done", []StepOutcome{P, P, B, P}, Result{Kind: KneeFound, N: 3000}, [2]int{3000, 4000}},
+		{"breach seen, bisection cut short", []StepOutcome{P, P, B}, Result{Kind: Bracketed, N: 2000, Hi: 4000}, [2]int{2000, 4000}},
+		{"one bisection done", []StepOutcome{P, P, B, P}, Result{Kind: Bracketed, N: 3000, Hi: 4000}, [2]int{3000, 4000}},
 		{"first step breached", []StepOutcome{B}, Result{Kind: BelowRange, N: 1000}, [2]int{0, 1000}},
 	}
 	for _, tc := range cases {
@@ -358,5 +358,12 @@ func TestTimeBoundLimitString(t *testing.T) {
 	}
 	if got := (Result{Kind: TimeBound, N: 3000}).String(); got != "≥ 3000 (time-bound)" {
 		t.Errorf("got %q", got)
+	}
+}
+
+func TestBracketedString(t *testing.T) {
+	got := Result{Kind: Bracketed, N: 3013, Hi: 6027}.String()
+	if want := "3013 ≤ knee < 6027 (bracketed)"; got != want {
+		t.Errorf("String() = %q, want %q", got, want)
 	}
 }

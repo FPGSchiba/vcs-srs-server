@@ -169,6 +169,8 @@ func kindNameFor(r sweep.Result) string {
 		return "below-range"
 	case sweep.ControlLostBound:
 		return "control-lost"
+	case sweep.Bracketed:
+		return "bracketed"
 	}
 	return fmt.Sprintf("kind-%d", int(k))
 }
@@ -358,6 +360,8 @@ func WriteKneesCSV(w io.Writer, o *Outcome, m KneeMeta) error {
 		"arm", "scenario", "result", "result_kind", "n",
 		"confirm_n", "confirm_outcome", "overload_n", "overload_outcome",
 		"predicted_knee", "n_max", "topology", "label", "payload", "join_label", "not_measured", "notes",
+		// Appended by W6 kit fix 3: only ever append.
+		"upper_n",
 	}
 	if err := cw.Write(header); err != nil {
 		return err
@@ -369,11 +373,17 @@ func WriteKneesCSV(w io.Writer, o *Outcome, m KneeMeta) error {
 	if r := rowOf(o, "overload"); r != nil {
 		on, oo = strconv.Itoa(r.N), r.Outcome.String()
 	}
+	// upper_n is the smallest breached size of a bracketed result, else empty.
+	upper := ""
+	if o.Result.Kind == sweep.Bracketed {
+		upper = strconv.Itoa(o.Result.Hi)
+	}
 	rec := []string{
 		m.Arm, m.Scenario, o.Result.String(), kindNameFor(o.Result), strconv.Itoa(o.Result.N),
 		cn, co, on, oo,
 		strconv.Itoa(m.Predicted), strconv.Itoa(m.NMax), m.Topology, LabelOr(m.Label), PayloadLabel, JoinLabel, NotMeasured,
 		strings.Join(o.Notes, "; "),
+		upper,
 	}
 	if err := cw.Write(rec); err != nil {
 		return err

@@ -97,6 +97,8 @@ type legInfo struct {
 	// the silent and the live join burst ("0/30"). Both are "-" when steps.csv
 	// predates round 2 or never ran a burst: a dash, never a made-up zero.
 	ctlLost, bursts string
+	// stoppedEarly is the manifest's stopped_early reason ("" when absent).
+	stoppedEarly string
 }
 
 // readColumns reads a CSV into one map per data row, keyed by header name.
@@ -140,9 +142,11 @@ func readLegInfo(root, dir string, kneeFile bool) (legInfo, error) {
 			Arm      string `json:"arm"`
 			Scenario string `json:"scenario"`
 			Error    string `json:"error"`
+			Stopped  string `json:"stopped_early"`
 		}
 		if json.Unmarshal(b, &m) == nil {
 			li.err = m.Error
+			li.stoppedEarly = m.Stopped
 			if li.arm == "" {
 				li.arm, li.scen = m.Arm, m.Scenario
 			}
@@ -246,6 +250,9 @@ func renderAggregateMarkdown(legs []legInfo, rows []aggRow, lbl string) string {
 			result, n, kind = l.knee.result, strconv.Itoa(l.knee.n), dash(l.knee.kind)
 		}
 		errText := l.err
+		if errText == "" && l.stoppedEarly != "" {
+			errText = "stopped early: " + l.stoppedEarly
+		}
 		if l.knee == nil && errText == "" {
 			errText = "no knees.csv"
 		}
@@ -270,7 +277,7 @@ func renderAggregateMarkdown(legs []legInfo, rows []aggRow, lbl string) string {
 // A leg without knees.csv did not finish: it is listed in aggregate.md with
 // its manifest error, and when no leg finished the run still fails, after the
 // table is written.
-// A censored leg (generator-bound, time-bound, below range, control-lost) contributes its
+// A censored leg (generator-bound, time-bound, bracketed, below range, control-lost) contributes its
 // bound as n and sets censored=true, so the statistics are lower bounds then.
 // A leg whose knee failed its confirm step keeps result_kind=knee; it sets
 // unconfirmed=true instead, so the flag is not buried in the results text.

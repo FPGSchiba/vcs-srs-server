@@ -232,6 +232,9 @@ type ResultsInput struct {
 	Arm, Scenario   string
 	Result          string
 	Error           string
+	// StoppedEarly is the reason a leg ended before its sweep finished (a run
+	// error or the budget); the result then comes from the sweep state.
+	StoppedEarly string
 	Cal             *Calibration
 	Out             *Outcome
 	Predicted, NMax int
@@ -262,7 +265,11 @@ func WriteResultsMarkdown(w io.Writer, in ResultsInput) error {
 	if in.Error != "" {
 		p("**Result:** did not finish: %s  \n", in.Error)
 	} else {
-		p("**Result:** %s  \n", in.Result)
+		if in.StoppedEarly != "" {
+			p("**Result:** %s; stopped early: %s  \n", in.Result, in.StoppedEarly)
+		} else {
+			p("**Result:** %s  \n", in.Result)
+		}
 	}
 	if c := in.Cal; c != nil {
 		line := fmt.Sprintf("receive capacity %.0f pps", c.ReceivePPS)

@@ -687,11 +687,11 @@ func TestDriverProbeHoldsFeedTheSettleColumns(t *testing.T) {
 	}
 }
 
-// TestDriverBudgetStopAfterABreachIsAKnee: whatever budget makes the guard
-// stop the sweep after a breach was already measured, the result must be a
-// knee at the last pass, never "time-bound" (which reads as censored and would
-// turn the D13 go/no-go into a no-go for a knee the leg actually bracketed).
-func TestDriverBudgetStopAfterABreachIsAKnee(t *testing.T) {
+// TestDriverBudgetStopAfterABreachIsBracketed: whatever budget makes the guard
+// stop the sweep after a breach was already measured, the result must be the
+// bracket (lo <= knee < hi), never "time-bound" (the knee was bracketed) and
+// not a bare knee (three bisections never ran).
+func TestDriverBudgetStopAfterABreachIsBracketed(t *testing.T) {
 	found := false
 	for b := 2 * time.Minute; b <= 40*time.Minute; b += 5 * time.Second {
 		w := &fakeWorld{kneeN: 150} // 100 passes, 200 breaches, then bisect
@@ -712,8 +712,9 @@ func TestDriverBudgetStopAfterABreachIsAKnee(t *testing.T) {
 			continue
 		}
 		found = true
-		if out.Result.Kind != sweep.KneeFound || out.Result.N < 100 || out.Result.N >= 200 {
-			t.Fatalf("budget %s: result = %v, want a knee in [100, 200)", b, out.Result)
+		if out.Result.Kind != sweep.Bracketed || out.Result.N < 100 || out.Result.N >= 200 ||
+			out.Result.Hi <= out.Result.N || out.Result.Hi > 200 {
+			t.Fatalf("budget %s: result = %v, want Bracketed with N in [100, 200) and Hi in (N, 200]", b, out.Result)
 		}
 		if !strings.Contains(strings.Join(out.Notes, ";"), "bisection") {
 			t.Errorf("budget %s: notes do not say the bisection was cut short: %v", b, out.Notes)
