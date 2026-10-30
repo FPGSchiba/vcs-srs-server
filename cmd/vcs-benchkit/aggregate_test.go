@@ -475,7 +475,10 @@ func TestAggregateRatiosAcrossLegs(t *testing.T) {
 	in, out := t.TempDir(), t.TempDir()
 	topo := "2 cores"
 	scen := "one-big-net"
-	type leg struct{ s, seq, d2 string; d2kind string }
+	type leg struct {
+		s, seq, d2 string
+		d2kind     string
+	}
 	for i, l := range []leg{{"1000", "1500", "2000", "knee"}, {"1000", "1200", "1800", "knee"}, {"1000", "1800", "4000", "generator-bound"}} {
 		dir := strconv.Itoa(i+1) + "-" + scen
 		writeArmLeg(t, in, dir, "S", scen, "knee", l.s, topo)

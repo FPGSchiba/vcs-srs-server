@@ -36,14 +36,14 @@ var startTopology = func(ctx context.Context, sp topology.Spec) (serverTopology,
 // envBase is what every arm's environment shares.
 type envBase struct {
 	serverBin, loadbotBin, outDir, scratchDir, scenario string
-	seed                                                 int64
-	serverCPUs                                           []int
-	features                                             Features
-	bot                                                  *BotParams
-	onProgress                                           func(Progress)
-	onControlLost                                        func(ControlLostEvent)
-	logf                                                 func(format string, a ...any)
-	heartbeatEvery                                       time.Duration
+	seed                                                int64
+	serverCPUs                                          []int
+	features                                            Features
+	bot                                                 *BotParams
+	onProgress                                          func(Progress)
+	onControlLost                                       func(ControlLostEvent)
+	logf                                                func(format string, a ...any)
+	heartbeatEvery                                      time.Duration
 }
 
 // NewArmEnv builds the environment of an arm: S and Seq run one standalone
