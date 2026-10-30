@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"embed"
 	"fmt"
+	"html"
 	"html/template"
 	"math"
 	"os"
@@ -478,6 +479,9 @@ func chartSVG(r schema.Run, sc, arm string) string {
 	}
 	sort.Ints(ns)
 	const w, h, ml, mr, mt, mb = 560.0, 280.0, 56.0, 56.0, 16.0, 40.0
+	// Defence in depth: chartSVG is returned as template.HTML, which bypasses
+	// html/template escaping, so escape every interpolated name here.
+	sc, arm = html.EscapeString(sc), html.EscapeString(arm)
 	var b strings.Builder
 	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %.0f %.0f" width="%.0f" role="img" aria-labelledby="t-%s-%s">`, w, h, w, sc, arm)
 	fmt.Fprintf(&b, `<title id="t-%s-%s">%s %s: loss percent and one-way p99 milliseconds against N</title>`, sc, arm, sc, arm)
