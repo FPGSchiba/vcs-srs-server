@@ -44,17 +44,13 @@ func TestDriverDeadlineInOverloadKeepsTheBracket(t *testing.T) {
 	}
 	notes := strings.Join(out.Notes, "\n")
 	t.Logf("stopped early %q; notes %v", out.StoppedEarly, out.Notes)
-	switch {
-	case strings.Contains(out.StoppedEarly, "context deadline exceeded"):
-		if !strings.Contains(notes, "stopped early") {
-			t.Errorf("no stopped-early note: %v", out.Notes)
-		}
-	case out.StoppedEarly == "":
-		if !strings.Contains(notes, "budget guard: overload not measured") {
-			t.Errorf("no deadline and no guard note: %v", out.Notes)
-		}
-	default:
-		t.Fatalf("StoppedEarly = %q", out.StoppedEarly)
+	// Deterministic with the fake world: at this budget the deadline path is
+	// taken, not the budget guard.
+	if !strings.Contains(out.StoppedEarly, "context deadline exceeded") {
+		t.Fatalf("StoppedEarly = %q, want the deadline path", out.StoppedEarly)
+	}
+	if !strings.Contains(notes, "stopped early") {
+		t.Errorf("no stopped-early note: %v", out.Notes)
 	}
 	cs := rowsOfKind(out, "confirm")
 	if len(cs) == 0 || cs[0].Outcome != sweep.Pass {
@@ -150,7 +146,7 @@ func TestDriverOverloadClampedAtTop(t *testing.T) {
 	if len(rowsOfKind(out, "overload")) != 0 {
 		t.Error("an overload ran although Top does not exceed the knee")
 	}
-	if !strings.Contains(strings.Join(out.Notes, "\n"), "overload not measured: capped at 700") {
+	if !strings.Contains(strings.Join(out.Notes, "\n"), "overload not measured: capped at 700 (N_max by ") {
 		t.Errorf("notes = %v", out.Notes)
 	}
 }

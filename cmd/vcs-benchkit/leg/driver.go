@@ -1029,7 +1029,7 @@ func (d *Driver) run(ctx context.Context) (*Outcome, error) {
 	}
 	ov := d.overloadN(k)
 	if ov <= k {
-		d.note("overload not measured: capped at %d by memory/ports", d.top())
+		d.note("overload not measured: capped at %d (N_max by %s)", d.top(), d.cfg.NMaxBy)
 		return &d.out, nil
 	}
 	if !d.tailFits(ov, d.cfg.Overload) {
