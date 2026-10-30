@@ -81,6 +81,9 @@ type fakeWorld struct {
 	// warmupDiesV2 makes the first warm-up hold return the v2 hold-death text;
 	// warmupDiesV3 records a v3 control_lost event during it instead.
 	warmupDiesV2, warmupDiesV3 bool
+	// setNErrAt makes SetN fail with a wrapped context.DeadlineExceeded for any
+	// target >= it, on systems started at or after setNErrFromStart (0 = all).
+	setNErrAt, setNErrFromStart int
 }
 
 // fakeDeath kills a bot when the nth (1-based) occurrence of phase (ramp, settle
@@ -105,6 +108,7 @@ type fakeHold struct {
 
 type fakeSystem struct {
 	w          *fakeWorld
+	id         int // 1-based start ordinal
 	n          int
 	failedRamp bool // the last SetN had join failures
 	lost       []ControlLostEvent
@@ -174,7 +178,7 @@ func (w *fakeWorld) Start(ctx context.Context) (System, error) {
 		return nil, w.startErr
 	}
 	w.starts++
-	return &fakeSystem{w: w}, nil
+	return &fakeSystem{w: w, id: w.starts}, nil
 }
 
 // measuredAt reports whether a measured (non-probe, non-preflight) hold ran at
@@ -189,6 +193,9 @@ func (w *fakeWorld) measuredAt(n int) bool {
 }
 
 func (s *fakeSystem) SetN(ctx context.Context, n int) (Joins, error) {
+	if s.w.setNErrAt > 0 && n >= s.w.setNErrAt && s.id >= s.w.setNErrFromStart {
+		return Joins{}, fmt.Errorf("loadbot: %w", context.DeadlineExceeded)
+	}
 	s.failedRamp = false
 	s.w.mu.Lock()
 	s.w.setNs = append(s.w.setNs, n)
