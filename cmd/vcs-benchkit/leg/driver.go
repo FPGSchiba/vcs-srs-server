@@ -533,37 +533,18 @@ func (d *Driver) ensure(ctx context.Context, n int) (ramp, error) {
 // rateModel reports whether the time guard prices ramps with the bot's rate rule.
 func (d *Driver) rateModel() bool { return d.cfg.RateMax > 0 || d.cfg.RateScale > 0 }
 
-// rampSeconds is the time to grow the bot count from `from` to `to` joins.
-// Under the I-9 rule the rate at `alive` bots is min(RateMax, RateScale/alive)
-// (a zero term is left out), so the closed form integrates 1/rate over alive:
-// RateMax per second up to the crossover alive = RateScale/RateMax, and
-// alive/RateScale per join after it. Without the rule it is the constant rate.
-func (d *Driver) rampSeconds(from, to int) float64 {
-	if to <= from {
-		return 0
+// model is the join model the guard prices ramps with: the bot's rate rule
+// when it is on, else the constant (learned) rate.
+func (d *Driver) model() sweep.JoinModel {
+	if d.rateModel() {
+		return sweep.JoinModel{Max: d.cfg.RateMax, Scale: d.cfg.RateScale}
 	}
-	if !d.rateModel() {
-		return float64(to-from) / d.rate
-	}
-	a, b := float64(max(from, 1)), float64(to)
-	mx, sc := d.cfg.RateMax, d.cfg.RateScale
-	switch {
-	case sc <= 0:
-		return (b - a) / mx
-	case mx <= 0:
-		return (b*b - a*a) / (2 * sc)
-	}
-	c := sc / mx
-	var secs float64
-	if a < c {
-		secs += (math.Min(b, c) - a) / mx
-	}
-	if b > c {
-		lo := math.Max(a, c)
-		secs += (b*b - lo*lo) / (2 * sc)
-	}
-	return secs
+	return sweep.JoinModel{Const: d.rate}
 }
+
+// rampSeconds is the time to grow the bot count from `from` to `to` joins
+// under the driver's join model (see sweep.JoinModel.Seconds).
+func (d *Driver) rampSeconds(from, to int) float64 { return d.model().Seconds(from, to) }
 
 // settle probes with short holds until the step is quiescent (design 6.4.3).
 // The bot has no live counters, so each probe hold's report supplies them:

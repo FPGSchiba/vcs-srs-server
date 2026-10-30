@@ -57,44 +57,51 @@ func Preflight(portRange [2]int, ulimitN, upperBound int) error {
 	return nil
 }
 
-// EstimateLeg is the design 6.4 runtime bound for one arm whose sweep reaches
-// at most knee bots:
+// EstimateLeg is the runtime bound for one arm whose sweep reaches at most
+// knee bots:
 //
-//	T = 2*knee/joinRate + steps*(settle+40s) + 180s + 30s
+//	T = 2*R(0,k) + R(k,2k) + steps*(settle+40s) + 180s + 30s
 //
-// The first term is the ramps (a sweep that doubles up to the knee and
-// bisects back joins about twice the knee in total). A non-positive joinRate
-// returns the largest representable duration.
-func EstimateLeg(knee int, joinRate float64, steps int) time.Duration {
-	if joinRate <= 0 {
-		return time.Duration(1<<63 - 1)
+// R is the ramp time under the join model m (the rule the bot actually runs).
+// A sweep that doubles up to the knee and bisects back joins about twice the
+// knee in total (the first two terms), and the overload step then grows the
+// bot count from k to 2k (the third). An unusable model returns the largest
+// representable duration.
+func EstimateLeg(knee int, m JoinModel, steps int) time.Duration {
+	if !m.Valid() {
+		return maxDuration
 	}
-	ramps := time.Duration(2 * float64(knee) / joinRate * float64(time.Second))
-	return ramps + time.Duration(steps)*(SettleTypical+HoldDuration) + confirmAndOverload + startAndWarmup
+	k := max(knee, 0)
+	ramps := 2*m.Seconds(0, k) + m.Seconds(k, 2*k)
+	fixed := time.Duration(steps)*(SettleTypical+HoldDuration) + confirmAndOverload + startAndWarmup
+	if ramps >= (maxDuration-fixed).Seconds() {
+		return maxDuration
+	}
+	return time.Duration(ramps*float64(time.Second)) + fixed
 }
+
+const maxDuration = time.Duration(1<<63 - 1)
 
 // NMax is the largest sweep size whose EstimateLeg still fits legBudget, so a
 // leg finishes inside its job timeout. A sweep that reaches it without a
-// breach is reported as "ge N_max (time-bound)" by the caller.
-//
-// predictedKnee must be positive (a prediction of zero means the B-0 model
-// produced nothing and there is nothing to cap); it does not otherwise change
-// the result, because the time cap depends only on the join rate and the
-// fixed per-step costs. It returns 0 when the budget cannot even cover the
-// fixed costs, or when the inputs are unusable.
-func NMax(predictedKnee int, joinRate float64, legBudget time.Duration, steps int) int {
-	if predictedKnee <= 0 || joinRate <= 0 || steps < 0 {
+// breach is reported as time-bound by the caller. It returns 0 when the budget
+// cannot even cover the fixed costs, or when the inputs are unusable.
+func NMax(m JoinModel, legBudget time.Duration, steps int) int {
+	if !m.Valid() || steps < 0 {
 		return 0
 	}
-	fixed := time.Duration(steps)*(SettleTypical+HoldDuration) + confirmAndOverload + startAndWarmup
-	avail := legBudget - fixed
-	if avail <= 0 {
+	if EstimateLeg(0, m, steps) > legBudget {
 		return 0
 	}
-	n := int(avail.Seconds() * joinRate / 2)
-	// Guard float rounding so the returned N always fits the budget.
-	for n > 0 && EstimateLeg(n, joinRate, steps) > legBudget {
-		n--
+	// EstimateLeg is non-decreasing in n: find the last n that fits.
+	lo, hi := 0, 1<<22
+	for lo < hi {
+		mid := lo + (hi-lo+1)/2
+		if EstimateLeg(mid, m, steps) <= legBudget {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
 	}
-	return n
+	return lo
 }

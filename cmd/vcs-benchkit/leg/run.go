@@ -187,7 +187,7 @@ func (o *Options) Validate() error {
 // overload step at 2 x N_max passes the port and descriptor pre-flight, and by
 // an explicit cap when one is given (> 0). 0 means no step fits.
 func SweepCap(predicted int, joinRate float64, budget time.Duration, portRange [2]int, ulimitN, explicit int) int {
-	n := sweep.NMax(predicted, joinRate, budget, sweepSteps)
+	n := sweep.NMax(sweep.JoinModel{Const: joinRate}, budget, sweepSteps)
 	// The largest upper bound U that passes sweep.Preflight.
 	u := min((portRange[1]-portRange[0]+1)/2, (ulimitN-256)/4)
 	if u < 0 {
