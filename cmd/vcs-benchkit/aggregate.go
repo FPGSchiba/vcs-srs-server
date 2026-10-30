@@ -274,7 +274,7 @@ func renderAggregateMarkdown(legs []legInfo, rows []aggRow, ratios []ratioRow, l
 			fmt.Fprintf(&b, "| %s | %s | %d | %s | %s | %s | %d |\n",
 				mdCell(r.scenario), mdCell(r.ratio), r.legs, dash(r.median), dash(r.min), dash(r.max), r.censored)
 		}
-		b.WriteString("\n_A ratio is knee over knee within one leg; a censored bound is never a ratio, so its leg is not counted in legs._\n")
+		b.WriteString("\n_A ratio is knee over knee within one leg; a censored bound is never a ratio, so its leg is not counted in legs. The censored legs column also includes legs where a side errored._\n")
 	}
 	if len(rows) > 0 {
 		b.WriteString("\n| arm | scenario | repeats | median N | min N | max N | censored | unconfirmed |\n")
