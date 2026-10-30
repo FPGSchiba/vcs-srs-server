@@ -91,9 +91,17 @@ func TestDistEnvStartPinsTheTopologyAndStopsItWhenTheBotFails(t *testing.T) {
 	old := startTopology
 	startTopology = func(_ context.Context, sp topology.Spec) (serverTopology, error) { got = sp; return ft, nil }
 	defer func() { startTopology = old }()
-	e := NewArmEnv(plan, envBase{serverBin: "srv", loadbotBin: filepath.Join(t.TempDir(), "no-such-bot"), outDir: t.TempDir(), scratchDir: t.TempDir(), scenario: "one-big-net"})
+	// The bot must fail to start on every OS. A missing binary is not enough:
+	// on Linux taskset starts and only its exec fails, later. An output dir
+	// under a regular file makes the bot log uncreatable before any exec (on
+	// Windows the linux-only pin fails even earlier).
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e := NewArmEnv(plan, envBase{serverBin: "srv", loadbotBin: filepath.Join(t.TempDir(), "no-such-bot"), outDir: filepath.Join(blocker, "out"), scratchDir: t.TempDir(), scenario: "one-big-net"})
 	if _, err := e.Start(context.Background()); err == nil {
-		t.Fatal("Start succeeded with no load bot")
+		t.Fatal("Start succeeded although the load bot could not start")
 	}
 	if !reflect.DeepEqual(got.Pin, plan.Server) {
 		t.Errorf("Spec.Pin = %v, want the D2 plan %v", got.Pin, plan.Server)
