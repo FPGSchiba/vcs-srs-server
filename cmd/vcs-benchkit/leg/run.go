@@ -64,6 +64,16 @@ type Options struct {
 	Bursts                  bool
 	BurstAdd, BurstInFlight int
 	Bot                     BotParams
+
+	// Host-aware sizing (W6 kit fix 3). JoinRateFloor lifts the bot's join scale
+	// so no step joins slower than that many bots per second (0 = the R2-4 rule
+	// as is). MemPerBotMiB, MemMargin and MemReserveMiB turn available memory
+	// into a bot count; BotsPerGenCPU caps N_max by generator CPUs (0 = no cap).
+	JoinRateFloor, MemPerBotMiB, MemMargin float64
+	MemReserveMiB, BotsPerGenCPU           int
+
+	// readFile reads /proc and /sys files (nil = os.ReadFile); a test hook.
+	readFile func(string) ([]byte, error)
 }
 
 // LabelOrDefault is the label the leg writes: Label unless --label set one.
@@ -165,8 +175,16 @@ func (o *Options) Validate() error {
 		return errors.New("server and generator cpu sets are required (--probe, or --server-set and --gen-set)")
 	case o.Topology == "":
 		return errors.New("a topology label is required (--probe or --topology)")
-	case o.PredictedKnee <= 0:
-		return errors.New("a predicted knee is required (--predict or --predicted-knee)")
+	case o.JoinRateFloor < 0:
+		return fmt.Errorf("--join-rate-floor %v: must not be negative", o.JoinRateFloor)
+	case o.MemPerBotMiB < 0:
+		return fmt.Errorf("--mem-per-bot-mib %v: must be positive", o.MemPerBotMiB)
+	case o.MemMargin < 0 || o.MemMargin >= 1:
+		return fmt.Errorf("--mem-margin %v: must be in [0, 1)", o.MemMargin)
+	case o.MemReserveMiB < 0:
+		return fmt.Errorf("--mem-reserve-mib %d: must not be negative", o.MemReserveMiB)
+	case o.BotsPerGenCPU < 0:
+		return fmt.Errorf("--bots-per-gen-cpu %d: must not be negative", o.BotsPerGenCPU)
 	case o.Bot.PingEvery < 0:
 		return fmt.Errorf("--ping-every %v: must not be negative", o.Bot.PingEvery)
 	case o.RampChunk < 0:
@@ -251,6 +269,7 @@ type Manifest struct {
 	PortRange [2]int            `json:"ip_local_port_range"`
 	UlimitN   int               `json:"ulimit_n"`
 
+	// PredictedKnee is context only: no decision reads it (W6 kit fix 3).
 	PredictedKnee int               `json:"predicted_knee"`
 	NMax          int               `json:"n_max"`
 	JoinRate      float64           `json:"join_rate_assumed"`
@@ -279,9 +298,16 @@ type Manifest struct {
 	BoundsGenerator *GenBoundsRecord  `json:"bounds_generator,omitempty"`
 	DecisionsRound2 map[string]string `json:"decisions_round2,omitempty"`
 
+	// Round 3 (W6 kit fix 3): the host's facts, what they capped, and every
+	// default that changed with its old and new value.
+	HostCaps        *HostCapsRecord   `json:"host_caps,omitempty"`
+	Memory          *MemoryRecord     `json:"memory,omitempty"`
+	DecisionsRound3 map[string]string `json:"decisions_round3,omitempty"`
+
 	EnvProbe json.RawMessage `json:"env_probe,omitempty"`
 
 	Result       string   `json:"result,omitempty"`
+	StoppedEarly string   `json:"stopped_early,omitempty"`
 	Starts       int      `json:"starts,omitempty"`
 	Notes        []string `json:"notes,omitempty"`
 	ServerErrors []string `json:"server_error_lines,omitempty"`
@@ -351,6 +377,9 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	if err := o.Validate(); err != nil {
 		return err
 	}
+	if o.readFile == nil {
+		o.readFile = os.ReadFile
+	}
 	if err := os.MkdirAll(o.OutDir, 0o755); err != nil {
 		return err
 	}
@@ -381,12 +410,8 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	var cal *Calibration
 	var out *Outcome
 	defer func() {
-		in := ResultsInput{
-			Seed: o.Seed, Arm: o.Arms, Scenario: o.Scenario, Result: m.Result, Error: m.Error,
-			Cal: cal, Out: out, Predicted: o.PredictedKnee, NMax: m.NMax, Label: o.Label,
-		}
 		var buf bytes.Buffer
-		if err := WriteResultsMarkdown(&buf, in); err != nil {
+		if err := WriteResultsMarkdown(&buf, legResultsInput(o, m, cal, out)); err != nil {
 			logf("results.md: %v", err)
 			return
 		}
@@ -398,11 +423,11 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 
 	// 1. Manifest inputs: sysctls (raise rmem_max/wmem_max only), port range, ulimit.
 	if o.Sysctl && runtime.GOOS == "linux" {
-		m.Sysctl = RaiseSocketBuffers(os.ReadFile, runCmd, socketBufferTarget)
+		m.Sysctl = RaiseSocketBuffers(o.readFile, runCmd, socketBufferTarget)
 	} else {
 		m.Sysctl = map[string]string{"skipped": "not requested or not linux"}
 	}
-	portRange, err := readPortRange(os.ReadFile)
+	portRange, err := readPortRange(o.readFile)
 	if err != nil {
 		return fail(fmt.Errorf("read ip_local_port_range: %w", err))
 	}
@@ -422,6 +447,21 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	} else {
 		logf("load bot v%d, features %v", feats.Version, feats.Names())
 	}
+
+	// 1c. Memory pre-flight, before any ramp: a host that cannot hold the bots is
+	// refused, and calibration steps above what memory allows are dropped.
+	mf := ReadMemFacts(o.readFile)
+	memTop, calSteps, memNote, err := memoryPreflight(o, mf)
+	m.recordMemory(o, mf, memTop)
+	if err != nil {
+		return fail(err)
+	}
+	var calNotes []string
+	if memNote != "" {
+		logf("%s", memNote)
+		calNotes = append(calNotes, memNote)
+	}
+	o.CalSteps = calSteps
 
 	// 2. Calibration: the generator's receive side on its own.
 	legStart := time.Now()
@@ -447,7 +487,6 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	if err != nil {
 		return fail(fmt.Errorf("calibration: %w", err))
 	}
-	var calNotes []string
 	if cal.StoppedAt > 0 {
 		note := fmt.Sprintf("calibration stopped at N=%d: %s", cal.StoppedAt, cal.StopReason)
 		calNotes = append(calNotes, note)
@@ -462,19 +501,31 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	if o.Budget <= 0 {
 		remaining = 1000 * time.Hour
 	}
-	// Bridge until K-T6: today's inputs (no floor, no memory or generator cap).
-	nMax := HostCap(CapInput{
-		Model: sweep.JoinModel{Const: o.JoinRate}, Budget: remaining, Steps: sweepSteps,
-		PortRange: portRange, UlimitN: ulimitN, Explicit: o.NMaxCap,
-	}).NMax
-	m.NMax = nMax
-	if nMax < 1 {
-		return fail(errors.New("pre-flight: no sweep step fits the time, port and descriptor budgets"))
+	// The host decides N_max, the start and the join scale; the prediction is
+	// context only.
+	calBots := int(cal.ReceivePPS / rxPPSPerBot)
+	baseScale := o.Bot.JoinRateScale
+	caps := planHost(&o, feats, memTop, calBots, remaining, portRange, ulimitN, len(genCPUs))
+	m.recordCaps(caps, calBots)
+	if feats.Has("join_rate") {
+		// The bot argv now carries the anchored scale.
+		m.recordRound2(o, feats)
+		m.Ramp.RateScaleBase = baseScale
 	}
-	if err := sweep.Preflight(portRange, ulimitN, 2*nMax); err != nil {
+	if caps.NMax < 1 {
+		return fail(errors.New("pre-flight: no sweep step fits the time, port, descriptor, memory and generator budgets (" + describeCaps(caps) + ")"))
+	}
+	if err := sweep.Preflight(portRange, ulimitN, caps.Top); err != nil {
 		return fail(err)
 	}
-	logf("pre-flight ok: predicted knee %d, N_max %d", o.PredictedKnee, nMax)
+	rule := fmt.Sprintf("join rule constant %s/s (bot lacks join_rate)", fmtFloat(o.JoinRate))
+	if feats.Has("join_rate") {
+		rule = fmt.Sprintf("join rule min(%s, %s/N) floor %s", fmtFloat(o.Bot.JoinRateMax), fmtFloat(o.Bot.JoinRateScale), fmtFloat(o.JoinRateFloor))
+	}
+	logf("pre-flight ok: N_max %d (%s), start %d, top %d, %s; predicted knee %d (context only)",
+		caps.NMax, caps.By, caps.Start, caps.Top, rule, o.PredictedKnee)
+	logf("%s", describeCaps(caps))
+	nMax := caps.NMax
 
 	// 4-8. The S arm.
 	scratch, err := os.MkdirTemp("", "vcs-benchkit-leg-")
@@ -499,48 +550,29 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 		logf:          logf,
 	}
 	rep.src = env
-	// The time guard prices a ramp with the bot's rate rule only when the bot has it.
-	var rateMax, rateScale float64
-	if feats.Has("join_rate") {
-		rateMax, rateScale = o.Bot.JoinRateMax, o.Bot.JoinRateScale
+	cfg := driverConfig(o, caps, remaining, feats)
+	cfg.OnRow = func(r Row) {
+		if r.Kind == "burst" {
+			say(FormatBurstLine(tag, r))
+		} else {
+			say(FormatRowLine(tag, r))
+		}
+		rep.Row(r)
 	}
-	d := NewDriver(env, Config{
-		Predicted: o.PredictedKnee, NMax: nMax, JoinRate: o.JoinRate, Budget: remaining,
-		Warmup: o.Warmup, Hold: o.Hold, Confirm: o.Confirm, Overload: o.Overload, ProbeHold: time.Second,
-		Bounds:    sweep.DefaultBounds,
-		RampChunk: o.RampChunk, RateMax: rateMax, RateScale: rateScale,
-		BurstEnabled: o.Bursts, BurstAdd: o.BurstAdd, BurstInFlight: o.BurstInFlight,
-		OnRow: func(r Row) {
-			if r.Kind == "burst" {
-				say(FormatBurstLine(tag, r))
-			} else {
-				say(FormatRowLine(tag, r))
-			}
-			rep.Row(r)
-		},
-		Logf: logf,
-	})
+	cfg.Logf = logf
+	d := NewDriver(env, cfg)
 	var runErr error
 	out, runErr = d.Run(ctx)
 	m.Starts, m.Notes, m.ServerErrors = out.Starts, append(calNotes, out.Notes...), env.errorsSeen()
-	if runErr == nil {
-		m.Result = out.Result.String()
-		if out.Unconfirmed {
-			m.Result += " (unconfirmed: the confirm step did not pass)"
-		}
-	}
+	m.recordOutcome(out, runErr)
 
 	// 9. Files, written even after a failure so the partial run is inspectable.
-	if err := writeFile(o.OutDir, "steps.csv", func(w io.Writer) error { return WriteStepsCSVLabeled(w, out, o.Topology, o.Label) }); err != nil {
+	// A leg that stopped early with a bracket is not a failure: it has a result.
+	if err := writeOutcomeFiles(o, out, nMax, runErr); err != nil {
 		return fail(err)
 	}
 	if runErr != nil {
 		return fail(runErr)
-	}
-	if err := writeFile(o.OutDir, "knees.csv", func(w io.Writer) error {
-		return WriteKneesCSV(w, out, KneeMeta{Arm: o.Arms, Scenario: o.Scenario, Topology: o.Topology, Predicted: o.PredictedKnee, NMax: nMax, Label: o.Label})
-	}); err != nil {
-		return fail(err)
 	}
 	logf("result: %s (calibration %s)", out.Result, FormatCapacity(cal))
 	return writeManifest(o.OutDir, m)
@@ -561,11 +593,15 @@ func (s *syncWriter) Write(p []byte) (int, error) {
 
 // RampRecord is the ramp shape a leg ran with (R2-3 to R2-5).
 type RampRecord struct {
-	Chunk       int     `json:"chunk"`
-	RateMax     float64 `json:"rate_max"`
-	RateScale   float64 `json:"rate_scale"`
-	MaxInFlight int     `json:"max_in_flight"`
-	Talker      string  `json:"talker"`
+	Chunk   int     `json:"chunk"`
+	RateMax float64 `json:"rate_max"`
+	// RateScale is the scale the bot ran with (anchored by the floor);
+	// RateScaleBase is the configured --join-rate-scale before anchoring.
+	RateScale     float64 `json:"rate_scale"`
+	RateScaleBase float64 `json:"rate_scale_base,omitempty"`
+	RateFloor     float64 `json:"rate_floor"`
+	MaxInFlight   int     `json:"max_in_flight"`
+	Talker        string  `json:"talker"`
 }
 
 // BurstRecord is the join-burst phase's shape (R2-6).
@@ -621,6 +657,9 @@ func (o *Options) normalizeRound2() {
 	if o.Bot.GeneratorGC == "" {
 		o.Bot.GeneratorGC = d.GeneratorGC
 	}
+	if o.MemPerBotMiB == 0 {
+		o.MemPerBotMiB = 2
+	}
 }
 
 // Round2Summary is one log line of the effective round-2 parameters, so the
@@ -629,7 +668,7 @@ func Round2Summary(o Options, feats Features) string {
 	o.normalizeRound2()
 	rate := "rate rule not applied (bot lacks join_rate)"
 	if feats.Has("join_rate") {
-		rate = fmt.Sprintf("rate min(%s,%s/N), in-flight %d", fmtFloat(o.Bot.JoinRateMax), fmtFloat(o.Bot.JoinRateScale), o.Bot.MaxInFlight)
+		rate = fmt.Sprintf("rate min(%s,%s/N) floor %s, in-flight %d", fmtFloat(o.Bot.JoinRateMax), fmtFloat(o.Bot.JoinRateScale), fmtFloat(o.JoinRateFloor), o.Bot.MaxInFlight)
 	}
 	ping := "ping off"
 	if feats.Has("ping") && o.Bot.PingEvery > 0 {
@@ -641,7 +680,9 @@ func Round2Summary(o Options, feats Features) string {
 	}
 	s := fmt.Sprintf("round 2: chunk %d, %s, ramp talker %s, %s, %s, gc %v/%v, grpc-log %s",
 		o.RampChunk, rate, o.Bot.RampTalker, ping, bursts, o.Bot.GCPauseWarnP99, o.Bot.GCPauseP99, o.Bot.GRPCLog)
-	if o.Bot.GeneratorGC != GCOff {
+	if o.Bot.GeneratorGC == GCOff {
+		s += ", generator GC: off (GOGC=off GOMEMLIMIT=1GiB)"
+	} else {
 		s += ", generator GC: default (Go defaults)"
 	}
 	return s
@@ -664,9 +705,11 @@ func (m *Manifest) recordRound2(o Options, feats Features) {
 	ramp := &RampRecord{Chunk: o.RampChunk, Talker: o.Bot.RampTalker}
 	if feats.Has("join_rate") {
 		ramp.RateMax, ramp.RateScale, ramp.MaxInFlight = o.Bot.JoinRateMax, o.Bot.JoinRateScale, o.Bot.MaxInFlight
+		ramp.RateScaleBase, ramp.RateFloor = o.Bot.JoinRateScale, o.JoinRateFloor
 	}
 	m.Ramp = ramp
 	m.Burst = &BurstRecord{Add: o.BurstAdd, InFlight: o.BurstInFlight, Enabled: o.Bursts && feats.Has("burst")}
 	m.BoundsGenerator = &GenBoundsRecord{GCPauseP99Us: o.Bot.GCPauseP99.Microseconds(), GCPauseWarnP99Us: o.Bot.GCPauseWarnP99.Microseconds()}
 	m.DecisionsRound2 = decisionsRound2()
+	m.DecisionsRound3 = decisionsRound3()
 }

@@ -55,21 +55,46 @@ func TestValidateOptions(t *testing.T) {
 		t.Fatalf("valid options: %v", err)
 	}
 	cases := map[string]func(o *Options){
-		"only S":        func(o *Options) { o.Arms = "S,Seq" },
-		"seq later":     func(o *Options) { o.Arms = "Seq" },
-		"scenario":      func(o *Options) { o.Scenario = "org-op" },
-		"server bin":    func(o *Options) { o.ServerBin = "" },
-		"loadbot bin":   func(o *Options) { o.LoadbotBin = "" },
-		"out":           func(o *Options) { o.OutDir = "" },
-		"no cpu sets":   func(o *Options) { o.ServerSet, o.GenSet = "", "" },
-		"overlap":       func(o *Options) { o.GenSet = "1,2" },
-		"no prediction": func(o *Options) { o.PredictedKnee = 0 },
+		"only S":       func(o *Options) { o.Arms = "S,Seq" },
+		"seq later":    func(o *Options) { o.Arms = "Seq" },
+		"scenario":     func(o *Options) { o.Scenario = "org-op" },
+		"server bin":   func(o *Options) { o.ServerBin = "" },
+		"loadbot bin":  func(o *Options) { o.LoadbotBin = "" },
+		"out":          func(o *Options) { o.OutDir = "" },
+		"no cpu sets":  func(o *Options) { o.ServerSet, o.GenSet = "", "" },
+		"overlap":      func(o *Options) { o.GenSet = "1,2" },
+		"floor":        func(o *Options) { o.JoinRateFloor = -1 },
+		"mem per bot":  func(o *Options) { o.MemPerBotMiB = -1 },
+		"margin high":  func(o *Options) { o.MemMargin = 1 },
+		"margin low":   func(o *Options) { o.MemMargin = -0.1 },
+		"reserve":      func(o *Options) { o.MemReserveMiB = -1 },
+		"bots per cpu": func(o *Options) { o.BotsPerGenCPU = -1 },
 	}
 	for name, mut := range cases {
 		o := ok
 		mut(&o)
 		if err := o.Validate(); err == nil {
 			t.Errorf("%s: want an error", name)
+		}
+	}
+	// W6 kit fix 3 (D8): the prediction is context only, no longer required.
+	np := ok
+	np.PredictedKnee = 0
+	if err := np.Validate(); err != nil {
+		t.Errorf("no predicted knee must now be valid: %v", err)
+	}
+	// Each host flag is named in its rejection.
+	for flag, mut := range map[string]func(o *Options){
+		"--join-rate-floor":  func(o *Options) { o.JoinRateFloor = -1 },
+		"--mem-per-bot-mib":  func(o *Options) { o.MemPerBotMiB = -1 },
+		"--mem-margin":       func(o *Options) { o.MemMargin = 1 },
+		"--mem-reserve-mib":  func(o *Options) { o.MemReserveMiB = -1 },
+		"--bots-per-gen-cpu": func(o *Options) { o.BotsPerGenCPU = -1 },
+	} {
+		bad := ok
+		mut(&bad)
+		if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), flag) {
+			t.Errorf("%s: err = %v", flag, err)
 		}
 	}
 	// S4 builds the S arm only: the message must say where Seq and D2 arrive.
@@ -273,7 +298,7 @@ func TestManifestGeneratorGC(t *testing.T) {
 		gc      string
 		wantGC  string
 		hasGOGC bool
-	}{{"", "off", true}, {"off", "off", true}, {"default", "default", false}} {
+	}{{"", "default", false}, {"off", "off", true}, {"default", "default", false}} {
 		o := Options{Bot: BotParams{GeneratorGC: tc.gc}}
 		m := newManifest(o, nil, nil)
 		m.recordRound2(o, feats)
@@ -290,7 +315,11 @@ func TestManifestGeneratorGC(t *testing.T) {
 	if s := Round2Summary(o, Features{Version: 3, Set: map[string]bool{}}); !strings.Contains(s, "generator GC: default (Go defaults)") {
 		t.Errorf("summary %q lacks the default-GC note", s)
 	}
-	if s := Round2Summary(Options{}, Features{Version: 3, Set: map[string]bool{}}); strings.Contains(s, "generator GC") {
-		t.Errorf("off summary %q must not mention generator GC", s)
+	// The summary always names the GC mode (W6 kit fix 3).
+	if s := Round2Summary(Options{Bot: BotParams{GeneratorGC: "off"}}, Features{Version: 3, Set: map[string]bool{}}); !strings.Contains(s, "generator GC: off (GOGC=off GOMEMLIMIT=1GiB)") {
+		t.Errorf("off summary %q lacks the off-GC note", s)
+	}
+	if s := Round2Summary(Options{}, Features{Version: 3, Set: map[string]bool{}}); !strings.Contains(s, "generator GC: default (Go defaults)") {
+		t.Errorf("empty-mode summary %q lacks the default-GC note", s)
 	}
 }

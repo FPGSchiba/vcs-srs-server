@@ -31,8 +31,8 @@ func parseLegFlags(args []string, errw io.Writer) (leg.Options, error) {
 	fs.StringVar(&o.GenSet, "gen-set", "", "generator cpu set (overrides --probe)")
 	fs.StringVar(&o.Label, "label", leg.Label, "label written to the CSVs, results.md and manifest; must say \"relative only\"")
 	fs.StringVar(&o.Topology, "topology", "", "topology label (overrides --probe)")
-	fs.StringVar(&o.PredictFile, "predict", "", "predict.json from `vcs-benchkit predict`")
-	fs.IntVar(&o.PredictedKnee, "predicted-knee", 0, "B-0 predicted knee (overrides --predict)")
+	fs.StringVar(&o.PredictFile, "predict", "", "predict.json from `vcs-benchkit predict`, context only")
+	fs.IntVar(&o.PredictedKnee, "predicted-knee", 0, "B-0 predicted knee, context only (overrides --predict); no decision reads it")
 	fs.IntVar(&o.NMaxCap, "n-max", 0, "extra cap on N_max (0 = the time and port budgets only)")
 	fs.StringVar(&o.ServerSHA, "server-sha", "", "server commit, recorded in the manifest")
 	fs.StringVar(&o.ClientSHA, "client-sha", "", "client commit, recorded in the manifest")
@@ -57,7 +57,12 @@ func parseLegFlags(args []string, errw io.Writer) (leg.Options, error) {
 	fs.DurationVar(&o.Bot.GCPauseP99, "gc-pause-p99", d.GCPauseP99, "generator GC-pause p99 hard bound (invalidates a step)")
 	fs.DurationVar(&o.Bot.GCPauseWarnP99, "gc-pause-warn-p99", d.GCPauseWarnP99, "generator GC-pause p99 warning bound")
 	fs.StringVar(&o.Bot.GRPCLog, "grpc-log", d.GRPCLog, "grpc-go log severity for the server and the bot (info, warning, error; off disables)")
-	fs.StringVar(&o.Bot.GeneratorGC, "generator-gc", d.GeneratorGC, "generator GC env: off (GOGC=off GOMEMLIMIT=1GiB, R2-9) or default (inherited GOGC/GOMEMLIMIT stripped, Go defaults)")
+	fs.StringVar(&o.Bot.GeneratorGC, "generator-gc", d.GeneratorGC, "generator GC env: default (inherited GOGC/GOMEMLIMIT stripped, Go defaults) or off (GOGC=off GOMEMLIMIT=1GiB, R2-9)")
+	fs.Float64Var(&o.JoinRateFloor, "join-rate-floor", 4, "minimum bot joins/s at any step (anchors --join-rate-scale to max(scale, floor*top); 0 = the R2-4 rule)")
+	fs.Float64Var(&o.MemPerBotMiB, "mem-per-bot-mib", 2, "memory one bot costs, MiB (measured 1.8 MB, rounded up); must be > 0")
+	fs.Float64Var(&o.MemMargin, "mem-margin", 0.2, "fraction of available memory left unused, in [0,1)")
+	fs.IntVar(&o.MemReserveMiB, "mem-reserve-mib", 512, "memory held back for the server and the kit, MiB")
+	fs.IntVar(&o.BotsPerGenCPU, "bots-per-gen-cpu", 1500, "bots one generator CPU can drive: caps N_max (0 = no generator-CPU cap)")
 	o.Bot.RampTalker = d.RampTalker
 	if err := fs.Parse(args); err != nil {
 		return o, err
@@ -67,6 +72,9 @@ func parseLegFlags(args []string, errw io.Writer) (leg.Options, error) {
 	}
 	if err := leg.ParseGeneratorGC(o.Bot.GeneratorGC); err != nil {
 		return o, err
+	}
+	if o.MemPerBotMiB <= 0 {
+		return o, fmt.Errorf("--mem-per-bot-mib %v: must be positive", o.MemPerBotMiB)
 	}
 	if !strings.Contains(o.Label, "relative only") {
 		return o, errors.New(`--label must say "relative only"`)
