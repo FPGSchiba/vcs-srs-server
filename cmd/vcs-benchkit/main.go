@@ -22,7 +22,7 @@ func checkLabel(l string) error {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: vcs-benchkit <subcommand> [flags]\nsubcommands: predict, leg, aggregate")
+		fmt.Fprintln(os.Stderr, "usage: vcs-benchkit <subcommand> [flags]\nsubcommands: predict, leg, aggregate, publishset")
 		os.Exit(2)
 	}
 	var err error
@@ -31,6 +31,8 @@ func main() {
 		err = runPredict(os.Args[2:], os.Stdout)
 	case "aggregate":
 		err = runAggregate(os.Args[2:], os.Stdout, os.Stderr)
+	case "publishset":
+		err = runPublishSet(os.Args[2:], os.Stdout)
 	case "leg":
 		err = runLeg(os.Args[2:], os.Stdout, os.Stderr)
 	default:

@@ -1,0 +1,2 @@
+arm,scenario,repeats,median_n,min_n,max_n,censored,unconfirmed,predicted_knee,topology,arm_label
+S,one-big-net,3,1000,900,1100,false,false,,2 hyperthreads of 1 core,

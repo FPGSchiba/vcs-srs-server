@@ -1,0 +1,2 @@
+scenario,ratio,legs,median,min,max,censored_legs,topology
+one-big-net,Seq/S,3,1.02,0.98,1.1,0,2 hyperthreads of 1 core
