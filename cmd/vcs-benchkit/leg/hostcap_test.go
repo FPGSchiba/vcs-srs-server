@@ -42,7 +42,7 @@ func TestHostCapActionsRunner(t *testing.T) {
 	in := evidenceInput()
 	in.GenCPUs, in.MemTop = 2, 0
 	c := HostCap(in)
-	if c.By != "generator_cpu" || c.NMax != 3000 {
+	if c.By != "generator-cpu" || c.NMax != 3000 {
 		t.Fatalf("caps = %+v", c)
 	}
 	if _, ok := c.Limits["memory"]; ok {

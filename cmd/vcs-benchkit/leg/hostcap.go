@@ -36,7 +36,7 @@ type Caps struct {
 	NMax  int
 	Top   int
 	Start int
-	// By is the key of the binding limit: time, memory, generator_cpu, ports
+	// By is the key of the binding limit: time, memory, generator-cpu, ports
 	// or explicit.
 	By string
 	// Scale is the anchored join scale (0 when the bot rule is off).
@@ -56,13 +56,13 @@ func HostCap(in CapInput) Caps {
 		limits["memory"] = in.MemTop
 	}
 	if in.GenCPUs > 0 && in.BotsPerGenCPU > 0 {
-		limits["generator_cpu"] = in.GenCPUs * in.BotsPerGenCPU
+		limits["generator-cpu"] = in.GenCPUs * in.BotsPerGenCPU
 	}
 	if in.Explicit > 0 {
 		limits["explicit"] = in.Explicit
 	}
 	hostMax := limits["ports"]
-	for _, k := range []string{"memory", "generator_cpu", "explicit"} {
+	for _, k := range []string{"memory", "generator-cpu", "explicit"} {
 		if v, ok := limits[k]; ok {
 			hostMax = min(hostMax, v)
 		}
@@ -82,7 +82,7 @@ func HostCap(in CapInput) Caps {
 
 	c.NMax = limits["time"]
 	c.By = "time"
-	for _, k := range []string{"memory", "generator_cpu", "ports", "explicit"} {
+	for _, k := range []string{"memory", "generator-cpu", "ports", "explicit"} {
 		if v, ok := limits[k]; ok && v < c.NMax {
 			c.NMax, c.By = v, k
 		}
