@@ -327,3 +327,36 @@ func TestSweepControlLostDuringBisection(t *testing.T) {
 		t.Fatalf("result = %+v, want %+v", s.Result(), want)
 	}
 }
+
+func TestHostStart(t *testing.T) {
+	for _, c := range []struct{ cal, nMax, want int }{
+		{2047, 5529, 2047}, {0, 5529, 691}, {50, 5529, 346}, {9000, 5529, 2764}, {5, 1, 1}, {5, 0, 0},
+	} {
+		if got := HostStart(c.cal, c.nMax); got != c.want {
+			t.Errorf("HostStart(%d,%d) = %d, want %d", c.cal, c.nMax, got, c.want)
+		}
+	}
+}
+
+func TestNewSweepAtStartsThere(t *testing.T) {
+	s := NewSweepAt(2047, 5529)
+	for _, want := range []int{2047, 4094, 5529} {
+		n, ok := s.Next()
+		if !ok || n != want {
+			t.Fatalf("Next = %d,%v want %d", n, ok, want)
+		}
+		if err := s.Record(Pass); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestTimeBoundLimitString(t *testing.T) {
+	r := Result{Kind: TimeBound, N: 3000, Limit: "generator-cpu"}
+	if r.String() != "≥ 3000 (N_max: generator-cpu)" {
+		t.Errorf("got %q", r.String())
+	}
+	if got := (Result{Kind: TimeBound, N: 3000}).String(); got != "≥ 3000 (time-bound)" {
+		t.Errorf("got %q", got)
+	}
+}

@@ -309,3 +309,14 @@ func TestLegLabelDefaultIsLegLabel(t *testing.T) {
 		t.Error("empty Options.Label must resolve to leg.Label")
 	}
 }
+
+func TestKindNameForLimit(t *testing.T) {
+	if got := kindNameFor(sweep.Result{Kind: sweep.TimeBound, Limit: "generator-cpu"}); got != "generator-cpu-bound" {
+		t.Errorf("got %q", got)
+	}
+	for _, l := range []string{"", "time"} {
+		if got := kindNameFor(sweep.Result{Kind: sweep.TimeBound, Limit: l}); got != "time-bound" {
+			t.Errorf("limit %q: got %q", l, got)
+		}
+	}
+}

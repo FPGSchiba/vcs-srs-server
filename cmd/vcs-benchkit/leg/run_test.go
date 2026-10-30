@@ -80,10 +80,17 @@ func TestValidateOptions(t *testing.T) {
 	}
 }
 
-func TestSweepCap(t *testing.T) {
+func capN(budget time.Duration, ulimit, explicit int) int {
+	return HostCap(CapInput{
+		Model: sweep.JoinModel{Const: 27}, Budget: budget, Steps: sweepSteps,
+		PortRange: [2]int{32768, 60999}, UlimitN: ulimit, Explicit: explicit,
+	}).NMax
+}
+
+func TestHostCapPortsAndExplicit(t *testing.T) {
 	// A big time budget is capped by the port/descriptor budget: the overload
 	// step runs at 2x N_max, so 2 x N_max must still pass the pre-flight.
-	n := SweepCap(3000, 27, 100*time.Minute, [2]int{32768, 60999}, 65536, 0)
+	n := capN(100*time.Minute, 65536, 0)
 	if n <= 0 || n > 7058 {
 		t.Fatalf("cap = %d, want within (0, 7058]", n)
 	}
@@ -91,7 +98,7 @@ func TestSweepCap(t *testing.T) {
 		t.Errorf("2 x cap does not pass the pre-flight: %v", err)
 	}
 	// ulimit -n 1024 caps lower than the ports do.
-	small := SweepCap(3000, 27, 100*time.Minute, [2]int{32768, 60999}, 1024, 0)
+	small := capN(100*time.Minute, 1024, 0)
 	if small >= n || small <= 0 {
 		t.Errorf("ulimit-bound cap = %d, port-bound %d", small, n)
 	}
@@ -99,11 +106,11 @@ func TestSweepCap(t *testing.T) {
 		t.Errorf("2 x small cap does not pass the pre-flight: %v", err)
 	}
 	// An explicit cap wins when it is lower.
-	if got := SweepCap(3000, 27, 100*time.Minute, [2]int{32768, 60999}, 65536, 32); got != 32 {
+	if got := capN(100*time.Minute, 65536, 32); got != 32 {
 		t.Errorf("explicit cap = %d", got)
 	}
 	// A budget below the fixed costs leaves no step at all.
-	if got := SweepCap(3000, 27, time.Minute, [2]int{32768, 60999}, 65536, 0); got != 0 {
+	if got := capN(time.Minute, 65536, 0); got != 0 {
 		t.Errorf("tiny budget cap = %d", got)
 	}
 }

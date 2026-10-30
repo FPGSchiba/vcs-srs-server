@@ -40,6 +40,12 @@ type Result struct {
 	N    int
 	// At is the step size that lost control twice (ControlLostBound only).
 	At int
+	// Limit names what bound N_max for a TimeBound result: "" or "time" when
+	// the time budget did, else "memory", "generator-cpu", "ports" or
+	// "explicit".
+	Limit string
+	// Hi is the upper end of a bracket (Bracketed results, K-T4).
+	Hi int
 }
 
 // String renders the result as the design names it: "knee N",
@@ -51,6 +57,9 @@ func (r Result) String() string {
 	case GeneratorBound:
 		return fmt.Sprintf("≥ %d (generator-bound)", r.N)
 	case TimeBound:
+		if r.Limit != "" && r.Limit != "time" {
+			return fmt.Sprintf("≥ %d (N_max: %s)", r.N, r.Limit)
+		}
 		return fmt.Sprintf("≥ %d (time-bound)", r.N)
 	case BelowRange:
 		return fmt.Sprintf("< %d (below range)", r.N)
@@ -109,21 +118,36 @@ type Sweep struct {
 // non-positive prediction starts at 1. A non-positive nMax runs no step and
 // ends as TimeBound with N 0.
 func NewSweep(predictedKnee, nMax int) *Sweep {
+	return NewSweepAt(max(1, predictedKnee/4), nMax)
+}
+
+// NewSweepAt starts a sweep at an explicit first step size (at least 1, at
+// most nMax). A non-positive nMax runs no step and ends as TimeBound with N 0.
+func NewSweepAt(start, nMax int) *Sweep {
 	s := &Sweep{nMax: nMax}
 	if nMax < 1 {
 		s.phase = phaseDone
 		s.result = Result{Kind: TimeBound, N: 0}
 		return s
 	}
-	start := predictedKnee / 4
-	if start < 1 {
-		start = 1
-	}
-	if start > nMax {
-		start = nMax
-	}
+	start = min(max(start, 1), nMax)
 	s.next = start
 	return s
+}
+
+// HostStart is the sweep's first step size derived from the host: the
+// calibration's bot count clamped to [max(1, ceil(nMax/16)), max(1, nMax/2)].
+// calBots <= 0 is treated as nMax/8. It is 0 when nMax < 1.
+func HostStart(calBots, nMax int) int {
+	if nMax < 1 {
+		return 0
+	}
+	if calBots <= 0 {
+		calBots = nMax / 8
+	}
+	lo := max(1, (nMax+15)/16)
+	hi := max(1, nMax/2)
+	return min(max(calBots, lo), hi)
 }
 
 // Next returns the size of the step to run. It returns false when the sweep

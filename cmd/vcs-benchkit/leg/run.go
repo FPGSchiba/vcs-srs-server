@@ -183,23 +183,6 @@ func (o *Options) Validate() error {
 	return disjoint(o.ServerSet, o.GenSet)
 }
 
-// SweepCap is N_max: the time budget's cap (design 6.4), further limited so the
-// overload step at 2 x N_max passes the port and descriptor pre-flight, and by
-// an explicit cap when one is given (> 0). 0 means no step fits.
-func SweepCap(predicted int, joinRate float64, budget time.Duration, portRange [2]int, ulimitN, explicit int) int {
-	n := sweep.NMax(sweep.JoinModel{Const: joinRate}, budget, sweepSteps)
-	// The largest upper bound U that passes sweep.Preflight.
-	u := min((portRange[1]-portRange[0]+1)/2, (ulimitN-256)/4)
-	if u < 0 {
-		u = 0
-	}
-	n = min(n, u/2)
-	if explicit > 0 {
-		n = min(n, explicit)
-	}
-	return n
-}
-
 func readPortRange(read func(string) ([]byte, error)) ([2]int, error) {
 	b, err := read("/proc/sys/net/ipv4/ip_local_port_range")
 	if err != nil {
@@ -479,7 +462,11 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	if o.Budget <= 0 {
 		remaining = 1000 * time.Hour
 	}
-	nMax := SweepCap(o.PredictedKnee, o.JoinRate, remaining, portRange, ulimitN, o.NMaxCap)
+	// Bridge until K-T6: today's inputs (no floor, no memory or generator cap).
+	nMax := HostCap(CapInput{
+		Model: sweep.JoinModel{Const: o.JoinRate}, Budget: remaining, Steps: sweepSteps,
+		PortRange: portRange, UlimitN: ulimitN, Explicit: o.NMaxCap,
+	}).NMax
 	m.NMax = nMax
 	if nMax < 1 {
 		return fail(errors.New("pre-flight: no sweep step fits the time, port and descriptor budgets"))

@@ -148,12 +148,22 @@ func u(n uint64) string { return strconv.FormatUint(n, 10) }
 
 // kindName is the lowercase name of a sweep result kind.
 func kindName(k sweep.ResultKind) string {
+	return kindNameFor(sweep.Result{Kind: k})
+}
+
+// kindNameFor is kindName for a whole result: a TimeBound result names the
+// limit that bound N_max when it was not the time budget.
+func kindNameFor(r sweep.Result) string {
+	k := r.Kind
 	switch k {
 	case sweep.KneeFound:
 		return "knee"
 	case sweep.GeneratorBound:
 		return "generator-bound"
 	case sweep.TimeBound:
+		if r.Limit != "" && r.Limit != "time" {
+			return r.Limit + "-bound"
+		}
 		return "time-bound"
 	case sweep.BelowRange:
 		return "below-range"
@@ -360,7 +370,7 @@ func WriteKneesCSV(w io.Writer, o *Outcome, m KneeMeta) error {
 		on, oo = strconv.Itoa(r.N), r.Outcome.String()
 	}
 	rec := []string{
-		m.Arm, m.Scenario, o.Result.String(), kindName(o.Result.Kind), strconv.Itoa(o.Result.N),
+		m.Arm, m.Scenario, o.Result.String(), kindNameFor(o.Result), strconv.Itoa(o.Result.N),
 		cn, co, on, oo,
 		strconv.Itoa(m.Predicted), strconv.Itoa(m.NMax), m.Topology, LabelOr(m.Label), PayloadLabel, JoinLabel, NotMeasured,
 		strings.Join(o.Notes, "; "),
