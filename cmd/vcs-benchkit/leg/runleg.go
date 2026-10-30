@@ -511,6 +511,7 @@ func (lc *legRun) runArm(ctx context.Context, arm string) {
 	logf("result: %s (calibration %s)", out.Result, FormatCapacity(lc.cal))
 	ar.res = ArmResult{Result: out.Result.String(), Kind: kindNameFor(out.Result), N: out.Result.N}
 	if err := writeManifest(o.OutDir, m); err != nil {
+		logf("manifest: %v; recording arm %s as an error", err, arm)
 		ar.err = err
 		ar.res = ArmResult{Result: kindError, Kind: kindError}
 	}
