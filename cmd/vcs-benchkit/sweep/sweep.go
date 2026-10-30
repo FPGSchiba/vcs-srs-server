@@ -266,8 +266,8 @@ func (s *Sweep) Bracket() (lo, hi int) { return s.lo, s.hi }
 // Stop ends the sweep early (the leg's budget guard) and returns its result.
 // A sweep still doubling has seen no breach, so it is time-bound at its last
 // pass. Once a breach brackets the knee, the result is that bracket
-// (Bracketed: lo <= knee < hi, censored); with no pass at all it is below range. A pending step is discarded. A finished sweep keeps its
-// result.
+// (Bracketed: lo <= knee < hi, censored); with no pass at all it is below
+// range. A pending step is discarded. A finished sweep keeps its result.
 func (s *Sweep) Stop() Result {
 	if s.phase == phaseDone {
 		return s.result
