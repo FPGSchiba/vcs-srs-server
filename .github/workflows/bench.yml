@@ -586,7 +586,11 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bench-results-${{ github.run_id }}
-          path: bench-results-${{ github.run_id }}
+          # Only the scanned publish set and the summary leave the job; the raw
+          # aggregate directory is never uploaded (only publish/ is scanned).
+          path: |
+            bench-results-${{ github.run_id }}/publish
+            bench-results-${{ github.run_id }}/aggregate.md
           if-no-files-found: error
 
   # The only job with contents: write. It has no Go and no third-party code: it
