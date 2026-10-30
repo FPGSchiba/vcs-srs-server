@@ -20,8 +20,9 @@ const rxPPSPerBot = 50
 const minMemBots = 64
 
 // memoryPreflight is the memory pre-flight. It returns the memory top (0 =
-// unknown, -1 = below the reserve; also returned with a refusal), the calibration steps trimmed to it, and a note for the log and the
-// manifest. A host that fits fewer than minMemBots bots is refused.
+// unknown, -1 = below the reserve; also returned with a refusal), the
+// calibration steps trimmed to it, and a note for the log and the manifest. A
+// host that fits fewer than minMemBots bots is refused.
 func memoryPreflight(o Options, mf MemFacts) (memTop int, calSteps, note string, err error) {
 	perBot := int64(o.MemPerBotMiB * (1 << 20))
 	reserve := int64(o.MemReserveMiB) << 20
@@ -166,7 +167,7 @@ func (m *Manifest) recordOutcome(out *Outcome, runErr error) {
 	m.StoppedEarly = out.StoppedEarly
 }
 
-// resultsInput is what results.md is written from.
+// legResultsInput is what results.md is written from.
 func legResultsInput(o Options, m *Manifest, cal *Calibration, out *Outcome) ResultsInput {
 	return ResultsInput{
 		Seed: o.Seed, Arm: o.Arms, Scenario: o.Scenario, Result: m.Result, Error: m.Error, StoppedEarly: m.StoppedEarly,
