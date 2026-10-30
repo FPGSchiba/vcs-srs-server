@@ -91,7 +91,8 @@ func TestRunOKRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !bytes.Equal(want, got) {
+		// Fixtures may be CRLF on a Windows checkout.
+		if !bytes.Equal(bytes.ReplaceAll(want, []byte("\r\n"), []byte("\n")), got) {
 			t.Errorf("%s does not round-trip", name)
 		}
 	}
