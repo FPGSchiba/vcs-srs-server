@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -214,6 +215,10 @@ func WriteStepsCSVLabeled(w io.Writer, o *Outcome, topology, label string) error
 		"ping_sent", "ping_failed", "ping_rtt_p99_us",
 		"tcp_abort_on_data", "tcp_abort_on_close", "tcp_abort_on_memory", "tcp_abort_on_timeout", "tcp_abort_on_linger", "tcp_timeouts",
 		"tcp_estab_resets", "tcp_out_rsts", "softnet_squeezed", "ramp_tcp_abort_on_data", "ramp_tcp_estab_resets",
+		// Appended by W6 S5 (18 columns, see v4Cells).
+		"arm_label", "fanout_pps", "presses", "dual_presses", "voice_endpoints", "late_loss_500",
+		"one_way_p50_ms", "one_way_max_ms", "one_way_actual_p99_ms", "jitter_p99_ms", "jitter_mean_ms", "gap_p99_ms",
+		"rtt_p99_us", "radio_update_p99_us", "radio_prop_p99_us", "secret_to_ack_p99_us", "corpus_sha256", "server_cpu_by_role",
 	}
 	if err := cw.Write(header); err != nil {
 		return err
@@ -223,22 +228,24 @@ func WriteStepsCSVLabeled(w io.Writer, o *Outcome, topology, label string) error
 		if r.Step.Health.RxLagP99Us != nil {
 			rx = strconv.FormatInt(*r.Step.Health.RxLagP99Us, 10)
 		}
-		// late_loss_ratio and one_way_p99_ms are never measured by the C1 bot:
-		// the cells stay empty so no reader mistakes them for a measurement.
+		// late_loss_ratio and one_way_p99_ms are filled only when the bot
+		// measured them (a v4 bot on Linux): an empty cell is "not measured",
+		// never zero.
 		rec := []string{
 			strconv.Itoa(r.Seq), r.Kind, strconv.Itoa(r.N), r.Outcome.String(), strings.Join(r.Reasons, "; "),
 			strconv.FormatBool(r.Held), cell(r.SettleSeconds),
-			cell(r.Data.LossRatio), "", "", u(r.Step.Expected), u(r.Step.Unique), u(r.Step.Lost), u(r.Step.Dups), u(r.Step.Reordered), strconv.Itoa(r.Step.BurstMax),
+			cell(r.Data.LossRatio), lateLossCell(r), usToMs(r.held(r.Step.OneWayP99Us)), u(r.Step.Expected), u(r.Step.Unique), u(r.Step.Lost), u(r.Step.Dups), u(r.Step.Reordered), strconv.Itoa(r.Step.BurstMax),
 			u(r.Step.ResourceExhausted.Ramp), u(r.Step.ResourceExhausted.Settle), u(r.Step.ResourceExhausted.Hold),
 			strconv.FormatInt(r.Step.JoinP99Us, 10), strconv.Itoa(r.Step.HelloTriesMax),
 			cell(r.Data.ServerCPU), u(r.Window.ServerDrops), u(r.Window.SoftIRQTicks), u(r.Window.StealTicks), cell(r.Window.Seconds),
 			u(r.Logs.ShardQueueFull), u(r.Logs.UpdateStreamBehind), u(r.Logs.NodeFeedBehind), u(r.Logs.NodeDeregistered),
 			cell(r.Data.GenCPU), u(r.Step.Health.SocketDrops), rx, strconv.FormatInt(r.Step.Health.WheelLagP99Us, 10),
 			strconv.FormatInt(r.Step.Health.SchedP99Us, 10), strconv.FormatInt(r.Step.Health.GCPauseP99Us, 10), strings.Join(r.Step.Violations, "; "),
-			topology, label, PayloadLabel, JoinLabel, NotMeasured,
+			topology, label, rowPayload(r), JoinLabel, notMeasured(r.Step),
 		}
 		rec = append(rec, joinCells(r)...)
 		rec = append(rec, round2Cells(r)...)
+		rec = append(rec, v4Cells(r)...)
 		if len(rec) != len(header) {
 			return fmt.Errorf("steps.csv: row has %d cells for %d columns", len(rec), len(header))
 		}
@@ -335,6 +342,109 @@ func round2Cells(r Row) []string {
 	return cells
 }
 
+// v4Cells are the 18 steps.csv cells appended by W6 S5: the v4 step's load
+// axes and latency distribution, the bot-side RPC timings, the corpus hash and
+// the per-process server CPU. A value the bot did not measure (a v3 bot, a
+// non-Linux bot, the D2 arm) or a row with no hold is an empty cell, never zero.
+func v4Cells(r Row) []string {
+	cells := make([]string, 18)
+	if !r.Held || r.Step.Schema == "" {
+		return cells
+	}
+	st := r.Step
+	cells[0] = st.ArmLabel
+	cells[1] = cell(st.FanoutPPS)
+	cells[2], cells[3] = strconv.Itoa(st.Presses), strconv.Itoa(st.DualPresses)
+	cells[4] = strconv.Itoa(st.VoiceEndpoints)
+	if st.LateLoss500 != nil {
+		cells[5] = u(*st.LateLoss500)
+	}
+	cells[6], cells[7] = usToMs(st.OneWayP50Us), usToMs(st.OneWayMaxUs)
+	cells[8] = usToMs(st.OneWayActualP99Us)
+	cells[9], cells[10], cells[11] = usToMs(st.JitterP99Us), usToMs(st.JitterMeanUs), usToMs(st.GapP99Us)
+	cells[12] = strconv.FormatInt(st.RTTP99Us, 10)
+	cells[13] = strconv.FormatInt(st.RadioUpdateP99Us, 10)
+	if st.RadioPropP99Us != nil {
+		cells[14] = strconv.FormatInt(*st.RadioPropP99Us, 10)
+	}
+	cells[15] = strconv.FormatInt(st.SecretToAckP99Us, 10)
+	if st.Corpus != nil {
+		cells[16] = st.Corpus.SHA256
+	}
+	cells[17] = cpuByRoleCell(r.Window.ServerCPUByRole)
+	return cells
+}
+
+// held returns p only for a row whose hold ran, else nil.
+func (r Row) held(p *int64) *int64 {
+	if !r.Held {
+		return nil
+	}
+	return p
+}
+
+func lateLossCell(r Row) string {
+	if !r.Held || r.Step.LateLossRatio == nil {
+		return ""
+	}
+	return cell(*r.Step.LateLossRatio)
+}
+
+// usToMs renders a microsecond latency as milliseconds; nil is an empty cell.
+func usToMs(p *int64) string {
+	if p == nil {
+		return ""
+	}
+	return cell(float64(*p) / 1000)
+}
+
+// cpuByRoleCell renders "role=fraction;..." sorted by role; no processes is
+// an empty cell.
+func cpuByRoleCell(m map[string]float64) string {
+	if len(m) == 0 {
+		return ""
+	}
+	roles := make([]string, 0, len(m))
+	for k := range m {
+		roles = append(roles, k)
+	}
+	sort.Strings(roles)
+	parts := make([]string, len(roles))
+	for i, k := range roles {
+		parts[i] = k + "=" + cell(m[k])
+	}
+	return strings.Join(parts, ";")
+}
+
+// rowPayload is the payload label the bot reported for r's step, or the
+// synthetic constant before any v4 step exists.
+func rowPayload(r Row) string {
+	if r.Step.Payload != "" {
+		return r.Step.Payload
+	}
+	return PayloadLabel
+}
+
+// outcomePayload is the payload of the first held step, else the constant.
+func outcomePayload(o *Outcome) string {
+	for _, r := range o.Rows {
+		if r.Held && r.Step.Payload != "" {
+			return r.Step.Payload
+		}
+	}
+	return PayloadLabel
+}
+
+// outcomeNotMeasured is notMeasured of the first held step, else the constant.
+func outcomeNotMeasured(o *Outcome) string {
+	for _, r := range o.Rows {
+		if r.Held {
+			return notMeasured(r.Step)
+		}
+	}
+	return NotMeasured
+}
+
 // KneeMeta is the per-arm context of knees.csv.
 type KneeMeta struct {
 	Arm, Scenario, Topology string
@@ -381,7 +491,7 @@ func WriteKneesCSV(w io.Writer, o *Outcome, m KneeMeta) error {
 	rec := []string{
 		m.Arm, m.Scenario, o.Result.String(), kindNameFor(o.Result), strconv.Itoa(o.Result.N),
 		cn, co, on, oo,
-		predictedCell(m.Predicted), strconv.Itoa(m.NMax), m.Topology, LabelOr(m.Label), PayloadLabel, JoinLabel, NotMeasured,
+		predictedCell(m.Predicted), strconv.Itoa(m.NMax), m.Topology, LabelOr(m.Label), outcomePayload(o), JoinLabel, outcomeNotMeasured(o),
 		strings.Join(o.Notes, "; "),
 		upper,
 	}

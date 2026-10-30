@@ -73,6 +73,33 @@ type Step struct {
 	ControlLost StepControlLost `json:"control_lost"`
 	Ping        StepPing        `json:"ping"`
 	Warnings    []string        `json:"warnings"`
+
+	// v4 additions (I-4, W6 C2); all absent from a v3 step. A pointer is a
+	// value the bot may not measure: nil is "not measured" (a v3 bot, a
+	// non-Linux bot, the D2 arm), never zero.
+	Schema            string      `json:"schema"`
+	ScenarioVersion   int         `json:"scenario_version"`
+	ArmLabel          string      `json:"arm_label"`
+	Corpus            *CorpusInfo `json:"corpus"`
+	FanoutPPS         float64     `json:"fanout_pps"`
+	Presses           int         `json:"presses"`
+	DualPresses       int         `json:"dual_presses"`
+	VoiceEndpoints    int         `json:"voice_endpoints"`
+	LateLoss60        *uint64     `json:"late_loss_60"`
+	LateLoss500       *uint64     `json:"late_loss_500"`
+	LateLossRatio     *float64    `json:"late_loss_ratio"`
+	OneWayP50Us       *int64      `json:"one_way_p50_us"`
+	OneWayP99Us       *int64      `json:"one_way_p99_us"`
+	OneWayMaxUs       *int64      `json:"one_way_max_us"`
+	OneWayActualP99Us *int64      `json:"one_way_actual_p99_us"`
+	JitterP99Us       *int64      `json:"jitter_p99_us"`
+	JitterMeanUs      *int64      `json:"jitter_mean_us"`
+	GapP99Us          *int64      `json:"gap_p99_us"`
+	RTTP99Us          int64       `json:"rtt_p99_us"`
+	RadioUpdateP99Us  int64       `json:"radio_update_p99_us"`
+	RadioPropP99Us    *int64      `json:"radio_prop_p99_us"`
+	SecretToAckP99Us  int64       `json:"secret_to_ack_p99_us"`
+	Parity            *StepParity `json:"parity"`
 }
 
 type botLine struct {
@@ -149,6 +176,9 @@ type Bot struct {
 	lmu  sync.Mutex
 	lost []ControlLostEvent
 
+	pmu    sync.Mutex
+	parity *ParityLine
+
 	features Features
 }
 
@@ -194,6 +224,18 @@ func NewBot(w io.Writer, r io.Reader, hooks BotHooks) *Bot {
 					continue
 				}
 				b.lines <- botLine{step: s}
+			case ParityType:
+				var p ParityLine
+				if err := json.Unmarshal(raw, &p); err != nil {
+					b.lines <- botLine{err: fmt.Errorf("loadbot: bad parity line: %w", err)}
+					continue
+				}
+				b.setParity(p)
+				if !p.OK {
+					// The bot follows this line with its own error line and
+					// exits; the failing arm's reason is the parity one.
+					b.lines <- botLine{err: fmt.Errorf("loadbot: parity: %s", p.Error)}
+				}
 			case "joins":
 				var j Joins
 				if err := json.Unmarshal(raw, &j); err != nil {
@@ -274,6 +316,24 @@ func (b *Bot) LastJoins() (Joins, bool) {
 		return Joins{}, false
 	}
 	return *b.lastJoins, true
+}
+
+func (b *Bot) setParity(p ParityLine) {
+	b.pmu.Lock()
+	b.parity = &p
+	b.pmu.Unlock()
+}
+
+// Parity returns the `parity` line the bot wrote at its first set_n (v4, S and
+// Seq arms). The second result is false until one has been read, and always for
+// D2, `--parity off` and a pre-v4 bot.
+func (b *Bot) Parity() (ParityLine, bool) {
+	b.pmu.Lock()
+	defer b.pmu.Unlock()
+	if b.parity == nil {
+		return ParityLine{}, false
+	}
+	return *b.parity, true
 }
 
 func truncate(s string, n int) string {

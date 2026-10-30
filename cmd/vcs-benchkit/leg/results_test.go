@@ -3,7 +3,9 @@ package leg
 import (
 	"bytes"
 	"encoding/csv"
+	"encoding/json"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -57,9 +59,10 @@ func TestWriteStepsCSVAppendsJoinColumns(t *testing.T) {
 	}
 	want := append(append([]string{}, stepsCSVFirst42...), stepsCSVAppended...)
 	hdr := recs[0]
-	// The first 60 columns are a contract; round 2 appended 27 more (checked below).
-	if len(hdr) != len(want)+27 {
-		t.Fatalf("header has %d columns, want %d: %v", len(hdr), len(want)+27, hdr)
+	// The first 60 columns are a contract; round 2 appended 27 more and W6 S5
+	// 18 (both checked below).
+	if len(hdr) != len(want)+27+len(stepsCSVV4) {
+		t.Fatalf("header has %d columns, want %d: %v", len(hdr), len(want)+27+len(stepsCSVV4), hdr)
 	}
 	for i := range want {
 		if hdr[i] != want[i] {
@@ -163,8 +166,8 @@ func TestWriteStepsCSVAppendsRound2Columns(t *testing.T) {
 		t.Fatalf("test table has %d columns", len(want))
 	}
 	hdr := recs[0]
-	if len(hdr) != len(want) {
-		t.Fatalf("header has %d columns, want %d", len(hdr), len(want))
+	if len(hdr) != len(want)+len(stepsCSVV4) {
+		t.Fatalf("header has %d columns, want %d", len(hdr), len(want)+len(stepsCSVV4))
 	}
 	for i := range want {
 		if hdr[i] != want[i] {
@@ -193,7 +196,7 @@ func TestWriteStepsCSVAppendsRound2Columns(t *testing.T) {
 		}
 	}
 	if col(recs[2], "burst_talker") != "live" || col(recs[2], "burst_result") != "join failures" || col(recs[2], "ramp_mode") != "burst" {
-		t.Errorf("burst row: %v", recs[2][len(recs[2])-27:])
+		t.Errorf("burst row: %v", recs[2])
 	}
 	// A v2 row: every round-2 cell the bot or the kernel did not give is empty.
 	for _, name := range []string{"control_lost_phase", "control_lost_first", "ramp_mode", "ramp_talker", "ramp_joins_per_s", "ramp_join_p99_us",
@@ -381,5 +384,104 @@ func TestKneesCSVPredictedEmptyWhenNotGiven(t *testing.T) {
 func TestPredictedText(t *testing.T) {
 	if predictedText(0) != "none" || predictedText(-1) != "none" || predictedText(7) != "7" {
 		t.Errorf("predictedText: %q %q %q", predictedText(0), predictedText(-1), predictedText(7))
+	}
+}
+
+// stepsCSVV4 are the 18 columns W6 S5 appended after round 2.
+var stepsCSVV4 = []string{
+	"arm_label", "fanout_pps", "presses", "dual_presses", "voice_endpoints", "late_loss_500",
+	"one_way_p50_ms", "one_way_max_ms", "one_way_actual_p99_ms", "jitter_p99_ms", "jitter_mean_ms", "gap_p99_ms",
+	"rtt_p99_us", "radio_update_p99_us", "radio_prop_p99_us", "secret_to_ack_p99_us", "corpus_sha256", "server_cpu_by_role",
+}
+
+func v4Rows(t *testing.T) (measured, d2, v3 Row) {
+	t.Helper()
+	var s, d Step
+	if err := json.Unmarshal(fixture(t, "v4-step.json"), &s); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(fixture(t, "v4-step-d2.json"), &d); err != nil {
+		t.Fatal(err)
+	}
+	measured = Row{Kind: "sweep", Seq: 1, N: 2000, Outcome: sweep.Pass, Held: true, FailedAckedByServer: -1, Step: s,
+		Data:   sweep.StepData{LossRatio: s.LossRatio, ServerCPU: 0.5, GenCPU: 0.2},
+		Window: Window{ServerCPU: 0.5, GenCPU: 0.2, Seconds: 40, ServerCPUByRole: map[string]float64{"nodeB": 0.3, "nodeA": 0.5}}}
+	d2 = Row{Kind: "sweep", Seq: 2, N: 2000, Outcome: sweep.Pass, Held: true, FailedAckedByServer: -1, Step: d,
+		Data: sweep.StepData{LossRatio: 0, ServerCPU: 0.5, GenCPU: 0.2}, Window: Window{ServerCPU: 0.5, GenCPU: 0.2, Seconds: 40}}
+	v3 = passRow()
+	return measured, d2, v3
+}
+
+func TestWriteStepsCSVV4ColumnsAreAppendedAndHonest(t *testing.T) {
+	m, d2, v3 := v4Rows(t)
+	var buf bytes.Buffer
+	if err := WriteStepsCSV(&buf, &Outcome{Rows: []Row{m, d2, v3}}, "one-big-net"); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := csv.NewReader(&buf).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hdr := recs[0]
+	want := append(append(append(append([]string{}, stepsCSVFirst42...), stepsCSVAppended...), stepsCSVRound2...), stepsCSVV4...)
+	if len(hdr) != len(want) {
+		t.Fatalf("header has %d columns, want %d", len(hdr), len(want))
+	}
+	for i := range want {
+		if hdr[i] != want[i] {
+			t.Errorf("column %d = %q, want %q (columns are append-only)", i, hdr[i], want[i])
+		}
+	}
+	col := func(rec []string, name string) string {
+		for i, h := range hdr {
+			if h == name {
+				return rec[i]
+			}
+		}
+		t.Fatalf("no column %q", name)
+		return ""
+	}
+	for name, w := range map[string]string{
+		"payload": "opus-speech-corpus", "not_measured": "", "late_loss_ratio": "3.327e-05", "one_way_p99_ms": "0.9",
+		"arm_label": "", "fanout_pps": "26300", "presses": "1100", "dual_presses": "110", "voice_endpoints": "1",
+		"late_loss_500": "0", "one_way_p50_ms": "0.18", "one_way_max_ms": "4.1", "one_way_actual_p99_ms": "0.85",
+		"jitter_p99_ms": "0.4", "jitter_mean_ms": "0.09", "gap_p99_ms": "20.8",
+		"rtt_p99_us": "300", "radio_update_p99_us": "2500", "radio_prop_p99_us": "3100", "secret_to_ack_p99_us": "1500",
+		"corpus_sha256":      "5f0c1d0e9b7a6c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d",
+		"server_cpu_by_role": "nodeA=0.5;nodeB=0.3",
+	} {
+		got := col(recs[1], name)
+		if name == "late_loss_ratio" {
+			if f, err := strconv.ParseFloat(got, 64); err != nil || math.Abs(f-0.00003326996) > 1e-9 {
+				t.Errorf("measured row late_loss_ratio = %q", got)
+			}
+			continue
+		}
+		if got != w {
+			t.Errorf("measured row %s = %q, want %q", name, got, w)
+		}
+	}
+	// D2: label carried, every latency cell empty (null is not zero), payload from the bot.
+	for name, w := range map[string]string{
+		"payload": "opus-speech-corpus", "not_measured": "late_loss;one_way_p99", "arm_label": "bot-only; real client: ROADMAP Phase 9",
+		"late_loss_ratio": "", "one_way_p99_ms": "", "late_loss_500": "", "one_way_p50_ms": "", "one_way_max_ms": "",
+		"one_way_actual_p99_ms": "", "jitter_p99_ms": "", "jitter_mean_ms": "", "gap_p99_ms": "",
+		"radio_prop_p99_us": "", "server_cpu_by_role": "", "presses": "1", "dual_presses": "0",
+	} {
+		if got := col(recs[2], name); got != w {
+			t.Errorf("D2 row %s = %q, want %q", name, got, w)
+		}
+	}
+	// A v3 row: the constant payload and not_measured, every v4 cell empty.
+	if got := col(recs[3], "payload"); got != PayloadLabel {
+		t.Errorf("v3 payload = %q", got)
+	}
+	if got := col(recs[3], "not_measured"); got != NotMeasured {
+		t.Errorf("v3 not_measured = %q", got)
+	}
+	for _, name := range stepsCSVV4 {
+		if got := col(recs[3], name); got != "" {
+			t.Errorf("v3 row %s = %q, want empty", name, got)
+		}
 	}
 }

@@ -161,6 +161,8 @@ func (m *Manifest) recordOutcome(out *Outcome, runErr error) {
 		return
 	}
 	m.Result = out.Result.String()
+	// What the bot actually sent and measured replaces the pre-run constants.
+	m.Payload, m.NotMeasured = outcomePayload(out), outcomeNotMeasured(out)
 	if out.Unconfirmed {
 		m.Result += " (unconfirmed: the confirm step did not pass)"
 	}

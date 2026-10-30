@@ -28,6 +28,10 @@ type Window struct {
 	// ServerCPU and GenCPU are fractions of the process's CPU set; NaN means
 	// the sampler failed (which invalidates the step).
 	ServerCPU, GenCPU float64
+	// ServerCPUByRole is each server process's CPU fraction of its own set,
+	// keyed by role (W6 S5). nil for a single-process (S) arm until the
+	// multi-process sampler fills it.
+	ServerCPUByRole map[string]float64
 	// ServerDrops is the increase of the server socket's drop counter.
 	ServerDrops uint64
 	// SoftIRQTicks is the softirq clock ticks on the server's CPU set; StealTicks
@@ -709,11 +713,12 @@ func (d *Driver) measure(ctx context.Context, kind string, n int, hold time.Dura
 	row.Logs = CountLog(after).Sub(CountLog(before))
 	row.Data = sweep.StepData{
 		N: n, LossRatio: st.LossRatio,
-		// The C1 load bot measures loss only: no late-loss and no one-way
-		// latency (those arrive with C2). They are recorded as zero here and
-		// named in the not_measured column, so a step is never invalidated by
-		// a figure the bot cannot give, and never credited with one.
-		LateLossRatio: 0, OneWayP99: 0,
+		// A v4 bot measures late loss and one-way latency; a v3 bot, a
+		// non-Linux bot and the D2 arm do not. An unmeasured figure is zero
+		// here and named in the not_measured column, so a step is never
+		// invalidated by a figure the bot cannot give, and never credited with
+		// one (see stepLatency).
+		LateLossRatio: stepLateLoss(st), OneWayP99: stepOneWayP99(st),
 		ResourceExhausted: sweep.PhaseCounts{Ramp: st.ResourceExhausted.Ramp, Settle: st.ResourceExhausted.Settle, Hold: st.ResourceExhausted.Hold},
 		ServerCPU:         win.ServerCPU, ServerSocketDrops: win.ServerDrops,
 		ShardQueueFull: row.Logs.ShardQueueFull, UpdateStreamBehind: row.Logs.UpdateStreamBehind,
@@ -732,6 +737,22 @@ func (d *Driver) measure(ctx context.Context, kind string, n int, hold time.Dura
 		d.markControlLost(&row, evs, "hold")
 	}
 	return row, nil
+}
+
+// stepLateLoss is the bot's late-loss ratio, or 0 when it did not measure one.
+func stepLateLoss(st Step) float64 {
+	if st.LateLossRatio == nil {
+		return 0
+	}
+	return *st.LateLossRatio
+}
+
+// stepOneWayP99 is the bot's one-way p99, or 0 when it did not measure one.
+func stepOneWayP99(st Step) time.Duration {
+	if st.OneWayP99Us == nil {
+		return 0
+	}
+	return time.Duration(*st.OneWayP99Us) * time.Microsecond
 }
 
 // overBudget reports whether running a step at n would leave too little of the

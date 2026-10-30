@@ -2,12 +2,16 @@ package leg
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func fixture(t *testing.T, name string) []byte {
@@ -375,5 +379,146 @@ func TestControlLostFromV2Error(t *testing.T) {
 	if g := ControlLostFromV2Error("hold: bot 7 died: resync: rpc error: code = Unauthenticated desc = session not found", "hold"); g.Bot != 7 ||
 		g.Code != "Unauthenticated" || g.Message != "session not found" {
 		t.Errorf("resync text: %+v", g)
+	}
+}
+
+// --- v4 (W6 C2): fixtures shared byte-for-byte with the client lane ---
+
+func TestV4FixturesDecode(t *testing.T) {
+	var s Step
+	if err := json.Unmarshal(fixture(t, "v4-step.json"), &s); err != nil {
+		t.Fatal(err)
+	}
+	if s.Schema != "loadbot-step/4" || s.Payload != "opus-speech-corpus" || s.Scenario != "org-op" || s.ArmLabel != "" {
+		t.Fatalf("identity = %+v", s)
+	}
+	if s.Corpus == nil || s.Corpus.Frames != 1566 || s.Corpus.SizeMedian != 121 || s.Corpus.SizeMax != 214 || s.Corpus.SHA256 == "" {
+		t.Fatalf("Corpus = %+v", s.Corpus)
+	}
+	if s.FanoutPPS != 26300 || s.Presses != 1100 || s.DualPresses != 110 || s.VoiceEndpoints != 1 {
+		t.Fatalf("load axes = %v %d %d %d", s.FanoutPPS, s.Presses, s.DualPresses, s.VoiceEndpoints)
+	}
+	if s.LateLoss60 == nil || *s.LateLoss60 != 35 || s.LateLoss500 == nil || *s.LateLoss500 != 0 ||
+		s.LateLossRatio == nil || *s.LateLossRatio < 0.0000332 || *s.LateLossRatio > 0.0000333 {
+		t.Fatalf("late loss = %v %v %v", s.LateLoss60, s.LateLoss500, s.LateLossRatio)
+	}
+	for name, p := range map[string]*int64{
+		"p50": s.OneWayP50Us, "p99": s.OneWayP99Us, "max": s.OneWayMaxUs, "actual": s.OneWayActualP99Us,
+		"jitter p99": s.JitterP99Us, "jitter mean": s.JitterMeanUs, "gap": s.GapP99Us, "radio prop": s.RadioPropP99Us,
+	} {
+		if p == nil {
+			t.Errorf("%s is nil in the Linux fixture", name)
+		}
+	}
+	if *s.OneWayP99Us != 900 || *s.GapP99Us != 20800 || *s.RadioPropP99Us != 3100 {
+		t.Errorf("values = %d %d %d", *s.OneWayP99Us, *s.GapP99Us, *s.RadioPropP99Us)
+	}
+	if s.RTTP99Us != 300 || s.RadioUpdateP99Us != 2500 || s.SecretToAckP99Us != 1500 {
+		t.Errorf("plain latencies = %d %d %d", s.RTTP99Us, s.RadioUpdateP99Us, s.SecretToAckP99Us)
+	}
+	if s.Parity == nil || !s.Parity.OK || s.Parity.ConnectMs != 95.2 {
+		t.Errorf("Parity = %+v", s.Parity)
+	}
+	// The v3 half of the line still decodes.
+	if s.Ping.Sent != 16000 || s.Health.GCCycles == nil || *s.Health.GCCycles != 3 || s.ControlLost.Alive != 2000 {
+		t.Errorf("v3 fields lost: %+v", s)
+	}
+
+	var d Step
+	if err := json.Unmarshal(fixture(t, "v4-step-d2.json"), &d); err != nil {
+		t.Fatal(err)
+	}
+	if d.Arm != "D2" || d.ArmLabel != "bot-only; real client: ROADMAP Phase 9" || d.Parity != nil || d.VoiceEndpoints != 1 {
+		t.Fatalf("D2 step = %+v", d)
+	}
+	for name, null := range map[string]bool{
+		"late_loss_60": d.LateLoss60 == nil, "late_loss_500": d.LateLoss500 == nil, "late_loss_ratio": d.LateLossRatio == nil,
+		"one_way_p50": d.OneWayP50Us == nil, "one_way_p99": d.OneWayP99Us == nil, "one_way_max": d.OneWayMaxUs == nil,
+		"one_way_actual": d.OneWayActualP99Us == nil, "jitter_p99": d.JitterP99Us == nil, "jitter_mean": d.JitterMeanUs == nil,
+		"gap": d.GapP99Us == nil, "radio_prop": d.RadioPropP99Us == nil,
+	} {
+		if !null {
+			t.Errorf("%s must decode to nil in the D2 fixture", name)
+		}
+	}
+	if got := notMeasured(d); got != "late_loss;one_way_p99" {
+		t.Errorf("notMeasured(D2) = %q", got)
+	}
+	if got := notMeasured(s); got != "" {
+		t.Errorf("notMeasured(v4 Linux) = %q", got)
+	}
+
+	f := ParseFeatures(fixture(t, "v4-features.json"), nil)
+	for _, k := range []string{"arm_d2", "latency", "opus_corpus", "org_op", "parity", "hello_ladder"} {
+		if !f.Set[k] {
+			t.Errorf("v4 features lack %q: %v", k, f.Names())
+		}
+	}
+	if f.Version != 3 {
+		t.Errorf("Version = %d", f.Version)
+	}
+}
+
+func TestV3StepStillDecodesWithoutV4Fields(t *testing.T) {
+	var s Step
+	if err := json.Unmarshal(fixture(t, "v3-step.json"), &s); err != nil {
+		t.Fatal(err)
+	}
+	if s.Schema != "" || s.Corpus != nil || s.LateLossRatio != nil || s.OneWayP99Us != nil || s.Parity != nil {
+		t.Fatalf("v3 step grew v4 values: %+v", s)
+	}
+	if got := notMeasured(s); got != "late_loss;one_way_p99" {
+		t.Fatalf("notMeasured(v3) = %q", got)
+	}
+}
+
+func TestNotMeasuredNamesEachMissingSide(t *testing.T) {
+	one, ratio := int64(5), 0.0
+	if got := notMeasured(Step{OneWayP99Us: &one}); got != "late_loss;one_way_p99" {
+		t.Errorf("late loss missing: %q", got)
+	}
+	if got := notMeasured(Step{LateLossRatio: &ratio}); got != "late_loss;one_way_p99" {
+		t.Errorf("one-way missing: %q", got)
+	}
+	if got := notMeasured(Step{LateLossRatio: &ratio, OneWayP99Us: &one}); got != "" {
+		t.Errorf("both measured: %q", got)
+	}
+}
+
+func TestParityLineCaptured(t *testing.T) {
+	b := NewBot(io.Discard, bytes.NewReader(fixture(t, "v4-run-s.ndjson")), BotHooks{})
+	st, err := b.Hold(context.Background(), time.Second, "step-3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Schema != "loadbot-step/4" {
+		t.Fatalf("step = %+v", st)
+	}
+	p, ok := b.Parity()
+	if !ok || !p.OK || p.Arm != "S" || p.ConnectMs != 95.2 || p.Path != "session.Connect" || p.Schema != "loadbot-parity/1" {
+		t.Fatalf("Parity = %+v, %v", p, ok)
+	}
+}
+
+func TestD2RunHasNoParityLine(t *testing.T) {
+	b := NewBot(io.Discard, bytes.NewReader(fixture(t, "v4-run-d2.ndjson")), BotHooks{})
+	if _, err := b.Hold(context.Background(), time.Second, "step-3"); err != nil {
+		t.Fatal(err)
+	}
+	if p, ok := b.Parity(); ok {
+		t.Fatalf("D2 run reported parity %+v", p)
+	}
+}
+
+func TestParityFailureIsAnArmFailureWithItsReason(t *testing.T) {
+	in := `{"type":"parity","schema":"loadbot-parity/1","arm":"S","ok":false,"connect_ms":0,"error":"auth: bad password","path":"session.Connect"}` + "\n" +
+		`{"type":"error","error":"parity failed"}` + "\n"
+	b := NewBot(io.Discard, strings.NewReader(in), BotHooks{})
+	_, err := b.Hold(context.Background(), time.Second, "step-1")
+	if err == nil || !strings.Contains(err.Error(), "parity: auth: bad password") {
+		t.Fatalf("err = %v, want one naming parity and the reason", err)
+	}
+	if p, ok := b.Parity(); !ok || p.OK {
+		t.Fatalf("Parity = %+v, %v", p, ok)
 	}
 }
