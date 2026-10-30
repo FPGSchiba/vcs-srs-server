@@ -311,7 +311,8 @@ func TestPeekReadsCPUBetweenReadings(t *testing.T) {
 	files["/proc/net/snmp"] = "Udp: RcvbufErrors SndbufErrors\nUdp: 0 0\nTcp: AttemptFails EstabResets OutRsts\nTcp: 1 2 3\n"
 	files["/proc/net/netstat"] = "TcpExt: TCPTimeouts\nTcpExt: 1\n"
 	p := &procSampler{
-		serverPID: 10, genPID: 20, serverNCPU: 1, serverCPUs: []int{0}, genNCPU: 1, voiceKey: "127.0.0.1:5002",
+		servers: []serverProc{{Role: "standalone", PID: 10, NCPU: 1, VoiceKey: "127.0.0.1:5002"}},
+		genPID:  20, serverCPUs: []int{0}, genNCPU: 1,
 		read: func(path string) ([]byte, error) {
 			if s, ok := files[path]; ok {
 				return []byte(s), nil

@@ -168,10 +168,10 @@ func (e *hostEnv) Start(ctx context.Context) (System, error) {
 		bot:  NewBot(stdin, stdout, BotHooks{OnProgress: e.onProgress, OnControlLost: e.onControlLost, Features: e.features}),
 		done: make(chan struct{}),
 		sampler: &procSampler{
-			serverPID: top.PIDs()[topology.Standalone], genPID: cmd.Process.Pid,
-			serverNCPU: 1, serverCPUs: e.serverCPUs, genNCPU: e.genNCPU,
-			voiceKey: voiceAddr, read: os.ReadFile,
-			ss: func() ([]byte, error) { return runCmd("ss", "-uamp") },
+			servers: []serverProc{{Role: "standalone", PID: top.PIDs()[topology.Standalone], NCPU: 1, VoiceKey: voiceAddr}},
+			genPID:  cmd.Process.Pid, serverCPUs: e.serverCPUs, genNCPU: e.genNCPU,
+			read: os.ReadFile,
+			ss:   func() ([]byte, error) { return runCmd("ss", "-uamp") },
 		},
 	}
 	go func() { _ = cmd.Wait(); close(s.done) }()
