@@ -33,7 +33,7 @@ Flags:
   --micro run|skip      default run. skip runs the legs without a prediction unless --predict FILE
                         or --leg-arg --predicted-knee=N is given (the prediction is context only)
   --predict FILE        a predict.json from an earlier run (with --micro skip)
-  --budget D            default 100m. The kit's leg budget
+  --budget D            default 100m. The kit's sweep budget per arm
   --leg-arg ARG         repeatable pass-through to vcs-benchkit leg (smoke runs only)
   --note TEXT           free text recorded in host.json
   --privileged-sysctl   docker mode only, opt-in. Runs the container --privileged with
@@ -433,16 +433,20 @@ write_records() {
 leg_diagnostics() { # LEG_DIR
   local d="$1" f srv
   [ "$dry_run" -eq 0 ] || return 0
-  for f in "$d"/loadbot-*.log "$d"/calibrate.log "$d"/reflect.log; do
+  # The leg layout (design I-6): calibration logs at the leg root, the rest per arm.
+  for f in "$d"/calibrate.log "$d"/reflect.log "$d"/*/loadbot-*.log; do
     [ -e "$f" ] || continue
     echo "== $f (last 50 lines) =="
     tail -n 50 "$f" 2>&1 || true
   done
-  srv="$(ls "$d"/server-*.log.gz 2>/dev/null | sort -V | tail -n 1 || true)"
+  srv="$(ls -t "$d"/*/server-*.log.gz 2>/dev/null | head -n 1 || true)"
   echo "== ${srv:-server log} (last 200 lines) =="
   if [ -n "$srv" ]; then zcat "$srv" 2>&1 | tail -n 200 || true; else echo "no server log kept"; fi
-  echo "== $d/manifest.json =="
-  cat "$d/manifest.json" 2>&1 || true
+  for f in "$d"/*/manifest.json; do
+    [ -e "$f" ] || continue
+    echo "== $f =="
+    cat "$f" 2>&1 || true
+  done
 }
 
 pipeline_native() {
@@ -618,6 +622,11 @@ pipeline_native() {
         if [ "$dry_run" -eq 1 ] && [ -n "${BENCH_HOST_FAKE_RESULTS:-}" ]; then
           mkdir -p "$dir/results/$k-$sc"
           printf 'FAKE results GOGC %s leg %s %s\n' "$v" "$k" "$sc" > "$dir/results/$k-$sc/results.md"
+          for a in ${arms//,/ }; do
+            [ "${BENCH_HOST_FAKE_MISSING_ARM:-}" = "$k-$sc/$a" ] && continue
+            mkdir -p "$dir/results/$k-$sc/$a"
+            : > "$dir/results/$k-$sc/$a/knees.csv"
+          done
         fi
         if ! run_tee "$dir/leg-$k-$sc.log" "${cmd[@]}"; then
           echo "bench-host: leg $k ($sc, GOGC $v) failed; continuing" >&2
@@ -632,12 +641,16 @@ pipeline_native() {
   echo "== aggregate =="
   for v in $variants; do
     dir="$out_dir/gogc-$v"
-    if [ "$dry_run" -eq 0 ]; then
-      local legs_done
-      local legs_want=$((repeats * (1 + $(printf '%s' "$scenario" | tr -cd ',' | wc -c | tr -d ' '))))
-      legs_done="$(find "$dir/results" -name knees.csv 2>/dev/null | wc -l | tr -d ' ')"
-      if [ "$legs_done" -ne "$legs_want" ]; then
-        echo "PARTIAL: GOGC $v: $legs_done of $legs_want legs aggregated; the statistics cover the surviving legs only"
+    if [ "$dry_run" -eq 0 ] || [ -n "${BENCH_HOST_FAKE_RESULTS:-}" ]; then
+      # A leg writes one knees.csv per finished arm (<leg>/<arm>/knees.csv), so the
+      # count is arm results against repeats x scenarios x arms.
+      local n_sc n_arms want got
+      n_sc=$((1 + $(printf '%s' "$scenario" | tr -cd ',' | wc -c | tr -d ' ')))
+      n_arms=$((1 + $(printf '%s' "$arms" | tr -cd ',' | wc -c | tr -d ' ')))
+      want=$((repeats * n_sc * n_arms))
+      got="$(find "$dir/results" -mindepth 3 -maxdepth 3 -name knees.csv 2>/dev/null | wc -l | tr -d ' ')"
+      if [ "$got" -ne "$want" ]; then
+        echo "PARTIAL: GOGC $v: $got of $want arm results ($repeats legs x $n_sc scenarios x $n_arms arms) aggregated; the statistics cover the surviving arms only"
       fi
     fi
     if [ "$dry_run" -eq 1 ] && [ -n "${BENCH_HOST_FAKE_RESULTS:-}" ]; then

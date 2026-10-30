@@ -523,14 +523,18 @@ jobs:
           OUT: bench-results-${{ github.run_id }}
           IN_REPEATS: ${{ inputs.repeats }}
           SCENARIOS: ${{ needs.build.outputs.scenarios }}
+          IN_ARMS: ${{ inputs.arms }}
           RUN_RESULT: ${{ needs.run.result }}
         run: |
           chmod +x bin/vcs-benchkit
-          want=$(( IN_REPEATS * $(jq length <<<"$SCENARIOS") ))
-          legs="$(find results -name leg.json 2>/dev/null | wc -l)"
-          if [ "$legs" -ne "$want" ]; then
-            echo "::warning::aggregating $legs of $want legs (run job result: $RUN_RESULT); the statistics cover the surviving legs only"
-            echo "PARTIAL: $legs of $want legs aggregated (run job result: $RUN_RESULT)" >> "$GITHUB_STEP_SUMMARY"
+          # leg.json is written even when every arm failed, so count finished
+          # arms instead: one results/<leg>/<arm>/knees.csv per arm that finished.
+          n_arms="$(awk -F, '{print NF}' <<<"$IN_ARMS")"
+          want=$(( IN_REPEATS * $(jq length <<<"$SCENARIOS") * n_arms ))
+          got="$(find results -mindepth 3 -maxdepth 3 -name knees.csv 2>/dev/null | wc -l)"
+          if [ "$got" -ne "$want" ]; then
+            echo "::warning::aggregating $got of $want arm results (run job result: $RUN_RESULT); the statistics cover the surviving arms only"
+            echo "PARTIAL: $got of $want arm results aggregated (run job result: $RUN_RESULT)" >> "$GITHUB_STEP_SUMMARY"
           fi
           # aggregate prints its table to this log; capture its status so the
           # summary is written even when it fails, then fail the step with it.

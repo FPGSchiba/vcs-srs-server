@@ -776,6 +776,11 @@ if jq -e '.server_pair == "n/a (1 cpu)" and .arms == ["S"] and .scenarios == ["o
 mx sysfs-no-smt --arms S --scenario all --repeats 1
 sm="$tmp/out/summary.md"
 in_order_file summary-md-scenarios "$sm" "## GOGC default" "### Leg 1, one-big-net" "### Leg 1, org-op" "### Aggregate"
+# completeness: every arm of every leg counts once (a leg holds one knees.csv per arm, not one in all)
+mx sysfs-no-smt --arms S,Seq,D2 --scenario all --repeats 1
+if [ "$rc" -eq 0 ] && [[ "$out" != *PARTIAL* ]]; then pass partial-quiet-full-matrix; else fail "partial-quiet-full-matrix (rc=$rc out=$out)"; fi
+BENCH_HOST_FAKE_MISSING_ARM=1-org-op/D2 mx sysfs-no-smt --arms S,Seq,D2 --scenario all --repeats 1
+if [[ "$out" == *"PARTIAL: GOGC default: 5 of 6 arm results (1 legs x 2 scenarios x 3 arms) aggregated"* ]]; then pass partial-counts-arms; else fail "partial-counts-arms ($out)"; fi
 # help: the guidance
 host --help
 ok=1
