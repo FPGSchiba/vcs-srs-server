@@ -219,6 +219,8 @@ func WriteStepsCSVLabeled(w io.Writer, o *Outcome, topology, label string) error
 		"arm_label", "fanout_pps", "presses", "dual_presses", "voice_endpoints", "late_loss_500",
 		"one_way_p50_ms", "one_way_max_ms", "one_way_actual_p99_ms", "jitter_p99_ms", "jitter_mean_ms", "gap_p99_ms",
 		"rtt_p99_us", "radio_update_p99_us", "radio_prop_p99_us", "secret_to_ack_p99_us", "corpus_sha256", "server_cpu_by_role",
+		// Appended by W6 S5 (2 columns, see nodeCells): the D2 node poller.
+		"nodes_min", "node_clients",
 	}
 	if err := cw.Write(header); err != nil {
 		return err
@@ -246,6 +248,7 @@ func WriteStepsCSVLabeled(w io.Writer, o *Outcome, topology, label string) error
 		rec = append(rec, joinCells(r)...)
 		rec = append(rec, round2Cells(r)...)
 		rec = append(rec, v4Cells(r)...)
+		rec = append(rec, nodeCells(r)...)
 		if len(rec) != len(header) {
 			return fmt.Errorf("steps.csv: row has %d cells for %d columns", len(rec), len(header))
 		}

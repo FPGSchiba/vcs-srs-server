@@ -32,6 +32,9 @@ type Window struct {
 	// keyed by role (W6 S5). nil for a single-process (S) arm until the
 	// multi-process sampler fills it.
 	ServerCPUByRole map[string]float64
+	// Nodes is the distributed arm's distributionStatus reading over the
+	// window; the zero value (Polls 0) is "not measured" (S, Seq).
+	Nodes NodeWindow
 	// ServerDrops is the increase of the server socket's drop counter.
 	ServerDrops uint64
 	// SoftIRQTicks is the softirq clock ticks on the server's CPU set; StealTicks
@@ -172,8 +175,10 @@ type Row struct {
 	Held   bool
 	Step   Step
 	Window Window
-	Logs   LogCounts
-	Data   sweep.StepData
+	// Nodes is the hold's node reading, a copy of Window.Nodes (D2 only).
+	Nodes NodeWindow
+	Logs  LogCounts
+	Data  sweep.StepData
 	// SettleSeconds is the time from the end of the ramp to the measured hold.
 	SettleSeconds float64
 	// Joins is the load bot's account of this step's ramp: how many bots it
@@ -709,7 +714,7 @@ func (d *Driver) measure(ctx context.Context, kind string, n int, hold time.Dura
 	}
 	st.ResourceExhausted.Ramp += probeRex.Ramp
 	st.ResourceExhausted.Settle += probeRex.Settle
-	row.Held, row.Step, row.Window = true, st, win
+	row.Held, row.Step, row.Window, row.Nodes = true, st, win, win.Nodes
 	row.Logs = CountLog(after).Sub(CountLog(before))
 	row.Data = sweep.StepData{
 		N: n, LossRatio: st.LossRatio,
@@ -724,6 +729,9 @@ func (d *Driver) measure(ctx context.Context, kind string, n int, hold time.Dura
 		ShardQueueFull: row.Logs.ShardQueueFull, UpdateStreamBehind: row.Logs.UpdateStreamBehind,
 		NodeFeedBehind: row.Logs.NodeFeedBehind, NodeDeregistered: row.Logs.NodeDeregistered,
 		GeneratorViolations: st.Violations, GenCPU: win.GenCPU,
+	}
+	if win.Nodes.Polls > 0 {
+		row.Data.NodesWant, row.Data.NodesMin = expectedNodes, win.Nodes.Min
 	}
 	row.Outcome, row.Reasons = sweep.Classify(row.Data, d.cfg.Bounds)
 	if win.Err != "" {

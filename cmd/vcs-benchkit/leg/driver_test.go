@@ -593,6 +593,38 @@ func TestDriverServerCPUOverBoundIsABreach(t *testing.T) {
 	}
 }
 
+func TestDriverNodeCountDropIsABreachAndKeepsTheNodeReading(t *testing.T) {
+	w := &fakeWorld{kneeN: 1 << 30,
+		winHook: func(n int, win *Window) {
+			win.Nodes = NodeWindow{Polls: 3, Min: 3, Clients: map[string]int{"nodeA": n}}
+			if n >= 400 {
+				win.Nodes.Min = 2
+			}
+		}}
+	out, err := NewDriver(w, testConfig()).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := sweepRow(t, out, 400)
+	if r.Outcome != sweep.Breach || !strings.Contains(strings.Join(r.Reasons, ";"), "node count dropped") {
+		t.Fatalf("row = %+v, want a node count breach", r)
+	}
+	if r.Nodes.Min != 2 || r.Nodes.Clients["nodeA"] != 400 {
+		t.Errorf("Row.Nodes = %+v, want the hold's reading", r.Nodes)
+	}
+}
+
+func TestDriverNoNodePollsIsNotABreach(t *testing.T) {
+	w := &fakeWorld{kneeN: 1 << 30}
+	out, err := NewDriver(w, testConfig()).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := sweepRow(t, out, 400); r.Outcome != sweep.Pass {
+		t.Fatalf("row = %+v, want a pass without node polls", r)
+	}
+}
+
 func TestDriverResourceExhaustedInTheHoldIsABreach(t *testing.T) {
 	w := &fakeWorld{kneeN: 1 << 30,
 		stepHook: func(n int, label string, st *Step) {

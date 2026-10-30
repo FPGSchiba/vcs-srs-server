@@ -61,8 +61,8 @@ func TestWriteStepsCSVAppendsJoinColumns(t *testing.T) {
 	hdr := recs[0]
 	// The first 60 columns are a contract; round 2 appended 27 more and W6 S5
 	// 18 (both checked below).
-	if len(hdr) != len(want)+27+len(stepsCSVV4) {
-		t.Fatalf("header has %d columns, want %d: %v", len(hdr), len(want)+27+len(stepsCSVV4), hdr)
+	if len(hdr) != len(want)+27+len(stepsCSVV4)+len(stepsCSVNodes) {
+		t.Fatalf("header has %d columns, want %d: %v", len(hdr), len(want)+27+len(stepsCSVV4)+len(stepsCSVNodes), hdr)
 	}
 	for i := range want {
 		if hdr[i] != want[i] {
@@ -166,8 +166,8 @@ func TestWriteStepsCSVAppendsRound2Columns(t *testing.T) {
 		t.Fatalf("test table has %d columns", len(want))
 	}
 	hdr := recs[0]
-	if len(hdr) != len(want)+len(stepsCSVV4) {
-		t.Fatalf("header has %d columns, want %d", len(hdr), len(want)+len(stepsCSVV4))
+	if len(hdr) != len(want)+len(stepsCSVV4)+len(stepsCSVNodes) {
+		t.Fatalf("header has %d columns, want %d", len(hdr), len(want)+len(stepsCSVV4)+len(stepsCSVNodes))
 	}
 	for i := range want {
 		if hdr[i] != want[i] {
@@ -388,6 +388,9 @@ func TestPredictedText(t *testing.T) {
 }
 
 // stepsCSVV4 are the 18 columns W6 S5 appended after round 2.
+// stepsCSVNodes are the two columns the D2 node poller appended.
+var stepsCSVNodes = []string{"nodes_min", "node_clients"}
+
 var stepsCSVV4 = []string{
 	"arm_label", "fanout_pps", "presses", "dual_presses", "voice_endpoints", "late_loss_500",
 	"one_way_p50_ms", "one_way_max_ms", "one_way_actual_p99_ms", "jitter_p99_ms", "jitter_mean_ms", "gap_p99_ms",
@@ -423,7 +426,7 @@ func TestWriteStepsCSVV4ColumnsAreAppendedAndHonest(t *testing.T) {
 		t.Fatal(err)
 	}
 	hdr := recs[0]
-	want := append(append(append(append([]string{}, stepsCSVFirst42...), stepsCSVAppended...), stepsCSVRound2...), stepsCSVV4...)
+	want := append(append(append(append(append([]string{}, stepsCSVFirst42...), stepsCSVAppended...), stepsCSVRound2...), stepsCSVV4...), stepsCSVNodes...)
 	if len(hdr) != len(want) {
 		t.Fatalf("header has %d columns, want %d", len(hdr), len(want))
 	}
