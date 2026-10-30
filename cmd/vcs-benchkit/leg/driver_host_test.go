@@ -199,3 +199,21 @@ func TestDriverTimeBoundCarriesTheLimit(t *testing.T) {
 		t.Errorf("result = %q", got)
 	}
 }
+
+// An error in the confirm/overload after a sweep that finished time-bound at
+// N_max keeps the N_max limit name, not the bare time-bound text.
+func TestDriverLateErrorKeepsNMaxLimit(t *testing.T) {
+	w := &fakeWorld{kneeN: 1 << 30, setNErrAt: 700}
+	cfg := testConfig()
+	cfg.Predicted, cfg.Start, cfg.NMax, cfg.NMaxBy = 0, 100, 400, "memory"
+	out, err := NewDriver(w, cfg).Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run = %v, want nil", err)
+	}
+	if out.StoppedEarly == "" {
+		t.Fatalf("StoppedEarly empty; the error path was not taken (notes %v)", out.Notes)
+	}
+	if out.Result.Kind != sweep.TimeBound || out.Result.N != 400 || out.Result.Limit != "memory" {
+		t.Errorf("result = %+v, want time-bound at 400 limited by memory", out.Result)
+	}
+}

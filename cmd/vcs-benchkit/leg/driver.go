@@ -237,6 +237,7 @@ type Driver struct {
 	start      time.Time
 	out        Outcome
 	sw         *sweep.Sweep
+	sweepDone  bool // d.out.Result is the finished sweep's result; Run keeps it on a late error
 }
 
 // NewDriver fills the defaults a zero Config leaves open.
@@ -919,7 +920,12 @@ func (d *Driver) Run(ctx context.Context) (*Outcome, error) {
 	if err == nil || d.sw == nil || len(rowsOf(d.out.Rows, "sweep")) == 0 {
 		return out, err
 	}
-	d.out.Result = d.sw.Stop()
+	if !d.sweepDone {
+		d.out.Result = d.sw.Stop()
+		if d.out.Result.Kind == sweep.BelowRange {
+			d.note("no sweep step passed before the error, so \"below range\" may only mean the leg ended early")
+		}
+	}
 	d.out.StoppedEarly = err.Error()
 	d.note("stopped early: %v; the result is the best bracket so far", err)
 	return &d.out, nil
@@ -1003,6 +1009,7 @@ func (d *Driver) run(ctx context.Context) (*Outcome, error) {
 	if r := &d.out.Result; r.Kind == sweep.TimeBound && r.N == d.cfg.NMax && r.Limit == "" {
 		r.Limit = d.cfg.NMaxBy
 	}
+	d.sweepDone = true
 
 	// Confirm at the found knee, then one overload step at 2x.
 	k := d.out.Result.N
