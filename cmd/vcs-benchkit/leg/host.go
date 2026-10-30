@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -130,11 +129,7 @@ func (e *hostEnv) Start(ctx context.Context) (System, error) {
 		return nil, err
 	}
 	control, voiceAddr := top.Addr(topology.Control), top.Addr(topology.Standalone)
-	name, argv, pinEnv, err := PinCommand(runtime.GOOS, e.loadbotBin, append([]string{
-		"run", "--scenario", e.scenario, "--arm", "S",
-		"--control", control, "--voice", voiceAddr, "--allow", control + "," + voiceAddr,
-		"--passwords", pw, "--unit", "LDBT", "--seed", strconv.FormatInt(e.seed, 10),
-	}, BotRunArgsWith(e.features, botParamsOr(e.bot))...), e.genSet)
+	name, argv, pinEnv, err := PinCommand(runtime.GOOS, e.loadbotBin, BotArgv("S", e.scenario, ArmAddrs{Control: control, Voice: voiceAddr}, pw, e.seed, e.features, botParamsOr(e.bot)), e.genSet)
 	if err != nil {
 		_ = top.Stop()
 		return nil, err

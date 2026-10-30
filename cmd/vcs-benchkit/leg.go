@@ -22,7 +22,7 @@ func parseLegFlags(args []string, errw io.Writer) (leg.Options, error) {
 	fs.StringVar(&o.ServerBin, "server-bin", "", "headless server binary (required)")
 	fs.StringVar(&o.LoadbotBin, "loadbot-bin", "", "vcs-loadbot binary (required)")
 	fs.StringVar(&o.Scenario, "scenario", "one-big-net", "scenario (v1: one-big-net)")
-	fs.StringVar(&o.Arms, "arms", "S", "arms to run (S4: S only)")
+	fs.StringVar(&o.Arms, "arms", "S", "arms to run: comma list of S, Seq, D2 (the multi-arm leg runs S on one-big-net until F-T5)")
 	fs.Int64Var(&o.Seed, "seed", 1, "seed")
 	fs.StringVar(&o.OutDir, "out", "", "output directory (required)")
 	fs.StringVar(&o.Q6, "q6", "", "the user's Q6 CPU-split decision, recorded verbatim in the manifest")

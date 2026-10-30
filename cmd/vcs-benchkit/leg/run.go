@@ -162,13 +162,15 @@ func newManifest(o Options, pins map[string]PinRecord, probeRaw []byte) *Manifes
 	}
 }
 
-// Validate checks resolved options. S4 builds the S arm of one-big-net only.
+// Validate checks resolved options: Arms is a comma list of arms, Scenario one
+// of Scenarios, and every arm must fit the server and generator sets.
 func (o *Options) Validate() error {
+	arms, armsErr := ParseArms(o.Arms)
 	switch {
-	case o.Arms != "S":
-		return fmt.Errorf("--arms %q: S4 builds the S arm only; Seq and D2 arrive with S5", o.Arms)
-	case o.Scenario != "one-big-net":
-		return fmt.Errorf("--scenario %q: v1 runs one-big-net only", o.Scenario)
+	case armsErr != nil:
+		return armsErr
+	case !ValidScenario(o.Scenario):
+		return fmt.Errorf("--scenario %q: want one of %s", o.Scenario, strings.Join(Scenarios, ", "))
 	case o.ServerBin == "" || o.LoadbotBin == "" || o.OutDir == "":
 		return errors.New("--server-bin, --loadbot-bin and --out are required")
 	case o.ServerSet == "" || o.GenSet == "":
@@ -198,7 +200,12 @@ func (o *Options) Validate() error {
 	case o.Bot.GRPCLog != "" && o.Bot.GRPCLog != "off" && o.Bot.GRPCLog != "info" && o.Bot.GRPCLog != "warning" && o.Bot.GRPCLog != "error":
 		return fmt.Errorf("--grpc-log %q: want info, warning, error or off", o.Bot.GRPCLog)
 	}
-	return disjoint(o.ServerSet, o.GenSet)
+	for _, a := range arms {
+		if _, err := PlanArm(a, o.ServerSet, o.GenSet); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func readPortRange(read func(string) ([]byte, error)) ([2]int, error) {
@@ -235,13 +242,15 @@ func readUlimitN() (int, error) {
 // 6.3). The calibration reflector gets the whole server set and the load
 // generator its own set. The sets must be valid and disjoint.
 func BuildPins(serverSet, genSet string) (map[string]PinRecord, error) {
-	if err := disjoint(serverSet, genSet); err != nil {
+	plan, err := PlanArm("S", serverSet, genSet)
+	if err != nil {
 		return nil, err
 	}
 	serverCPUs, _ := CPUList(serverSet)
 	genCPUs, _ := CPUList(genSet)
+	sp := plan.Server[topology.Standalone]
 	return map[string]PinRecord{
-		"server":    {CPUs: strconv.Itoa(serverCPUs[0]), GOMAXPROCS: 1, Shards: topology.ShardCount(1)},
+		"server":    {CPUs: sp.CPUs, GOMAXPROCS: sp.GOMAXPROCS, Shards: topology.ShardCount(sp.GOMAXPROCS)},
 		"reflector": {CPUs: serverSet, GOMAXPROCS: len(serverCPUs)},
 		"generator": {CPUs: genSet, GOMAXPROCS: len(genCPUs)},
 	}, nil
@@ -377,6 +386,11 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	if err := o.Validate(); err != nil {
 		return err
 	}
+	// Until the multi-arm leg (F-T5) lands, Run executes one S arm of one-big-net;
+	// refuse the rest loudly rather than run something other than what was asked.
+	if o.Arms != "S" || o.Scenario != "one-big-net" {
+		return fmt.Errorf("--arms %q --scenario %q: Run executes S on one-big-net only until the multi-arm leg lands", o.Arms, o.Scenario)
+	}
 	if o.readFile == nil {
 		o.readFile = os.ReadFile
 	}
@@ -503,7 +517,7 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	}
 	// The host decides N_max, the start and the join scale; the prediction is
 	// context only.
-	calBots := int(cal.ReceivePPS / rxPPSPerBot)
+	calBots := int(cal.ReceivePPS / RxPPSPerBot(o.Scenario))
 	baseScale := o.Bot.JoinRateScale
 	caps := planHost(&o, feats, memTop, calBots, remaining, portRange, ulimitN, len(genCPUs))
 	m.recordCaps(caps, calBots)
