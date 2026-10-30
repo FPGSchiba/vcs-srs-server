@@ -541,7 +541,7 @@ jobs:
           status=0
           bin/vcs-benchkit aggregate --in results --out "$OUT" || status=$?
           if [ -f "$OUT/aggregate.md" ]; then
-            # It carries its own "### Aggregate: k of m legs finished" heading.
+            # It carries its own "### Aggregate: k of m arm runs finished" heading.
             cat "$OUT/aggregate.md" >> "$GITHUB_STEP_SUMMARY"
           fi
           if [ -f "$OUT/aggregate.csv" ]; then

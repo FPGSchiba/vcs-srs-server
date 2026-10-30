@@ -238,9 +238,11 @@ type aggRow struct {
 	censored, unconfirmed     bool
 }
 
-// renderAggregateMarkdown builds aggregate.md: one row per leg directory, so a
-// failed leg is visible, then the statistics table when any leg finished.
-func renderAggregateMarkdown(legs []legInfo, rows []aggRow, ratios []ratioRow, lbl string) string {
+// renderAggregateMarkdown builds aggregate.md: one row per leg directory (per
+// arm directory in the multi-arm layout), so a failed run is visible, then the
+// statistics table when any finished. multiArmLegs is the number of leg.json
+// files: when non-zero the rows are arm runs and the heading says so.
+func renderAggregateMarkdown(legs []legInfo, rows []aggRow, ratios []ratioRow, multiArmLegs int, lbl string) string {
 	var b bytes.Buffer
 	finished := 0
 	for _, l := range legs {
@@ -248,7 +250,11 @@ func renderAggregateMarkdown(legs []legInfo, rows []aggRow, ratios []ratioRow, l
 			finished++
 		}
 	}
-	fmt.Fprintf(&b, "### Aggregate: %d of %d legs finished\n\n", finished, len(legs))
+	if multiArmLegs > 0 {
+		fmt.Fprintf(&b, "### Aggregate: %d of %d arm runs finished (%d legs)\n\n", finished, len(legs), multiArmLegs)
+	} else {
+		fmt.Fprintf(&b, "### Aggregate: %d of %d legs finished\n\n", finished, len(legs))
+	}
 	b.WriteString("| leg | result | N | kind | calibration pps | steps (N:outcome) | control lost (steps) | bursts (silent/live failures) | error |\n")
 	b.WriteString("|---|---|---|---|---|---|---|---|---|\n")
 	for _, l := range legs {
@@ -376,7 +382,7 @@ func runAggregate(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	md := renderAggregateMarkdown(infos, rows, ratios, *lbl)
+	md := renderAggregateMarkdown(infos, rows, ratios, len(legJSONs), *lbl)
 	if err := os.WriteFile(filepath.Join(*out, "aggregate.md"), []byte(md), 0o644); err != nil {
 		return err
 	}

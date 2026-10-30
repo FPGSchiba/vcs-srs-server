@@ -499,6 +499,10 @@ func TestAggregateRatiosAcrossLegs(t *testing.T) {
 		t.Fatalf("D2/S = %v", d2)
 	}
 	md, _ := os.ReadFile(filepath.Join(out, "aggregate.md"))
+	// three legs of three arms: the heading counts arm runs, not legs.
+	if !strings.Contains(string(md), "### Aggregate: 9 of 9 arm runs finished (3 legs)") {
+		t.Fatalf("aggregate.md heading does not count arm runs:\n%s", md)
+	}
 	if !strings.Contains(string(md), "Within-leg ratios") || !strings.Contains(string(md), "D2/S") {
 		t.Fatalf("aggregate.md lacks ratios table:\n%s", md)
 	}
