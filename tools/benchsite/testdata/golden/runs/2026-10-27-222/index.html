@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Run 2026-10-27-222</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--muted:#555;--line:#c8c8c8;--band:#fff4cf;--c1:#1f5fbf;--c2:#b33a00;--grid:#e2e2e2}
+@media (prefers-color-scheme:dark){:root{--bg:#15171a;--fg:#e8e8e8;--muted:#a8a8a8;--line:#444;--band:#4a3d12;--c1:#7db0ff;--c2:#ff9d66;--grid:#2c2f33}}
+body{background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,sans-serif;margin:0 auto;max-width:1200px;padding:0 16px 48px}
+.label{background:var(--band);border:1px solid var(--line);padding:8px 12px;margin:16px 0;font-weight:600}
+table{border-collapse:collapse;display:block;overflow-x:auto;margin:8px 0 16px}
+th,td{border:1px solid var(--line);padding:4px 8px;text-align:left;white-space:nowrap}
+th{font-weight:600}
+td.n{text-align:right;font-variant-numeric:tabular-nums}
+.note{color:var(--muted)}
+dl{display:grid;grid-template-columns:max-content 1fr;gap:2px 16px}
+dt{color:var(--muted)}dd{margin:0}
+svg{max-width:100%;height:auto}
+svg text{fill:var(--fg);font:11px system-ui,sans-serif}
+svg .grid{stroke:var(--grid);stroke-width:1}
+svg .axis{stroke:var(--muted);stroke-width:1;fill:none}
+svg .loss{stroke:var(--c1);fill:none;stroke-width:2}
+svg .p99{stroke:var(--c2);fill:none;stroke-width:2;stroke-dasharray:6 3}
+svg .lossdot{fill:var(--c1)}svg .p99dot{fill:var(--c2)}
+</style>
+</head>
+<body>
+<div class="label" role="note">Shared GitHub runner (4 vCPU), loopback, relative only. Not a capacity figure.</div>
+
+<p><a href="../../index.html">All runs</a></p>
+<h1>Run 2026-10-27-222</h1>
+<p>
+<a href="https://github.com/FPGSchiba/vcs-srs-server/actions/runs/222" rel="noopener">Workflow run</a> | 
+Server <a href="https://github.com/FPGSchiba/vcs-srs-server/commit/e2fe62b0000000000000000000000000000000aa" rel="noopener">e2fe62b</a> |
+Client <a href="https://github.com/FPGSchiba/vcs-srs-client/commit/b55823e" rel="noopener">b55823e</a>
+</p>
+
+<h2>Comparison with an earlier run</h2>
+
+<p>vs 2026-10-20-111 (same image version 20261020.1.0, same topology). Knee N medians:</p>
+<table>
+<tr><th>Scenario</th><th>Arm</th><th>This run</th><th>2026-10-20-111</th><th>Change</th></tr>
+<tr><td>one-big-net</td><td>S</td><td class="n">3310</td><td class="n">3010</td><td class="n">&#43;10.0%</td></tr><tr><td>one-big-net</td><td>Seq</td><td class="n">3420</td><td class="n">3110</td><td class="n">&#43;10.0%</td></tr><tr><td>one-big-net</td><td>D2</td><td class="n">3200</td><td class="n">2910</td><td class="n">&#43;10.0%</td></tr><tr><td>org-op</td><td>S</td><td class="n">3330</td><td class="n">-</td><td class="n">-</td></tr>
+</table>
+
+
+
+<h2 id="scenario-one-big-net">Scenario one-big-net</h2>
+<h3>Headline</h3>
+<table>
+<tr><th>Arm</th><th>vCPUs</th><th>Topology</th><th>Knee N (median, min-max)</th><th>Knee per vCPU</th><th>Ratio vs S</th><th>Ratio vs Seq</th><th>Predicted (B-0)</th><th>Join p99 ms (closed-loop, &lt;= 16 in flight)</th><th>Secret-prop p99 ms (D2)</th><th>CPU split (highest passing step)</th><th>Server-set softirq ticks</th><th>Generator receive capacity pps</th><th>Deregistrations</th></tr>
+<tr>
+<td>S</td><td class="n">2</td><td>2 hyperthreads of 1 core</td><td class="n">3310 (3310-3320)</td><td class="n">1655</td><td class="n">-</td><td class="n">-</td><td class="n">3800</td><td class="n">52.0</td><td class="n">-</td><td>server=0.20</td><td class="n">200</td><td class="n">&gt;= 97900</td><td class="n">0</td>
+</tr><tr>
+<td>Seq</td><td class="n">-</td><td>2 hyperthreads of 1 core</td><td class="n">3420 (3420-3430)</td><td class="n">-</td><td class="n">1.02 (0.98-1.10)</td><td class="n">-</td><td class="n">3800</td><td class="n">52.0</td><td class="n">-</td><td>server=0.20</td><td class="n">200</td><td class="n">&gt;= 97900</td><td class="n">0</td>
+</tr><tr>
+<td>D2 <span class="note">(bot-only; real client: ROADMAP Phase 9)</span></td><td class="n">2</td><td>2 hyperthreads of 1 core</td><td class="n">3200 (3200-3210)</td><td class="n">1600</td><td class="n">0.97 (0.90-1.00)</td><td class="n">0.95 (0.90-0.99)</td><td class="n">3800</td><td class="n">52.0</td><td class="n">1.2</td><td>control=0.05 node=0.20 global=0.05</td><td class="n">200</td><td class="n">&gt;= 97900</td><td class="n">0</td>
+</tr>
+</table>
+<p class="note">On one-big-net the expected Seq/S and D2/S ratios are about 1; a clear deviation is a validity alarm, not a finding.</p>
+
+<h3>Knee charts</h3>
+<figure><figcaption>S: loss and one-way p99 against N (median across legs)</figcaption><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 280" width="560" role="img" aria-labelledby="t-one-big-net-S"><title id="t-one-big-net-S">one-big-net S: loss percent and one-way p99 milliseconds against N</title><line class="grid" x1="56.0" y1="240.0" x2="504.0" y2="240.0"/><text x="50.0" y="244.0" text-anchor="end">0.0</text><text x="510.0" y="244.0">0.0</text><line class="grid" x1="56.0" y1="184.0" x2="504.0" y2="184.0"/><text x="50.0" y="188.0" text-anchor="end">4.0</text><text x="510.0" y="188.0">9.0</text><line class="grid" x1="56.0" y1="128.0" x2="504.0" y2="128.0"/><text x="50.0" y="132.0" text-anchor="end">8.0</text><text x="510.0" y="132.0">18.0</text><line class="grid" x1="56.0" y1="72.0" x2="504.0" y2="72.0"/><text x="50.0" y="76.0" text-anchor="end">12.0</text><text x="510.0" y="76.0">27.0</text><line class="grid" x1="56.0" y1="16.0" x2="504.0" y2="16.0"/><text x="50.0" y="20.0" text-anchor="end">16.0</text><text x="510.0" y="20.0">36.0</text><text x="112.0" y="256.0" text-anchor="middle">1000</text><text x="168.0" y="256.0" text-anchor="middle">2000</text><text x="280.0" y="256.0" text-anchor="middle">4000</text><text x="504.0" y="256.0" text-anchor="middle">8000</text><line class="axis" x1="56.0" y1="240.0" x2="504.0" y2="240.0"/><text x="280.0" y="274.0" text-anchor="middle">N (bots)</text><text x="12" y="128.0" text-anchor="middle" transform="rotate(-90 12 128.0)">loss % (solid)</text><text x="550.0" y="128.0" text-anchor="middle" transform="rotate(90 550.0 128.0)">one-way p99 ms (dashed)</text><polyline class="loss" points="112.0,240.0 168.0,240.0 280.0,128.0 504.0,16.0"/><circle class="lossdot" cx="112.0" cy="240.0" r="3"/><circle class="lossdot" cx="168.0" cy="240.0" r="3"/><circle class="lossdot" cx="280.0" cy="128.0" r="3"/><circle class="lossdot" cx="504.0" cy="16.0" r="3"/><polyline class="p99" points="112.0,212.0 168.0,184.0 280.0,128.0 504.0,16.0"/><circle class="p99dot" cx="112.0" cy="212.0" r="3"/><circle class="p99dot" cx="168.0" cy="184.0" r="3"/><circle class="p99dot" cx="280.0" cy="128.0" r="3"/><circle class="p99dot" cx="504.0" cy="16.0" r="3"/></svg></figure><figure><figcaption>Seq: loss and one-way p99 against N (median across legs)</figcaption><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 280" width="560" role="img" aria-labelledby="t-one-big-net-Seq"><title id="t-one-big-net-Seq">one-big-net Seq: loss percent and one-way p99 milliseconds against N</title><line class="grid" x1="56.0" y1="240.0" x2="504.0" y2="240.0"/><text x="50.0" y="244.0" text-anchor="end">0.0</text><text x="510.0" y="244.0">0.0</text><line class="grid" x1="56.0" y1="184.0" x2="504.0" y2="184.0"/><text x="50.0" y="188.0" text-anchor="end">4.0</text><text x="510.0" y="188.0">9.0</text><line class="grid" x1="56.0" y1="128.0" x2="504.0" y2="128.0"/><text x="50.0" y="132.0" text-anchor="end">8.0</text><text x="510.0" y="132.0">18.0</text><line class="grid" x1="56.0" y1="72.0" x2="504.0" y2="72.0"/><text x="50.0" y="76.0" text-anchor="end">12.0</text><text x="510.0" y="76.0">27.0</text><line class="grid" x1="56.0" y1="16.0" x2="504.0" y2="16.0"/><text x="50.0" y="20.0" text-anchor="end">16.0</text><text x="510.0" y="20.0">36.0</text><text x="112.0" y="256.0" text-anchor="middle">1000</text><text x="168.0" y="256.0" text-anchor="middle">2000</text><text x="280.0" y="256.0" text-anchor="middle">4000</text><text x="504.0" y="256.0" text-anchor="middle">8000</text><line class="axis" x1="56.0" y1="240.0" x2="504.0" y2="240.0"/><text x="280.0" y="274.0" text-anchor="middle">N (bots)</text><text x="12" y="128.0" text-anchor="middle" transform="rotate(-90 12 128.0)">loss % (solid)</text><text x="550.0" y="128.0" text-anchor="middle" transform="rotate(90 550.0 128.0)">one-way p99 ms (dashed)</text><polyline class="loss" points="112.0,240.0 168.0,240.0 280.0,128.0 504.0,16.0"/><circle class="lossdot" cx="112.0" cy="240.0" r="3"/><circle class="lossdot" cx="168.0" cy="240.0" r="3"/><circle class="lossdot" cx="280.0" cy="128.0" r="3"/><circle class="lossdot" cx="504.0" cy="16.0" r="3"/><polyline class="p99" points="112.0,212.0 168.0,184.0 280.0,128.0 504.0,16.0"/><circle class="p99dot" cx="112.0" cy="212.0" r="3"/><circle class="p99dot" cx="168.0" cy="184.0" r="3"/><circle class="p99dot" cx="280.0" cy="128.0" r="3"/><circle class="p99dot" cx="504.0" cy="16.0" r="3"/></svg></figure><figure><figcaption>D2: loss and one-way p99 against N (median across legs)</figcaption><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 280" width="560" role="img" aria-labelledby="t-one-big-net-D2"><title id="t-one-big-net-D2">one-big-net D2: loss percent and one-way p99 milliseconds against N</title><line class="grid" x1="56.0" y1="240.0" x2="504.0" y2="240.0"/><text x="50.0" y="244.0" text-anchor="end">0.0</text><text x="510.0" y="244.0">0.0</text><line class="grid" x1="56.0" y1="184.0" x2="504.0" y2="184.0"/><text x="50.0" y="188.0" text-anchor="end">4.0</text><text x="510.0" y="188.0">9.0</text><line class="grid" x1="56.0" y1="128.0" x2="504.0" y2="128.0"/><text x="50.0" y="132.0" text-anchor="end">8.0</text><text x="510.0" y="132.0">18.0</text><line class="grid" x1="56.0" y1="72.0" x2="504.0" y2="72.0"/><text x="50.0" y="76.0" text-anchor="end">12.0</text><text x="510.0" y="76.0">27.0</text><line class="grid" x1="56.0" y1="16.0" x2="504.0" y2="16.0"/><text x="50.0" y="20.0" text-anchor="end">16.0</text><text x="510.0" y="20.0">36.0</text><text x="112.0" y="256.0" text-anchor="middle">1000</text><text x="168.0" y="256.0" text-anchor="middle">2000</text><text x="280.0" y="256.0" text-anchor="middle">4000</text><text x="504.0" y="256.0" text-anchor="middle">8000</text><line class="axis" x1="56.0" y1="240.0" x2="504.0" y2="240.0"/><text x="280.0" y="274.0" text-anchor="middle">N (bots)</text><text x="12" y="128.0" text-anchor="middle" transform="rotate(-90 12 128.0)">loss % (solid)</text><text x="550.0" y="128.0" text-anchor="middle" transform="rotate(90 550.0 128.0)">one-way p99 ms (dashed)</text><polyline class="loss" points="112.0,240.0 168.0,240.0 280.0,128.0 504.0,16.0"/><circle class="lossdot" cx="112.0" cy="240.0" r="3"/><circle class="lossdot" cx="168.0" cy="240.0" r="3"/><circle class="lossdot" cx="280.0" cy="128.0" r="3"/><circle class="lossdot" cx="504.0" cy="16.0" r="3"/><polyline class="p99" points="112.0,212.0 168.0,184.0 280.0,128.0 504.0,16.0"/><circle class="p99dot" cx="112.0" cy="212.0" r="3"/><circle class="p99dot" cx="168.0" cy="184.0" r="3"/><circle class="p99dot" cx="280.0" cy="128.0" r="3"/><circle class="p99dot" cx="504.0" cy="16.0" r="3"/></svg></figure>
+
+<h3>Ratios</h3>
+<table>
+<tr><th>Ratio</th><th>Legs</th><th>Median</th><th>Min</th><th>Max</th><th>Censored legs</th><th>Topology</th></tr>
+<tr><td>Seq/S</td><td class="n">2</td><td class="n">1.02</td><td class="n">0.98</td><td class="n">1.10</td><td class="n">0</td><td>2 hyperthreads of 1 core</td></tr><tr><td>D2/S</td><td class="n">2</td><td class="n">0.97</td><td class="n">0.90</td><td class="n">1.00</td><td class="n">0</td><td>2 hyperthreads of 1 core</td></tr><tr><td>D2/Seq</td><td class="n">2</td><td class="n">0.95</td><td class="n">0.90</td><td class="n">0.99</td><td class="n">0</td><td>2 hyperthreads of 1 core</td></tr>
+</table>
+
+<h3 id="predicted-one-big-net">Predicted vs measured</h3>
+<table>
+<tr><th>Arm</th><th>Predicted knee N</th><th>Measured median N</th><th>Measured / predicted</th></tr>
+<tr><td>S</td><td class="n">3800</td><td class="n">3310</td><td class="n">0.87</td></tr><tr><td>Seq</td><td class="n">3800</td><td class="n">3420</td><td class="n">0.90</td></tr><tr><td>D2</td><td class="n">3800</td><td class="n">3200</td><td class="n">0.84</td></tr>
+</table>
+
+<h2 id="scenario-org-op">Scenario org-op</h2>
+<h3>Headline</h3>
+<table>
+<tr><th>Arm</th><th>vCPUs</th><th>Topology</th><th>Knee N (median, min-max)</th><th>Knee per vCPU</th><th>Ratio vs S</th><th>Ratio vs Seq</th><th>Predicted (B-0)</th><th>Join p99 ms (closed-loop, &lt;= 16 in flight)</th><th>Secret-prop p99 ms (D2)</th><th>CPU split (highest passing step)</th><th>Server-set softirq ticks</th><th>Generator receive capacity pps</th><th>Deregistrations</th></tr>
+<tr>
+<td>S</td><td class="n">2</td><td>2 hyperthreads of 1 core</td><td class="n">3330 (3330-3330)</td><td class="n">1665</td><td class="n">-</td><td class="n">-</td><td class="n">-</td><td class="n">52.0</td><td class="n">-</td><td>server=0.20</td><td class="n">200</td><td class="n">-</td><td class="n">0</td>
+</tr>
+</table>
+
+
+<h3>Knee charts</h3>
+<figure><figcaption>S: loss and one-way p99 against N (median across legs)</figcaption><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 280" width="560" role="img" aria-labelledby="t-org-op-S"><title id="t-org-op-S">org-op S: loss percent and one-way p99 milliseconds against N</title><line class="grid" x1="56.0" y1="240.0" x2="504.0" y2="240.0"/><text x="50.0" y="244.0" text-anchor="end">0.0</text><text x="510.0" y="244.0">0.0</text><line class="grid" x1="56.0" y1="184.0" x2="504.0" y2="184.0"/><text x="50.0" y="188.0" text-anchor="end">4.0</text><text x="510.0" y="188.0">9.0</text><line class="grid" x1="56.0" y1="128.0" x2="504.0" y2="128.0"/><text x="50.0" y="132.0" text-anchor="end">8.0</text><text x="510.0" y="132.0">18.0</text><line class="grid" x1="56.0" y1="72.0" x2="504.0" y2="72.0"/><text x="50.0" y="76.0" text-anchor="end">12.0</text><text x="510.0" y="76.0">27.0</text><line class="grid" x1="56.0" y1="16.0" x2="504.0" y2="16.0"/><text x="50.0" y="20.0" text-anchor="end">16.0</text><text x="510.0" y="20.0">36.0</text><text x="112.0" y="256.0" text-anchor="middle">1000</text><text x="168.0" y="256.0" text-anchor="middle">2000</text><text x="280.0" y="256.0" text-anchor="middle">4000</text><text x="504.0" y="256.0" text-anchor="middle">8000</text><line class="axis" x1="56.0" y1="240.0" x2="504.0" y2="240.0"/><text x="280.0" y="274.0" text-anchor="middle">N (bots)</text><text x="12" y="128.0" text-anchor="middle" transform="rotate(-90 12 128.0)">loss % (solid)</text><text x="550.0" y="128.0" text-anchor="middle" transform="rotate(90 550.0 128.0)">one-way p99 ms (dashed)</text><polyline class="loss" points="112.0,240.0 168.0,240.0 280.0,128.0 504.0,16.0"/><circle class="lossdot" cx="112.0" cy="240.0" r="3"/><circle class="lossdot" cx="168.0" cy="240.0" r="3"/><circle class="lossdot" cx="280.0" cy="128.0" r="3"/><circle class="lossdot" cx="504.0" cy="16.0" r="3"/><polyline class="p99" points="112.0,212.0 168.0,184.0 280.0,128.0 504.0,16.0"/><circle class="p99dot" cx="112.0" cy="212.0" r="3"/><circle class="p99dot" cx="168.0" cy="184.0" r="3"/><circle class="p99dot" cx="280.0" cy="128.0" r="3"/><circle class="p99dot" cx="504.0" cy="16.0" r="3"/></svg></figure>
+
+<h3>Ratios</h3>
+<p class="note">No ratios for this scenario.</p>
+
+
+
+
+<h2>Micro-benchmarks</h2>
+<table>
+<tr><th>Benchmark</th><th>n</th><th>l</th><th>Logger</th><th>Mode</th><th>ns/op</th><th>ns/send</th><th>ns/scan</th><th>allocs/op</th><th>ns/send full</th></tr>
+<tr><td>BenchmarkSocketSend</td><td class="n">100</td><td class="n">10</td><td>bus</td><td>single</td><td class="n">99000.0</td><td class="n">9900.0</td><td class="n">-</td><td class="n">1.0</td><td class="n">-</td></tr>
+</table>
+
+<h2>Environment</h2>
+<dl>
+<dt>Image OS</dt><dd>ubuntu24</dd><dt>Image version</dt><dd>20261020.1.0</dd><dt>Kernel</dt><dd>6.8.0-1017-azure</dd><dt>CPU model</dt><dd>AMD EPYC 7763 64-Core Processor</dd><dt>vCPUs</dt><dd>4</dd><dt>SMT</dt><dd>true</dd><dt>Sibling sets</dt><dd>0,1 | 2,3</dd><dt>Topology</dt><dd>2 hyperthreads of 1 core</dd><dt>Steal ticks</dt><dd>3 over 5 s</dd><dt>IRQ time accounting</dt><dd>y</dd><dt>net.core.rmem_max</dt><dd>212992</dd><dt>net.core.wmem_max</dt><dd>212992</dd><dt>Local port range</dt><dd>32768-60999</dd><dt>Server Go</dt><dd>go1.27.3</dd><dt>Client Go</dt><dd>go1.27.3</dd><dt>Join measurement</dt><dd>closed-loop, &lt;= 16 in flight; server-side cost only; client hash excluded</dd><dt>Corpus sha256</dt><dd>abababababababababababababababababababababababababababababababab</dd><dt>Corpus frames</dt><dd>1566</dd><dt>Corpus frame bytes (min / median / p95 / max)</dt><dd>3 / 120 / 160 / 210</dd><dt>Leg 1</dt><dd>one-big-net, seed 7, arm order S,Seq,D2</dd><dt>Leg 2</dt><dd>one-big-net, seed 8, arm order D2,Seq,S</dd><dt>Leg 3</dt><dd>org-op, seed 9, arm order S</dd><dt>Pin S server</dt><dd>cpus 0-1, GOMAXPROCS 2, voice shards 2</dd><dt>Pin D2 control</dt><dd>cpus 0, GOMAXPROCS 1, voice shards 1</dd><dt>Pin D2 node</dt><dd>cpus 1, GOMAXPROCS 1, voice shards 1</dd>
+</dl>
+<p class="note">Generated by tools/benchsite (static, no scripts, no external resources).</p>
+</body>
+</html>
+

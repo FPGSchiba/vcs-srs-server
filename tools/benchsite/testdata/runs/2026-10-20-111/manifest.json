@@ -1,0 +1,86 @@
+{
+  "schema_version": "bench-results/1",
+  "label": "Shared GitHub runner (4 vCPU), loopback, relative only. Not a capacity figure.",
+  "run_url": "https://github.com/FPGSchiba/vcs-srs-server/actions/runs/111",
+  "server_sha": "e2fe62b0000000000000000000000000000000aa",
+  "client_sha": "b55823e",
+  "server_dirty": false,
+  "server_go": "go1.27.3",
+  "client_go": "go1.27.3",
+  "corpus": {
+    "sha256": "abababababababababababababababababababababababababababababababab",
+    "frames": 1566,
+    "size_min": 3,
+    "size_median": 120,
+    "size_p95": 160,
+    "size_max": 210
+  },
+  "env": {
+    "image_os": "ubuntu24",
+    "image_version": "20261020.1.0",
+    "kernel": "6.8.0-1017-azure",
+    "cpu_model": "AMD EPYC 7763 64-Core Processor",
+    "vcpus": 4,
+    "smt": true,
+    "siblings": [
+      "0,1",
+      "2,3"
+    ],
+    "steal_ticks": 3,
+    "steal_seconds": 5,
+    "irq_time_accounting": "y",
+    "topology_label": "2 hyperthreads of 1 core",
+    "net_core_rmem_max": 212992,
+    "net_core_wmem_max": 212992,
+    "net_ipv4_ip_local_port_range": [
+      32768,
+      60999
+    ]
+  },
+  "legs": [
+    {
+      "leg": 1,
+      "scenario": "one-big-net",
+      "seed": 7,
+      "arm_order": [
+        "S",
+        "Seq",
+        "D2"
+      ]
+    },
+    {
+      "leg": 2,
+      "scenario": "one-big-net",
+      "seed": 8,
+      "arm_order": [
+        "D2",
+        "Seq",
+        "S"
+      ]
+    }
+  ],
+  "pins": [
+    {
+      "arm": "S",
+      "role": "server",
+      "cpus": "0-1",
+      "gomaxprocs": 2,
+      "voice_shards": 2
+    },
+    {
+      "arm": "D2",
+      "role": "control",
+      "cpus": "0",
+      "gomaxprocs": 1,
+      "voice_shards": 1
+    },
+    {
+      "arm": "D2",
+      "role": "node",
+      "cpus": "1",
+      "gomaxprocs": 1,
+      "voice_shards": 1
+    }
+  ],
+  "join_label": "closed-loop, \u003c= 16 in flight; server-side cost only; client hash excluded"
+}
