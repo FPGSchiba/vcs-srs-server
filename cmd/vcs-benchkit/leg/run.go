@@ -522,8 +522,8 @@ func Run(ctx context.Context, o Options, logw io.Writer) error {
 	if feats.Has("join_rate") {
 		rule = fmt.Sprintf("join rule min(%s, %s/N) floor %s", fmtFloat(o.Bot.JoinRateMax), fmtFloat(o.Bot.JoinRateScale), fmtFloat(o.JoinRateFloor))
 	}
-	logf("pre-flight ok: N_max %d (%s), start %d, top %d, %s; predicted knee %d (context only)",
-		caps.NMax, caps.By, caps.Start, caps.Top, rule, o.PredictedKnee)
+	logf("pre-flight ok: N_max %d (%s), start %d, top %d, %s; predicted knee %s (context only)",
+		caps.NMax, caps.By, caps.Start, caps.Top, rule, predictedText(o.PredictedKnee))
 	logf("%s", describeCaps(caps))
 	nMax := caps.NMax
 

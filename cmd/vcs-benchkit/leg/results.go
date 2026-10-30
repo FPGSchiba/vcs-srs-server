@@ -381,7 +381,7 @@ func WriteKneesCSV(w io.Writer, o *Outcome, m KneeMeta) error {
 	rec := []string{
 		m.Arm, m.Scenario, o.Result.String(), kindNameFor(o.Result), strconv.Itoa(o.Result.N),
 		cn, co, on, oo,
-		strconv.Itoa(m.Predicted), strconv.Itoa(m.NMax), m.Topology, LabelOr(m.Label), PayloadLabel, JoinLabel, NotMeasured,
+		predictedCell(m.Predicted), strconv.Itoa(m.NMax), m.Topology, LabelOr(m.Label), PayloadLabel, JoinLabel, NotMeasured,
 		strings.Join(o.Notes, "; "),
 		upper,
 	}
@@ -390,6 +390,23 @@ func WriteKneesCSV(w io.Writer, o *Outcome, m KneeMeta) error {
 	}
 	cw.Flush()
 	return cw.Error()
+}
+
+// predictedCell is the predicted_knee cell: empty when no prediction was given,
+// so a reader cannot take 0 for a prediction of zero.
+func predictedCell(p int) string {
+	if p <= 0 {
+		return ""
+	}
+	return strconv.Itoa(p)
+}
+
+// predictedText is the log form of a prediction: "none" when not given.
+func predictedText(p int) string {
+	if p <= 0 {
+		return "none"
+	}
+	return strconv.Itoa(p)
 }
 
 // WriteCalibrationCSV writes the calibration steps and the receive-capacity row.

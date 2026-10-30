@@ -351,3 +351,35 @@ func TestKindNameForLimit(t *testing.T) {
 		}
 	}
 }
+
+func TestKneesCSVPredictedEmptyWhenNotGiven(t *testing.T) {
+	cell := func(pred int) string {
+		var k bytes.Buffer
+		if err := WriteKneesCSV(&k, &Outcome{Result: sweep.Result{}}, KneeMeta{Arm: "S", Predicted: pred}); err != nil {
+			t.Fatal(err)
+		}
+		recs, err := csv.NewReader(&k).ReadAll()
+		if err != nil || len(recs) != 2 {
+			t.Fatalf("knees.csv: %v %v", err, recs)
+		}
+		for i, h := range recs[0] {
+			if h == "predicted_knee" {
+				return recs[1][i]
+			}
+		}
+		t.Fatal("no predicted_knee column")
+		return ""
+	}
+	if got := cell(0); got != "" {
+		t.Errorf("no prediction: predicted_knee = %q, want empty", got)
+	}
+	if got := cell(24108); got != "24108" {
+		t.Errorf("prediction 24108: predicted_knee = %q", got)
+	}
+}
+
+func TestPredictedText(t *testing.T) {
+	if predictedText(0) != "none" || predictedText(-1) != "none" || predictedText(7) != "7" {
+		t.Errorf("predictedText: %q %q %q", predictedText(0), predictedText(-1), predictedText(7))
+	}
+}
