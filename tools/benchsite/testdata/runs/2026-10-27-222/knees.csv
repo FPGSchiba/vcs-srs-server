@@ -1,0 +1,8 @@
+leg,arm,scenario,result_kind,n,upper_n,confirm_n,confirm_outcome,overload_n,overload_outcome,predicted_knee,n_max,topology,arm_label,payload
+1,S,one-big-net,knee,3310,,3310,pass,,,3800,8000,2 hyperthreads of 1 core,,opus-speech-corpus
+2,S,one-big-net,knee,3320,,3320,pass,,,3800,8000,2 hyperthreads of 1 core,,opus-speech-corpus
+1,Seq,one-big-net,knee,3420,,3420,pass,,,3800,8000,2 hyperthreads of 1 core,,opus-speech-corpus
+2,Seq,one-big-net,knee,3430,,3430,pass,,,3800,8000,2 hyperthreads of 1 core,,opus-speech-corpus
+1,D2,one-big-net,knee,3200,,3200,pass,,,3800,8000,2 hyperthreads of 1 core,bot-only; real client: ROADMAP Phase 9,opus-speech-corpus
+2,D2,one-big-net,knee,3210,,3210,pass,,,3800,8000,2 hyperthreads of 1 core,bot-only; real client: ROADMAP Phase 9,opus-speech-corpus
+3,S,org-op,knee,3330,,3330,pass,,,,8000,2 hyperthreads of 1 core,,opus-speech-corpus

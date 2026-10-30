@@ -28,6 +28,13 @@ type Window struct {
 	// ServerCPU and GenCPU are fractions of the process's CPU set; NaN means
 	// the sampler failed (which invalidates the step).
 	ServerCPU, GenCPU float64
+	// ServerCPUByRole is each server process's CPU fraction of its own set,
+	// keyed by role (W6 S5). nil for a single-process (S) arm until the
+	// multi-process sampler fills it.
+	ServerCPUByRole map[string]float64
+	// Nodes is the distributed arm's distributionStatus reading over the
+	// window; the zero value (Polls 0) is "not measured" (S, Seq).
+	Nodes NodeWindow
 	// ServerDrops is the increase of the server socket's drop counter.
 	ServerDrops uint64
 	// SoftIRQTicks is the softirq clock ticks on the server's CPU set; StealTicks
@@ -168,8 +175,10 @@ type Row struct {
 	Held   bool
 	Step   Step
 	Window Window
-	Logs   LogCounts
-	Data   sweep.StepData
+	// Nodes is the hold's node reading, a copy of Window.Nodes (D2 only).
+	Nodes NodeWindow
+	Logs  LogCounts
+	Data  sweep.StepData
 	// SettleSeconds is the time from the end of the ramp to the measured hold.
 	SettleSeconds float64
 	// Joins is the load bot's account of this step's ramp: how many bots it
@@ -705,22 +714,27 @@ func (d *Driver) measure(ctx context.Context, kind string, n int, hold time.Dura
 	}
 	st.ResourceExhausted.Ramp += probeRex.Ramp
 	st.ResourceExhausted.Settle += probeRex.Settle
-	row.Held, row.Step, row.Window = true, st, win
+	row.Held, row.Step, row.Window, row.Nodes = true, st, win, win.Nodes
 	row.Logs = CountLog(after).Sub(CountLog(before))
 	row.Data = sweep.StepData{
 		N: n, LossRatio: st.LossRatio,
-		// The C1 load bot measures loss only: no late-loss and no one-way
-		// latency (those arrive with C2). They are recorded as zero here and
-		// named in the not_measured column, so a step is never invalidated by
-		// a figure the bot cannot give, and never credited with one.
-		LateLossRatio: 0, OneWayP99: 0,
+		// A v4 bot measures late loss and one-way latency; a v3 bot, a
+		// non-Linux bot and the D2 arm do not. An unmeasured figure is zero
+		// here and named in the not_measured column, so a step is never
+		// invalidated by a figure the bot cannot give, and never credited with
+		// one (see stepLatency).
+		LateLossRatio: stepLateLoss(st), OneWayP99: stepOneWayP99(st),
 		ResourceExhausted: sweep.PhaseCounts{Ramp: st.ResourceExhausted.Ramp, Settle: st.ResourceExhausted.Settle, Hold: st.ResourceExhausted.Hold},
 		ServerCPU:         win.ServerCPU, ServerSocketDrops: win.ServerDrops,
 		ShardQueueFull: row.Logs.ShardQueueFull, UpdateStreamBehind: row.Logs.UpdateStreamBehind,
 		NodeFeedBehind: row.Logs.NodeFeedBehind, NodeDeregistered: row.Logs.NodeDeregistered,
 		GeneratorViolations: st.Violations, GenCPU: win.GenCPU,
 	}
+	if win.Nodes.Polls > 0 {
+		row.Data.NodesWant, row.Data.NodesMin = expectedNodes, win.Nodes.Min
+	}
 	row.Outcome, row.Reasons = sweep.Classify(row.Data, d.cfg.Bounds)
+	noteNodeWindow(&row, win.Nodes)
 	if win.Err != "" {
 		row.Outcome = sweep.Invalid
 		row.Reasons = append([]string{"invalid: sampler: " + win.Err}, row.Reasons...)
@@ -732,6 +746,22 @@ func (d *Driver) measure(ctx context.Context, kind string, n int, hold time.Dura
 		d.markControlLost(&row, evs, "hold")
 	}
 	return row, nil
+}
+
+// stepLateLoss is the bot's late-loss ratio, or 0 when it did not measure one.
+func stepLateLoss(st Step) float64 {
+	if st.LateLossRatio == nil {
+		return 0
+	}
+	return *st.LateLossRatio
+}
+
+// stepOneWayP99 is the bot's one-way p99, or 0 when it did not measure one.
+func stepOneWayP99(st Step) time.Duration {
+	if st.OneWayP99Us == nil {
+		return 0
+	}
+	return time.Duration(*st.OneWayP99Us) * time.Microsecond
 }
 
 // overBudget reports whether running a step at n would leave too little of the

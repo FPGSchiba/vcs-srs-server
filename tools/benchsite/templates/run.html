@@ -1,0 +1,56 @@
+{{template "head" .}}
+<p><a href="../../index.html">All runs</a></p>
+<h1>Run {{.ID}}</h1>
+<p>
+{{if .RunURL}}<a href="{{.RunURL}}" rel="noopener">Workflow run</a> | {{end}}
+Server <a href="{{.ServerURL}}" rel="noopener">{{.ServerSHA}}</a>{{if .ServerDirty}} (dirty){{end}} |
+Client <a href="{{.ClientURL}}" rel="noopener">{{.ClientSHA}}</a>
+</p>
+
+<h2>Comparison with an earlier run</h2>
+{{if .Compare}}
+<p>vs {{.Compare.ID}} (same image version {{.Compare.Image}}, same topology). Knee N medians:</p>
+<table>
+<tr><th>Scenario</th><th>Arm</th><th>This run</th><th>{{.Compare.ID}}</th><th>Change</th></tr>
+{{range .Compare.Rows}}<tr><td>{{.Scenario}}</td><td>{{.Arm}}</td><td class="n">{{.Now}}</td><td class="n">{{.Then}}</td><td class="n">{{.Delta}}</td></tr>{{end}}
+</table>
+{{else}}<p class="note">No comparable earlier run (same image version and topology required).</p>{{end}}
+
+{{range .Scenarios}}
+<h2 id="scenario-{{.Name}}">Scenario {{.Name}}</h2>
+<h3>Headline</h3>
+<table>
+<tr><th>Arm</th><th>vCPUs</th><th>Topology</th><th>Knee N (median, min-max)</th><th>Knee per vCPU</th><th>Ratio vs S</th><th>Ratio vs Seq</th><th>Predicted (B-0)</th><th>Join p99 ms (closed-loop, &lt;= 16 in flight)</th><th>Secret-prop p99 ms (D2)</th><th>CPU split (highest passing step)</th><th>Server-set softirq ticks</th><th>Generator receive capacity pps</th><th>Deregistrations</th></tr>
+{{range .Headline}}<tr>
+<td>{{.Arm}}{{if .ArmLabel}} <span class="note">({{.ArmLabel}})</span>{{end}}</td><td class="n">{{.VCPUs}}</td><td>{{.Topology}}</td><td class="n">{{.Knee}}</td><td class="n">{{.PerVCPU}}</td><td class="n">{{.RatioS}}</td><td class="n">{{.RatioSeq}}</td><td class="n">{{.Predicted}}</td><td class="n">{{.JoinP99}}</td><td class="n">{{.SecretP99}}</td><td>{{.CPUSplit}}</td><td class="n">{{.Softirq}}</td><td class="n">{{.GenCap}}</td><td class="n">{{.Deregs}}</td>
+</tr>{{end}}
+</table>
+{{if .IsOneBigNet}}<p class="note">On one-big-net the expected Seq/S and D2/S ratios are about 1; a clear deviation is a validity alarm, not a finding.</p>{{end}}
+
+<h3>Knee charts</h3>
+{{range .Charts}}<figure><figcaption>{{.Arm}}: loss and one-way p99 against N (median across legs)</figcaption>{{.SVG}}</figure>{{end}}
+
+<h3>Ratios</h3>
+{{if .Ratios}}<table>
+<tr><th>Ratio</th><th>Legs</th><th>Median</th><th>Min</th><th>Max</th><th>Censored legs</th><th>Topology</th></tr>
+{{range .Ratios}}<tr><td>{{.Ratio}}</td><td class="n">{{.Legs}}</td><td class="n">{{.Median}}</td><td class="n">{{.Min}}</td><td class="n">{{.Max}}</td><td class="n">{{.Censored}}</td><td>{{.Topology}}</td></tr>{{end}}
+</table>{{else}}<p class="note">No ratios for this scenario.</p>{{end}}
+
+{{if .IsOneBigNet}}<h3 id="predicted-one-big-net">Predicted vs measured</h3>
+<table>
+<tr><th>Arm</th><th>Predicted knee N</th><th>Measured median N</th><th>Measured / predicted</th></tr>
+{{range .Pred}}<tr><td>{{.Arm}}</td><td class="n">{{.Predicted}}</td><td class="n">{{.Measured}}</td><td class="n">{{.Ratio}}</td></tr>{{end}}
+</table>{{end}}
+{{end}}
+
+<h2>Micro-benchmarks</h2>
+{{if .Micro}}<table>
+<tr><th>Benchmark</th><th>n</th><th>l</th><th>Logger</th><th>Mode</th><th>ns/op</th><th>ns/send</th><th>ns/scan</th><th>allocs/op</th><th>ns/send full</th></tr>
+{{range .Micro}}<tr><td>{{.Bench}}</td><td class="n">{{.N}}</td><td class="n">{{.L}}</td><td>{{.Logger}}</td><td>{{.Mode}}</td><td class="n">{{.NsPerOp}}</td><td class="n">{{.NsPerSend}}</td><td class="n">{{.NsPerScan}}</td><td class="n">{{.Allocs}}</td><td class="n">{{.NsPerSendFull}}</td></tr>{{end}}
+</table>{{else}}<p class="note">No micro-benchmarks in this run.</p>{{end}}
+
+<h2>Environment</h2>
+<dl>
+{{range .Env}}<dt>{{.K}}</dt><dd>{{.V}}</dd>{{end}}
+</dl>
+{{template "foot" .}}

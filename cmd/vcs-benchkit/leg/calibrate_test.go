@@ -66,6 +66,12 @@ func fakeLoadbot(args []string) int {
 		}
 		fmt.Println(`{"type":"reflector_stats","send_errors":4,"senders":2}`)
 		return 0
+	case "run":
+		// An idle bot: waits for stdin to close (the kit's Quit) and exits.
+		sc := bufio.NewScanner(os.Stdin)
+		for sc.Scan() {
+		}
+		return 0
 	case "calibrate":
 		if os.Getenv("BENCHKIT_FAKE_CAL") == "v1-die" {
 			// v1 bot at 62f5cf7 (run 40752831443): completed steps on stdout,

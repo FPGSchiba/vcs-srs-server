@@ -1,0 +1,1 @@
+{"type":"features","schema":"loadbot-features/1","features":["arm_d2","burst","control_lost","gc_warn","hello_ladder","join_rate","latency","opus_corpus","org_op","parity","ping","talker_pause"],"defaults":{"ping_every_s":5,"join_rate_max":12,"join_rate_scale":5000,"max_in_flight":8,"ramp_talker":"silent","gc_pause_p99_us":5000,"gc_pause_warn_p99_us":2000}}

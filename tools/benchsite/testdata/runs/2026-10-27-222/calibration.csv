@@ -1,0 +1,4 @@
+leg,kind,n,egress_pps,valid,lower_bound,reflector_send_errors,reflector_senders
+1,step,500,25000,true,false,0,0
+1,receive_capacity,0,99000.00000000001,false,true,0,2
+2,receive_capacity,0,96800.00000000001,false,true,0,2

@@ -1,0 +1,2 @@
+bench,n,l,logger,mode,ns_per_op,ns_per_send,ns_per_scan,allocs_per_op,ns_per_send_full
+BenchmarkSocketSend,100,10,bus,single,99000.00000000001,9900,,1,

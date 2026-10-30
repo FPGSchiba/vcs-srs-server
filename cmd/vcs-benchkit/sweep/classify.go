@@ -108,6 +108,12 @@ type StepData struct {
 	NodeFeedBehind     uint64 // "Voice node feed fell behind"
 	NodeDeregistered   uint64 // "Voice node deregistered" (R13)
 
+	// NodesWant and NodesMin are the distributed arm's node-count reading: the
+	// nodes the topology should have (control's distributionStatus lists three:
+	// nodeA, nodeB, global) and the fewest the 5 s poller saw during the hold.
+	// NodesWant 0 means not measured (S, Seq, or no poll answered): never a breach.
+	NodesWant, NodesMin int
+
 	// GeneratorViolations are the load bot's own D14 violations for the hold
 	// (loadgen Bounds.Violations). Non-empty invalidates the step.
 	GeneratorViolations []string
@@ -228,6 +234,9 @@ func breachReasons(s StepData, b Bounds) []string {
 	}
 	if s.ServerSocketDrops > 0 {
 		r = append(r, fmt.Sprintf("%d server socket drops during the hold", s.ServerSocketDrops))
+	}
+	if s.NodesWant > 0 && s.NodesMin < s.NodesWant {
+		r = append(r, fmt.Sprintf("node count dropped to %d of %d", s.NodesMin, s.NodesWant))
 	}
 	for _, l := range []struct {
 		line string

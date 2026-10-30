@@ -58,6 +58,9 @@ func TestClassify(t *testing.T) {
 		{"shard queue full breaches", func(s *StepData) { s.ShardQueueFull = 1 }, Breach, []string{"Voice shard queue full"}},
 		{"update stream behind breaches", func(s *StepData) { s.UpdateStreamBehind = 1 }, Breach, []string{"Update stream fell behind"}},
 		{"node feed behind breaches", func(s *StepData) { s.NodeFeedBehind = 1 }, Breach, []string{"Voice node feed fell behind"}},
+		{"fewer nodes than wanted breaches", func(s *StepData) { s.NodesWant, s.NodesMin = 3, 2 }, Breach, []string{"node count dropped to 2 of 3"}},
+		{"all wanted nodes present passes", func(s *StepData) { s.NodesWant, s.NodesMin = 3, 3 }, Pass, nil},
+		{"no node reading is not a breach", func(s *StepData) { s.NodesWant, s.NodesMin = 0, 0 }, Pass, nil},
 		{"node deregistration breaches (R13)", func(s *StepData) { s.NodeDeregistered = 1 }, Breach, []string{"Voice node deregistered"}},
 
 		// Generator self-health: invalid, never a breach.
