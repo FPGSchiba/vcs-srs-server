@@ -279,6 +279,37 @@ func TestResultsCSVUseOptionLabel(t *testing.T) {
 	}
 }
 
+func kneesRow(t *testing.T, res sweep.Result) map[string]string {
+	t.Helper()
+	var k bytes.Buffer
+	if err := WriteKneesCSV(&k, &Outcome{Result: res}, KneeMeta{Arm: "S"}); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := csv.NewReader(&k).ReadAll()
+	if err != nil || len(recs) != 2 {
+		t.Fatalf("knees.csv: %v %v", err, recs)
+	}
+	m := map[string]string{}
+	for i, h := range recs[0] {
+		m[h] = recs[1][i]
+	}
+	if recs[0][len(recs[0])-1] != "upper_n" {
+		t.Errorf("last column = %q, want upper_n", recs[0][len(recs[0])-1])
+	}
+	return m
+}
+
+func TestKneesCSVUpperN(t *testing.T) {
+	m := kneesRow(t, sweep.Result{Kind: sweep.Bracketed, N: 3013, Hi: 6027})
+	if m["upper_n"] != "6027" || m["result_kind"] != "bracketed" || m["n"] != "3013" {
+		t.Errorf("bracketed row = %v", m)
+	}
+	m = kneesRow(t, sweep.Result{Kind: sweep.KneeFound, N: 3013})
+	if m["upper_n"] != "" || m["result_kind"] != "knee" {
+		t.Errorf("knee row = %v", m)
+	}
+}
+
 func TestLegLabelDefaultIsLegLabel(t *testing.T) {
 	cal := &Calibration{Steps: []CalStep{{N: 64, Valid: true}}}
 	out := &Outcome{Rows: []Row{{Seq: 1, Kind: "sweep", N: 10}}}
@@ -307,5 +338,48 @@ func TestLegLabelDefaultIsLegLabel(t *testing.T) {
 	}
 	if (Options{}).LabelOrDefault() != Label {
 		t.Error("empty Options.Label must resolve to leg.Label")
+	}
+}
+
+func TestKindNameForLimit(t *testing.T) {
+	if got := kindNameFor(sweep.Result{Kind: sweep.TimeBound, Limit: "generator-cpu"}); got != "generator-cpu-bound" {
+		t.Errorf("got %q", got)
+	}
+	for _, l := range []string{"", "time"} {
+		if got := kindNameFor(sweep.Result{Kind: sweep.TimeBound, Limit: l}); got != "time-bound" {
+			t.Errorf("limit %q: got %q", l, got)
+		}
+	}
+}
+
+func TestKneesCSVPredictedEmptyWhenNotGiven(t *testing.T) {
+	cell := func(pred int) string {
+		var k bytes.Buffer
+		if err := WriteKneesCSV(&k, &Outcome{Result: sweep.Result{}}, KneeMeta{Arm: "S", Predicted: pred}); err != nil {
+			t.Fatal(err)
+		}
+		recs, err := csv.NewReader(&k).ReadAll()
+		if err != nil || len(recs) != 2 {
+			t.Fatalf("knees.csv: %v %v", err, recs)
+		}
+		for i, h := range recs[0] {
+			if h == "predicted_knee" {
+				return recs[1][i]
+			}
+		}
+		t.Fatal("no predicted_knee column")
+		return ""
+	}
+	if got := cell(0); got != "" {
+		t.Errorf("no prediction: predicted_knee = %q, want empty", got)
+	}
+	if got := cell(24108); got != "24108" {
+		t.Errorf("prediction 24108: predicted_knee = %q", got)
+	}
+}
+
+func TestPredictedText(t *testing.T) {
+	if predictedText(0) != "none" || predictedText(-1) != "none" || predictedText(7) != "7" {
+		t.Errorf("predictedText: %q %q %q", predictedText(0), predictedText(-1), predictedText(7))
 	}
 }

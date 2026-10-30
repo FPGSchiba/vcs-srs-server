@@ -47,70 +47,6 @@ func TestPreflight(t *testing.T) {
 	}
 }
 
-func TestEstimateLegMatchesDesign(t *testing.T) {
-	// Design 6.4: knee 3000 at 27 joins/s, 7 steps -> about 12 min.
-	got := EstimateLeg(3000, 27, 7)
-	if got < 11*time.Minute || got > 14*time.Minute {
-		t.Fatalf("EstimateLeg(3000,27,7) = %v, want about 12 min", got)
-	}
-	// knee 10k -> about 22 min.
-	got = EstimateLeg(10000, 27, 7)
-	if got < 20*time.Minute || got > 26*time.Minute {
-		t.Fatalf("EstimateLeg(10000,27,7) = %v, want about 22 min", got)
-	}
-	// knee 1500 -> ramps about 2 min.
-	ramps := EstimateLeg(1500, 27, 0) - 210*time.Second
-	if ramps < 100*time.Second || ramps > 130*time.Second {
-		t.Fatalf("ramps for knee 1500 = %v, want about 2 min", ramps)
-	}
-}
-
-func TestNMaxFitsBudget(t *testing.T) {
-	budget := 120 * time.Minute
-	n := NMax(3000, 27, budget, 7)
-	if n <= 0 {
-		t.Fatalf("NMax = %d, want positive", n)
-	}
-	if EstimateLeg(n, 27, 7) > budget {
-		t.Fatalf("EstimateLeg(NMax=%d) = %v exceeds budget %v", n, EstimateLeg(n, 27, 7), budget)
-	}
-	if EstimateLeg(n+100, 27, 7) <= budget {
-		t.Fatalf("NMax=%d is not tight: n+100 still fits", n)
-	}
-}
-
-func TestNMaxDegenerate(t *testing.T) {
-	cases := []struct {
-		name   string
-		knee   int
-		rate   float64
-		budget time.Duration
-		steps  int
-	}{
-		{"budget below fixed cost", 3000, 27, 3 * time.Minute, 7},
-		{"zero join rate", 3000, 0, time.Hour, 7},
-		{"negative join rate", 3000, -1, time.Hour, 7},
-		{"non-positive knee", 0, 27, time.Hour, 7},
-		{"steps eat the budget", 3000, 27, 10 * time.Minute, 20},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := NMax(c.knee, c.rate, c.budget, c.steps); got != 0 {
-				t.Fatalf("NMax = %d, want 0", got)
-			}
-		})
-	}
-}
-
-func TestNMaxCapsBelowPrediction(t *testing.T) {
-	// A short budget caps N_max below the predicted knee: the result must be
-	// reportable as time-bound by the caller.
-	n := NMax(10000, 27, 15*time.Minute, 7)
-	if n >= 10000 {
-		t.Fatalf("NMax = %d, want below the predicted knee 10000", n)
-	}
-}
-
 func samples(rampEnd time.Time, specs ...sp) []SettleSample {
 	out := make([]SettleSample, len(specs))
 	for i, s := range specs {
@@ -169,5 +105,69 @@ func TestSettledInvalidIsDistinct(t *testing.T) {
 	_, reason := Settled(samples(re, sp{10 * time.Second, 0, []uint64{1}}), re.Add(10*time.Second))
 	if strings.HasPrefix(reason, "invalid:") {
 		t.Fatalf("a still-settling step inside the bound must not be invalid: %q", reason)
+	}
+}
+
+func TestEstimateLegPricesOverloadRamp(t *testing.T) {
+	// 3 ramps of 100 s (2 x R(0,k) + R(k,2k) at a constant 27/s) + 7 steps x 50 s
+	// + 180 s + 30 s.
+	got := EstimateLeg(2700, JoinModel{Const: 27}, 7)
+	if want := 860 * time.Second; got != want {
+		t.Fatalf("EstimateLeg(2700, 27/s, 7) = %v, want %v", got, want)
+	}
+	if got := EstimateLeg(10, JoinModel{}, 7); got != time.Duration(1<<63-1) {
+		t.Fatalf("unusable model = %v, want the largest duration", got)
+	}
+}
+
+func TestNMaxFitsBudget(t *testing.T) {
+	budget := 120 * time.Minute
+	m := JoinModel{Const: 27}
+	n := NMax(m, budget, 7)
+	if n <= 0 {
+		t.Fatalf("NMax = %d, want positive", n)
+	}
+	if EstimateLeg(n, m, 7) > budget {
+		t.Fatalf("EstimateLeg(NMax=%d) = %v exceeds budget %v", n, EstimateLeg(n, m, 7), budget)
+	}
+	if EstimateLeg(n+1, m, 7) <= budget {
+		t.Fatalf("NMax=%d is not tight: n+1 still fits", n)
+	}
+}
+
+func TestNMaxDegenerate(t *testing.T) {
+	cases := []struct {
+		name   string
+		m      JoinModel
+		budget time.Duration
+		steps  int
+	}{
+		{"budget below fixed cost", JoinModel{Const: 27}, 3 * time.Minute, 7},
+		{"zero join rate", JoinModel{}, time.Hour, 7},
+		{"negative join rate", JoinModel{Const: -1}, time.Hour, 7},
+		{"negative steps", JoinModel{Const: 27}, time.Hour, -1},
+		{"steps eat the budget", JoinModel{Const: 27}, 10 * time.Minute, 20},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := NMax(c.m, c.budget, c.steps); got != 0 {
+				t.Fatalf("NMax = %d, want 0", got)
+			}
+		})
+	}
+}
+
+func TestNMaxUsesBotRule(t *testing.T) {
+	m := JoinModel{Max: 12, Scale: 5000}
+	budget := 100 * time.Minute
+	n := NMax(m, budget, 7)
+	if n <= 0 {
+		t.Fatalf("NMax = %d, want positive", n)
+	}
+	if EstimateLeg(n, m, 7) > budget || EstimateLeg(n+1, m, 7) <= budget {
+		t.Fatalf("NMax=%d is not the tight fit: est(n)=%v est(n+1)=%v", n, EstimateLeg(n, m, 7), EstimateLeg(n+1, m, 7))
+	}
+	if c := NMax(JoinModel{Const: 27}, budget, 7); n >= c {
+		t.Fatalf("bot-rule NMax %d should be below the constant-rate NMax %d", n, c)
 	}
 }

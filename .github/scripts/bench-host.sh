@@ -24,11 +24,14 @@ Flags:
   --scenario NAME       default one-big-net (the only scenario)
   --repeats K           default 1. 1 to 5 legs per GOGC variant, seeds 1..K, run serially
   --gogc off|default|both
-                        default off. off = GOGC=off GOMEMLIMIT=1GiB (the kit), default = Go
-                        defaults, both = alternate off/default for each seed
+                        default default. default = Go defaults, off = GOGC=off GOMEMLIMIT=1GiB
+                        (R2-9), both = alternate off/default for each seed
+  --join-floor F        the bot join-rate floor in joins/s (a non-negative number), forwarded to
+                        every leg as --join-rate-floor. Default: the kit's own default
   --client-ref SHA      default the pinned bench.yml ref. A full 40-hex SHA
   --out DIR             required. Results directory; must be empty or absent
-  --micro run|skip      default run. skip needs --predict FILE or --leg-arg --predicted-knee=N
+  --micro run|skip      default run. skip runs the legs without a prediction unless --predict FILE
+                        or --leg-arg --predicted-knee=N is given (the prediction is context only)
   --predict FILE        a predict.json from an earlier run (with --micro skip)
   --budget D            default 100m. The kit's leg budget
   --leg-arg ARG         repeatable pass-through to vcs-benchkit leg (smoke runs only)
@@ -49,7 +52,7 @@ USAGE
 
 host_label=""; server_set=""; gen_set=""; out_dir=""
 have_host_label=0; have_server_set=0; have_gen_set=0; have_out=0
-arms="S"; scenario="one-big-net"; repeats="1"; gogc="off"
+arms="S"; scenario="one-big-net"; repeats="1"; gogc="default"; join_floor=""; have_join_floor=0
 client_ref="$DEFAULT_CLIENT_REF"; micro="run"; predict=""; budget="100m"; note=""
 privileged_sysctl=0; dry_run=0
 leg_args=()
@@ -68,7 +71,7 @@ while [ $# -gt 0 ]; do
     -h|--help) usage; exit 0 ;;
     --privileged-sysctl) privileged_sysctl=1; shift; continue ;;
     --dry-run) dry_run=1; shift; continue ;;
-    --host-label|--server-set|--gen-set|--arms|--scenario|--repeats|--gogc|--client-ref|--out|--micro|--predict|--budget|--leg-arg|--note)
+    --host-label|--server-set|--gen-set|--arms|--scenario|--repeats|--gogc|--join-floor|--client-ref|--out|--micro|--predict|--budget|--leg-arg|--note)
       [ $# -ge 2 ] || die "$flag needs a value"
       val="$2"; shift 2
       case "$flag" in --out|--predict) ;; *) fwd+=("$flag" "$val") ;; esac
@@ -80,6 +83,7 @@ while [ $# -gt 0 ]; do
         --scenario) scenario="$val" ;;
         --repeats) repeats="$val" ;;
         --gogc) gogc="$val" ;;
+        --join-floor) join_floor="$val"; have_join_floor=1 ;;
         --client-ref) client_ref="$val" ;;
         --out) out_dir="$val"; have_out=1 ;;
         --micro) micro="$val" ;;
@@ -108,6 +112,8 @@ esac
 [ "$scenario" = "one-big-net" ] || die "--scenario must be one-big-net (got '$scenario')"
 [[ "$repeats" =~ ^[1-5]$ ]] || die "--repeats must be 1 to 5 (got '$repeats')"
 case "$gogc" in off|default|both) ;; *) die "--gogc must be off, default or both (got '$gogc')" ;; esac
+join_floor_re='^[0-9]+(\.[0-9]+)?$'
+if [ "$have_join_floor" -eq 1 ] && ! [[ "$join_floor" =~ $join_floor_re ]]; then die "--join-floor must be a non-negative number (got '$join_floor')"; fi
 [[ "$client_ref" =~ ^[0-9a-f]{40}$ ]] || die "--client-ref must be a full 40-hex SHA"
 case "$micro" in run|skip) ;; *) die "--micro must be run or skip (got '$micro')" ;; esac
 budget_re='^([0-9]+(ns|us|ms|s|m|h))+$'
@@ -116,16 +122,6 @@ if [ -n "$predict" ] && [ ! -f "$predict" ]; then die "--predict $predict is not
 if [ "$privileged_sysctl" -eq 1 ] && [ "$mode" != "docker" ]; then
   die "--privileged-sysctl is for docker mode only"
 fi
-if [ "$micro" = "skip" ]; then
-  knee=0
-  for a in ${leg_args[@]+"${leg_args[@]}"}; do
-    case "$a" in --predicted-knee=*) knee=1 ;; esac
-  done
-  if [ -z "$predict" ] && [ "$knee" -eq 0 ]; then
-    die "--micro skip needs --predict FILE or --leg-arg --predicted-knee=N"
-  fi
-fi
-
 # cpu_expand FLAG LIST: expands a taskset list ("0-1,4") into the global array CPUS. Same rules as
 # leg.CPUList: no empty list or element, no negative number, no descending range. Bash 3.2 safe.
 CPUS=()
@@ -312,6 +308,7 @@ write_records() {
     --argjson sysctl_raise "$(str_or_null "${BENCH_HOST_SYSCTL_RAISE:-}")" \
     --arg kernel "$kernel" --argjson nproc "$(num_or_null "$nproc_v")" \
     --arg server_set "$server_set" --arg gen_set "$gen_set" --arg gogc "$gogc" \
+    --argjson join_floor "$(str_or_null "$join_floor")" \
     --arg client_ref "$client_ref" --arg server_sha "$server_sha" --argjson server_dirty "$dirty" \
     --argjson rmem_max "$(num_or_null "$rmem0")" --argjson wmem_max "$(num_or_null "$wmem0")" \
     --argjson leg_args "$legs_json" --arg note "$note" \
@@ -320,6 +317,7 @@ write_records() {
     '{host_label: $host_label, mode: $mode, image: $image, docker_version: $docker_version,
       tool_versions: $tool_versions, sysctl_raise: $sysctl_raise,
       kernel: $kernel, nproc: $nproc, server_set: $server_set, gen_set: $gen_set, gogc: $gogc,
+      join_floor: $join_floor,
       client_ref: $client_ref, server_sha: $server_sha, server_dirty: $server_dirty,
       rmem_max: $rmem_max, wmem_max: $wmem_max, leg_args: $leg_args, note: $note,
       started_utc: $started_utc, ended_utc: $ended_utc,
@@ -333,7 +331,7 @@ write_records() {
     echo
     echo "| fact | value |"
     echo "|---|---|"
-    jq -r '. as $h | ["host_label","mode","image","docker_version","tool_versions","sysctl_raise","kernel","nproc","server_set","gen_set","gogc","client_ref","server_sha","server_dirty","rmem_max","wmem_max","leg_args","note","started_utc","ended_utc"][]
+    jq -r '. as $h | ["host_label","mode","image","docker_version","tool_versions","sysctl_raise","kernel","nproc","server_set","gen_set","gogc","join_floor","client_ref","server_sha","server_dirty","rmem_max","wmem_max","leg_args","note","started_utc","ended_utc"][]
       | "| \(.) | \($h[.] | if type == "array" then join(" ") elif . == null then "-" else tostring end | gsub("\\|"; "\\|") | gsub("\n"; " ")) |"' "$out_dir/host.json"
     echo
     echo "$BOT_LABEL_NOTE"
@@ -530,6 +528,7 @@ pipeline_native() {
         --generator-gc "$v"
         --budget "$budget"
         "$sysctl_flag")
+      if [ "$have_join_floor" -eq 1 ]; then cmd+=(--join-rate-floor "$join_floor"); fi
       if [ "${#leg_args[@]}" -gt 0 ]; then cmd+=("${leg_args[@]}"); fi
       echo "== leg $k, GOGC $v =="
       if [ "$dry_run" -eq 1 ] && [ -n "${BENCH_HOST_FAKE_RESULTS:-}" ]; then

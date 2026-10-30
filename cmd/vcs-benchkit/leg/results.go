@@ -148,17 +148,29 @@ func u(n uint64) string { return strconv.FormatUint(n, 10) }
 
 // kindName is the lowercase name of a sweep result kind.
 func kindName(k sweep.ResultKind) string {
+	return kindNameFor(sweep.Result{Kind: k})
+}
+
+// kindNameFor is kindName for a whole result: a TimeBound result names the
+// limit that bound N_max when it was not the time budget.
+func kindNameFor(r sweep.Result) string {
+	k := r.Kind
 	switch k {
 	case sweep.KneeFound:
 		return "knee"
 	case sweep.GeneratorBound:
 		return "generator-bound"
 	case sweep.TimeBound:
+		if r.Limit != "" && r.Limit != "time" {
+			return r.Limit + "-bound"
+		}
 		return "time-bound"
 	case sweep.BelowRange:
 		return "below-range"
 	case sweep.ControlLostBound:
 		return "control-lost"
+	case sweep.Bracketed:
+		return "bracketed"
 	}
 	return fmt.Sprintf("kind-%d", int(k))
 }
@@ -348,6 +360,8 @@ func WriteKneesCSV(w io.Writer, o *Outcome, m KneeMeta) error {
 		"arm", "scenario", "result", "result_kind", "n",
 		"confirm_n", "confirm_outcome", "overload_n", "overload_outcome",
 		"predicted_knee", "n_max", "topology", "label", "payload", "join_label", "not_measured", "notes",
+		// Appended by W6 kit fix 3: only ever append.
+		"upper_n",
 	}
 	if err := cw.Write(header); err != nil {
 		return err
@@ -359,17 +373,40 @@ func WriteKneesCSV(w io.Writer, o *Outcome, m KneeMeta) error {
 	if r := rowOf(o, "overload"); r != nil {
 		on, oo = strconv.Itoa(r.N), r.Outcome.String()
 	}
+	// upper_n is the smallest breached size of a bracketed result, else empty.
+	upper := ""
+	if o.Result.Kind == sweep.Bracketed {
+		upper = strconv.Itoa(o.Result.Hi)
+	}
 	rec := []string{
-		m.Arm, m.Scenario, o.Result.String(), kindName(o.Result.Kind), strconv.Itoa(o.Result.N),
+		m.Arm, m.Scenario, o.Result.String(), kindNameFor(o.Result), strconv.Itoa(o.Result.N),
 		cn, co, on, oo,
-		strconv.Itoa(m.Predicted), strconv.Itoa(m.NMax), m.Topology, LabelOr(m.Label), PayloadLabel, JoinLabel, NotMeasured,
+		predictedCell(m.Predicted), strconv.Itoa(m.NMax), m.Topology, LabelOr(m.Label), PayloadLabel, JoinLabel, NotMeasured,
 		strings.Join(o.Notes, "; "),
+		upper,
 	}
 	if err := cw.Write(rec); err != nil {
 		return err
 	}
 	cw.Flush()
 	return cw.Error()
+}
+
+// predictedCell is the predicted_knee cell: empty when no prediction was given,
+// so a reader cannot take 0 for a prediction of zero.
+func predictedCell(p int) string {
+	if p <= 0 {
+		return ""
+	}
+	return strconv.Itoa(p)
+}
+
+// predictedText is the log form of a prediction: "none" when not given.
+func predictedText(p int) string {
+	if p <= 0 {
+		return "none"
+	}
+	return strconv.Itoa(p)
 }
 
 // WriteCalibrationCSV writes the calibration steps and the receive-capacity row.

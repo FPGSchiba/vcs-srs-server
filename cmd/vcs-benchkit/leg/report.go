@@ -228,10 +228,13 @@ func FormatBurstLine(tag string, r Row) string {
 // ResultsInput is what one leg's results.md is built from. Cal and Out may be
 // nil: a leg that died early still gets a results file saying so.
 type ResultsInput struct {
-	Seed            int64
-	Arm, Scenario   string
-	Result          string
-	Error           string
+	Seed          int64
+	Arm, Scenario string
+	Result        string
+	Error         string
+	// StoppedEarly is the reason a leg ended before its sweep finished (a run
+	// error or the budget); the result then comes from the sweep state.
+	StoppedEarly    string
 	Cal             *Calibration
 	Out             *Outcome
 	Predicted, NMax int
@@ -262,7 +265,11 @@ func WriteResultsMarkdown(w io.Writer, in ResultsInput) error {
 	if in.Error != "" {
 		p("**Result:** did not finish: %s  \n", in.Error)
 	} else {
-		p("**Result:** %s  \n", in.Result)
+		if in.StoppedEarly != "" {
+			p("**Result:** %s; stopped early: %s  \n", in.Result, in.StoppedEarly)
+		} else {
+			p("**Result:** %s  \n", in.Result)
+		}
 	}
 	if c := in.Cal; c != nil {
 		line := fmt.Sprintf("receive capacity %.0f pps", c.ReceivePPS)
@@ -284,7 +291,11 @@ func WriteResultsMarkdown(w io.Writer, in ResultsInput) error {
 	if in.Out != nil {
 		starts = in.Out.Starts
 	}
-	p("**N_max:** %d · **predicted knee:** %d · **starts:** %d\n\n", in.NMax, in.Predicted, starts)
+	if in.Predicted > 0 {
+		p("**N_max:** %d · **predicted knee:** %d · **starts:** %d\n\n", in.NMax, in.Predicted, starts)
+	} else {
+		p("**N_max:** %d · **predicted knee:** not given · **starts:** %d\n\n", in.NMax, starts)
+	}
 
 	hasCal := in.Cal != nil && len(in.Cal.Steps) > 0
 	// Join bursts measure join cost, not steady capacity: their own table.

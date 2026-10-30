@@ -234,6 +234,42 @@ func addLegDetail(t *testing.T, root, dir string) {
 	}
 }
 
+func TestAggregateShowsBracketed(t *testing.T) {
+	in, out := t.TempDir(), t.TempDir()
+	d := filepath.Join(in, "1-one-big-net")
+	if err := os.MkdirAll(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hdr := strings.TrimSuffix(kneesHeader, "\n") + ",upper_n\n"
+	row := strings.Join([]string{"S", "one-big-net", `"3013 ≤ knee < 6027 (bracketed)"`, "bracketed", "3013", "", "", "", "", "24108", "7058", "t", `"` + label + `"`, "p", "j", "nm", "", "6027"}, ",")
+	m := `{"schema":"leg-manifest/1","arm":"S","scenario":"one-big-net","stopped_early":"set_n 6026: context deadline exceeded"}`
+	for name, body := range map[string]string{"knees.csv": hdr + row + "\n", "manifest.json": m} {
+		if err := os.WriteFile(filepath.Join(d, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var stdout bytes.Buffer
+	if err := runAggregate([]string{"--in", in, "--out", out}, &stdout, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	md, err := os.ReadFile(filepath.Join(out, "aggregate.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"1 of 1 legs finished",
+		"| 3013 ≤ knee < 6027 (bracketed) | 3013 | bracketed |",
+		"stopped early: set_n 6026",
+	} {
+		if !strings.Contains(string(md), want) {
+			t.Errorf("aggregate.md lacks %q:\n%s", want, md)
+		}
+	}
+	if rows := readAgg(t, out); len(rows) != 1 || rows[0]["censored"] != "true" {
+		t.Errorf("aggregate.csv rows = %v, want censored=true", rows)
+	}
+}
+
 func TestAggregateMarkdownGolden(t *testing.T) {
 	in, out := t.TempDir(), t.TempDir()
 	writeFailedLeg(t, in, "1-one-big-net", "calibration: a|b")

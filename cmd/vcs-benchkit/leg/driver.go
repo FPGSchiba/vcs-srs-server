@@ -119,10 +119,19 @@ func (realClock) Now() time.Time { return time.Now() }
 
 // Config is the protocol of one arm (design 6.4).
 type Config struct {
-	Predicted int     // B-0 predicted knee
-	NMax      int     // time/port cap on a sweep step
-	JoinRate  float64 // joins per second, for the time guard
-	Budget    time.Duration
+	Predicted int // B-0 predicted knee; context only once Start is set
+	NMax      int // time/port/memory cap on a sweep step
+	// Start is the sweep's first step size, taken from the host (0 = the
+	// legacy max(1, Predicted/4)). The warm-up is max(2, Start/2) when it is
+	// set.
+	Start int
+	// Top is the largest bot count any step may request, the overload
+	// included (0 = 2*NMax). NMaxBy names what bounded NMax (time, memory,
+	// generator-cpu, ports, explicit) and is carried on a time-bound result.
+	Top      int
+	NMaxBy   string
+	JoinRate float64 // joins per second, for the time guard
+	Budget   time.Duration
 
 	Warmup, Hold, Confirm, Overload, ProbeHold time.Duration
 
@@ -203,6 +212,9 @@ type Outcome struct {
 	Unconfirmed bool
 	Starts      int
 	Notes       []string
+	// StoppedEarly is the error that ended the leg after at least one sweep
+	// step was recorded; the result is then the best bracket so far.
+	StoppedEarly string
 }
 
 // Driver runs the protocol for one arm.
@@ -224,6 +236,8 @@ type Driver struct {
 	rate       float64
 	start      time.Time
 	out        Outcome
+	sw         *sweep.Sweep
+	sweepDone  bool // d.out.Result is the finished sweep's result; Run keeps it on a late error
 }
 
 // NewDriver fills the defaults a zero Config leaves open.
@@ -533,37 +547,18 @@ func (d *Driver) ensure(ctx context.Context, n int) (ramp, error) {
 // rateModel reports whether the time guard prices ramps with the bot's rate rule.
 func (d *Driver) rateModel() bool { return d.cfg.RateMax > 0 || d.cfg.RateScale > 0 }
 
-// rampSeconds is the time to grow the bot count from `from` to `to` joins.
-// Under the I-9 rule the rate at `alive` bots is min(RateMax, RateScale/alive)
-// (a zero term is left out), so the closed form integrates 1/rate over alive:
-// RateMax per second up to the crossover alive = RateScale/RateMax, and
-// alive/RateScale per join after it. Without the rule it is the constant rate.
-func (d *Driver) rampSeconds(from, to int) float64 {
-	if to <= from {
-		return 0
+// model is the join model the guard prices ramps with: the bot's rate rule
+// when it is on, else the constant (learned) rate.
+func (d *Driver) model() sweep.JoinModel {
+	if d.rateModel() {
+		return sweep.JoinModel{Max: d.cfg.RateMax, Scale: d.cfg.RateScale}
 	}
-	if !d.rateModel() {
-		return float64(to-from) / d.rate
-	}
-	a, b := float64(max(from, 1)), float64(to)
-	mx, sc := d.cfg.RateMax, d.cfg.RateScale
-	switch {
-	case sc <= 0:
-		return (b - a) / mx
-	case mx <= 0:
-		return (b*b - a*a) / (2 * sc)
-	}
-	c := sc / mx
-	var secs float64
-	if a < c {
-		secs += (math.Min(b, c) - a) / mx
-	}
-	if b > c {
-		lo := math.Max(a, c)
-		secs += (b*b - lo*lo) / (2 * sc)
-	}
-	return secs
+	return sweep.JoinModel{Const: d.rate}
 }
+
+// rampSeconds is the time to grow the bot count from `from` to `to` joins
+// under the driver's join model (see sweep.JoinModel.Seconds).
+func (d *Driver) rampSeconds(from, to int) float64 { return d.model().Seconds(from, to) }
 
 // settle probes with short holds until the step is quiescent (design 6.4.3).
 // The bot has no live counters, so each probe hold's report supplies them:
@@ -760,9 +755,44 @@ func (d *Driver) overBudget(n, lo int) bool {
 		cost += secs(d.joined, n)
 	}
 	// The confirm may rebuild and ramp to the knee, and the overload then
-	// ramps another knee's worth of bots: two ramps and two settles.
-	reserve := d.cfg.Confirm + d.cfg.Overload + 2*secs(0, lo) + 2*sweep.SettleTypical + 30*time.Second
+	// ramps from the knee to its own size: two ramps and two settles.
+	reserve := d.cfg.Confirm + d.cfg.Overload + secs(0, lo) + secs(lo, d.overloadN(lo)) + 2*sweep.SettleTypical + 30*time.Second
 	return d.cfg.Clock.Now().Sub(d.start)+cost+reserve > d.cfg.Budget
+}
+
+// top is the largest bot count any step may request.
+func (d *Driver) top() int {
+	if d.cfg.Top > 0 {
+		return d.cfg.Top
+	}
+	return 2 * d.cfg.NMax
+}
+
+// overloadN is the overload step's size for a knee of k bots.
+func (d *Driver) overloadN(k int) int {
+	return min(2*k, 2*d.cfg.NMax, d.top())
+}
+
+// tailFits reports whether a confirm or overload step of n bots held for hold
+// still fits in the budget, ramping from where the system is now. Budget 0 is
+// unlimited.
+func (d *Driver) tailFits(n int, hold time.Duration) bool {
+	if d.cfg.Budget <= 0 {
+		return true
+	}
+	var ramp time.Duration
+	secs := func(from, to int) time.Duration {
+		return time.Duration(d.rampSeconds(from, to) * float64(time.Second))
+	}
+	switch {
+	case d.rebuild:
+		ramp = secs(2, n) + 30*time.Second
+	case n < d.joined:
+		ramp = secs(0, n) + 30*time.Second
+	default:
+		ramp = secs(d.joined, n)
+	}
+	return d.cfg.Clock.Now().Sub(d.start)+ramp+sweep.SettleTypical+hold <= d.cfg.Budget
 }
 
 // measureRetried is a confirm or overload step: a control loss gets exactly one
@@ -880,15 +910,48 @@ func (d *Driver) burstPhase(ctx context.Context, k int) error {
 }
 
 // Run executes the arm: boot, warm-up, sweep, join bursts, confirm, overload.
+// An error after at least one sweep row was recorded does not lose the sweep:
+// the result is the best bracket so far, the error is Outcome.StoppedEarly and
+// Run returns nil. An error before any sweep row is returned.
 func (d *Driver) Run(ctx context.Context) (*Outcome, error) {
 	d.start = d.cfg.Clock.Now()
 	defer d.closeSys()
+	out, err := d.run(ctx)
+	if err == nil || d.sw == nil || len(rowsOf(d.out.Rows, "sweep")) == 0 {
+		return out, err
+	}
+	if !d.sweepDone {
+		d.out.Result = d.sw.Stop()
+		if d.out.Result.Kind == sweep.BelowRange {
+			d.note("no sweep step passed before the error, so \"below range\" may only mean the leg ended early")
+		}
+	}
+	d.out.StoppedEarly = err.Error()
+	d.note("stopped early: %v; the result is the best bracket so far", err)
+	return &d.out, nil
+}
+
+func rowsOf(rows []Row, kind string) []Row {
+	var r []Row
+	for _, x := range rows {
+		if x.Kind == kind {
+			r = append(r, x)
+		}
+	}
+	return r
+}
+
+func (d *Driver) run(ctx context.Context) (*Outcome, error) {
 	if err := d.boot(ctx); err != nil {
 		return &d.out, err
 	}
 
-	// Warm-up: ~10 % of the predicted knee, discarded.
+	// Warm-up, discarded: half the host start, or (no start) 10 % of the
+	// predicted knee.
 	warmN := max(2, d.cfg.Predicted/10)
+	if d.cfg.Start > 0 {
+		warmN = max(2, d.cfg.Start/2)
+	}
 	if rp, err := d.ensure(ctx, warmN); err != nil {
 		return &d.out, err
 	} else if rp.Joins.JoinFailures > 0 {
@@ -905,7 +968,12 @@ func (d *Driver) Run(ctx context.Context) (*Outcome, error) {
 		d.rebuild, d.rebuildAt, d.rebuildWhy = true, warmN, "control lost in the warm-up"
 	}
 
-	sw := sweep.NewSweep(d.cfg.Predicted, d.cfg.NMax)
+	start := max(1, d.cfg.Predicted/4)
+	if d.cfg.Start > 0 {
+		start = d.cfg.Start
+	}
+	sw := sweep.NewSweepAt(start, d.cfg.NMax)
+	d.sw = sw
 	lo := 0
 	for {
 		n, more := sw.Next()
@@ -938,6 +1006,10 @@ func (d *Driver) Run(ctx context.Context) (*Outcome, error) {
 		}
 	}
 	d.out.Result = sw.Result()
+	if r := &d.out.Result; r.Kind == sweep.TimeBound && r.N == d.cfg.NMax && r.Limit == "" {
+		r.Limit = d.cfg.NMaxBy
+	}
+	d.sweepDone = true
 
 	// Confirm at the found knee, then one overload step at 2x.
 	k := d.out.Result.N
@@ -950,19 +1022,28 @@ func (d *Driver) Run(ctx context.Context) (*Outcome, error) {
 			return &d.out, err
 		}
 	}
-	row, err := d.measureRetried(ctx, "confirm", k, d.cfg.Confirm, "confirm")
-	if err != nil {
-		return &d.out, err
+	if d.tailFits(k, d.cfg.Confirm) {
+		row, err := d.measureRetried(ctx, "confirm", k, d.cfg.Confirm, "confirm")
+		if err != nil {
+			return &d.out, err
+		}
+		if row.Outcome != sweep.Pass {
+			d.out.Unconfirmed = true
+			d.note("the confirm step at %d bots was %s, so the knee is unconfirmed: %s", k, row.Outcome, strings.Join(row.Reasons, "; "))
+		}
+	} else {
+		d.note("budget guard: confirm not measured (the %d-bot knee is unconfirmed by time, not by a failed step)", k)
 	}
-	if row.Outcome != sweep.Pass {
-		d.out.Unconfirmed = true
-		d.note("the confirm step at %d bots was %s, so the knee is unconfirmed: %s", k, row.Outcome, strings.Join(row.Reasons, "; "))
-	}
-	ov := min(2*k, 2*d.cfg.NMax)
+	ov := d.overloadN(k)
 	if ov <= k {
+		d.note("overload not measured: capped at %d (N_max by %s)", d.top(), d.cfg.NMaxBy)
 		return &d.out, nil
 	}
-	if _, err = d.measureRetried(ctx, "overload", ov, d.cfg.Overload, "overload"); err != nil {
+	if !d.tailFits(ov, d.cfg.Overload) {
+		d.note("budget guard: overload not measured")
+		return &d.out, nil
+	}
+	if _, err := d.measureRetried(ctx, "overload", ov, d.cfg.Overload, "overload"); err != nil {
 		return &d.out, err
 	}
 	return &d.out, nil

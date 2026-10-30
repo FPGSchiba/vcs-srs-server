@@ -34,7 +34,7 @@ host --help
 ok=1
 [ "$rc" -eq 0 ] || ok=0
 for w in docker native --host-label --server-set --gen-set --arms --scenario --repeats --gogc \
-  --client-ref --out --micro --predict --budget --leg-arg --note --privileged-sysctl --dry-run \
+  --join-floor --client-ref --out --micro --predict --budget --leg-arg --note --privileged-sysctl --dry-run \
   'git archive HEAD | ssh' 'scp -r'; do
   [[ "$out" == *"$w"* ]] || { ok=0; echo "  help lacks: $w"; }
 done
@@ -81,6 +81,13 @@ for r in 0 6 x; do base native --repeats "$r"; expect "repeats-bad-$r" 2 "bench-
 for g in off default both; do base native --gogc "$g"; expect "gogc-$g" 0 ""; done
 base native --gogc nope; expect gogc-bad 2 "bench-host: --gogc"
 
+# join-floor
+for f in 6 4 0 2.5; do base native --join-floor "$f"; expect "join-floor-ok-$f" 0 ""; done
+for f in -1 abc "" 1.2.3 .5; do
+  base native --join-floor "$f"; expect "join-floor-rejects-[$f]" 2 "bench-host: --join-floor must be a non-negative number"
+  if [[ "$out" == *"+ "* ]]; then fail "join-floor-rejects-[$f]-no-build"; else pass "join-floor-rejects-[$f]-no-build"; fi
+done
+
 # client-ref
 base native --client-ref b55823e195577506ba5c3fa2c6d16a48a5f9bd5b; expect client-ref-full 0 ""
 base native --client-ref b55823e;                                    expect client-ref-short 2 "bench-host: --client-ref must be a full 40-hex SHA"
@@ -88,7 +95,8 @@ base native --client-ref b55823e;                                    expect clie
 # micro
 base native --micro run;                                  expect micro-run 0 ""
 base native --micro maybe;                                expect micro-bad 2 "bench-host: --micro"
-base native --micro skip;                                 expect micro-skip-bare 2 "bench-host: --micro skip needs"
+# micro-skip-without-predict-ok (old: died "--micro skip needs ..."; new: legs run without a prediction)
+base native --micro skip;                                 expect micro-skip-bare 0 ""
 echo '{}' > "$tmp/p.json"
 base native --micro skip --predict "$tmp/p.json";         expect micro-skip-predict 0 ""
 base native --micro skip --predict "$tmp/missing.json";   expect micro-skip-predict-missing 2 "bench-host: --predict"
@@ -292,9 +300,27 @@ if [ "$okl" -eq 1 ]; then pass leg-argv-superset-of-bench-yml; else fail leg-arg
 has leg-hosts "--server-set 0 --gen-set 4-11"
 has leg-budget "--budget 100m"
 has leg-q6 "--q6 'host run: server 0, generator 4-11 (user, 2026-10-29)'"
-has leg-tee "| tee $tmp/out/gogc-off/leg-1.log"
-has leg-out "--out $tmp/out/gogc-off/results/1-one-big-net"
+has leg-tee "| tee $tmp/out/gogc-default/leg-1.log"
+has leg-out "--out $tmp/out/gogc-default/results/1-one-big-net"
+# gogc-default-is-default (old: off): a base run writes only gogc-default/ and passes --generator-gc default
+has leg-gc-default "--generator-gc default"
+if plus | grep -qF 'gogc-off'; then fail gogc-default-is-default-no-off-dir; else pass gogc-default-is-default-no-off-dir; fi
+pipe --gogc off
 has leg-gc-off "--generator-gc off"
+has leg-gc-off-out "--out $tmp/out/gogc-off/results/1-one-big-net"
+pipe
+
+# join-floor-forwarded: --join-rate-floor F on every leg line, not a --leg-arg
+pipe --repeats 2 --gogc both --join-floor 6
+nl="$(plus | grep -cF "vcs-benchkit leg" || true)"
+nf="$(plus | grep -F 'vcs-benchkit leg' | grep -cF -- '--join-rate-floor 6' || true)"
+if [ "$nl" -eq 4 ] && [ "$nf" -eq 4 ]; then pass join-floor-forwarded; else fail "join-floor-forwarded ($nf of $nl)"; fi
+# join-floor-absent-not-passed: the kit default applies
+pipe
+hasnt join-floor-absent-not-passed 'vcs-benchkit leg' '--join-rate-floor'
+# the label is unchanged by --join-floor (it is not a leg arg)
+pipe --join-floor 6
+has join-floor-label-unchanged "--label 'local-docker, server cpus 0, generator cpus 4-11, loopback, relative only. Not a capacity figure.'"
 
 # gogc both: seeds alternate off/default; aggregate once per variant, never pooled
 pipe --repeats 2 --gogc both
@@ -426,6 +452,11 @@ if grep -qF 'High performance \| apps closed' "$sm"; then pass summary-md-escape
 # the summary is also printed to stdout at the end
 if printf '%s
 ' "$out" | grep -qF "FAKE aggregate GOGC default"; then pass summary-printed; else fail summary-printed; fi
+# host-json-join-floor
+recs --join-floor 6
+if jq -e '.join_floor == "6"' "$tmp/out/host.json" >/dev/null; then pass host-json-join-floor; else fail "host-json-join-floor"; fi
+recs
+if jq -e '.join_floor == null and has("join_floor")' "$tmp/out/host.json" >/dev/null; then pass host-json-join-floor-null; else fail "host-json-join-floor-null"; fi
 # a leg that has not finished still gets a section
 pipe --gogc default
 if grep -qF '_no results.md' "$tmp/out/summary.md"; then pass summary-md-missing-results; else fail summary-md-missing-results; fi
@@ -658,7 +689,7 @@ pipe
 holds micro-stdout-only 'voice.test -test.run' "| tee $tmp/out/micro/micro.txt"
 hasnt micro-no-stderr 'voice.test -test.run' '2>&1'
 hasnt benchstat-no-stderr 'benchstat@' '2>&1'
-holds leg-keeps-stderr 'vcs-benchkit leg' "2>&1 | tee $tmp/out/gogc-off/leg-1.log"
+holds leg-keeps-stderr 'vcs-benchkit leg' "2>&1 | tee $tmp/out/gogc-default/leg-1.log"
 
 # arch: the protoc pin is linux-x86_64 only, so native mode refuses another arch before any build
 set +e

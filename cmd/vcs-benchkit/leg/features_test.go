@@ -211,13 +211,33 @@ func TestBotParamsFlowIntoArgsAndEnv(t *testing.T) {
 	}
 }
 
-func TestGeneratorGCDefaultIsOff(t *testing.T) {
+func TestGeneratorGCOffIsR29(t *testing.T) {
 	for _, kind := range []string{"run", "calibrate", "reflect"} {
 		if got, want := GeneratorEnvFor(kind, "info", "off"), GeneratorEnvWith(kind, "info"); !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: off = %q, want %q", kind, got, want)
 		}
-		if got, want := GeneratorEnvFor(kind, "info", ""), GeneratorEnvWith(kind, "info"); !reflect.DeepEqual(got, want) {
-			t.Errorf("%s: empty = %q, want %q", kind, got, want)
+	}
+	if got := GeneratorEnvFor("reflect", "info", "off"); !reflect.DeepEqual(got, []string{"GOGC=off", "GOMEMLIMIT=1GiB"}) {
+		t.Errorf("reflect off = %q", got)
+	}
+}
+
+// W6 kit fix 3 (D1): an empty mode is the Go defaults, no longer GOGC=off.
+func TestGeneratorEnvEmptyModeIsDefault(t *testing.T) {
+	for _, kind := range []string{"run", "calibrate", "reflect"} {
+		for _, e := range GeneratorEnvFor(kind, "info", "") {
+			if strings.HasPrefix(e, "GOGC=") || strings.HasPrefix(e, "GOMEMLIMIT=") {
+				t.Errorf("%s: empty mode carries %s", kind, e)
+			}
+		}
+	}
+	if DefaultBotParams().GeneratorGC != GCDefault {
+		t.Errorf("DefaultBotParams().GeneratorGC = %q", DefaultBotParams().GeneratorGC)
+	}
+	env := processEnvFor([]string{"GOGC=50"}, nil, "run", "info", "")
+	for _, e := range env {
+		if strings.HasPrefix(e, "GOGC=") {
+			t.Errorf("empty mode kept the inherited %s", e)
 		}
 	}
 }

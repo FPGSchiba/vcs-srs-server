@@ -53,8 +53,9 @@ type BotParams struct {
 	GCPauseP99, GCPauseWarnP99 time.Duration
 	// GRPCLog is the grpc-go log severity ("info", "warning", "error") or "off".
 	GRPCLog string
-	// GeneratorGC is "off" (the R2-9 GOGC=off GOMEMLIMIT=1GiB env; "" means off)
-	// or "default" (the generator inherits neither variable: Go defaults).
+	// GeneratorGC is "default" (the generator inherits neither GOGC nor
+	// GOMEMLIMIT: Go defaults; "" means default too, W6 kit fix 3 D1) or "off"
+	// (the R2-9 GOGC=off GOMEMLIMIT=1GiB env).
 	GeneratorGC string
 }
 
@@ -62,7 +63,7 @@ type BotParams struct {
 func DefaultBotParams() BotParams {
 	return BotParams{
 		PingEvery: 5 * time.Second, JoinRateMax: 12, JoinRateScale: 5000, MaxInFlight: 8, RampTalker: botRampTalker,
-		GCPauseP99: 5 * time.Millisecond, GCPauseWarnP99: 2 * time.Millisecond, GRPCLog: "info", GeneratorGC: GCOff,
+		GCPauseP99: 5 * time.Millisecond, GCPauseWarnP99: 2 * time.Millisecond, GRPCLog: "info", GeneratorGC: GCDefault,
 	}
 }
 
@@ -146,11 +147,11 @@ func ParseGeneratorGC(v string) error {
 	return fmt.Errorf("--generator-gc %q: want %q or %q", v, GCOff, GCDefault)
 }
 
-// GeneratorEnvFor is GeneratorEnvWith with an explicit GC mode: "off" (or "")
-// adds the GC pair, "default" adds neither variable.
+// GeneratorEnvFor is GeneratorEnvWith with an explicit GC mode: "off" adds the
+// GC pair, "default" (or "") adds neither variable.
 func GeneratorEnvFor(kind, grpcLog, gcMode string) []string {
 	var gc []string
-	if gcMode != GCDefault {
+	if gcMode == GCOff {
 		gc = []string{"GOGC=off", "GOMEMLIMIT=1GiB"}
 	}
 	switch kind {
@@ -182,13 +183,13 @@ func processEnvWith(base, pinEnv []string, kind, grpcLog string) []string {
 	return processEnvFor(base, pinEnv, kind, grpcLog, GCOff)
 }
 
-// processEnvFor is processEnvWith at an explicit GC mode. In "default" mode an
-// inherited GOGC or GOMEMLIMIT is removed from base, so the generator really
+// processEnvFor is processEnvWith at an explicit GC mode. In "default" mode (or
+// ""), an inherited GOGC or GOMEMLIMIT is removed from base, so the generator really
 // runs with the Go defaults.
 func processEnvFor(base, pinEnv []string, kind, grpcLog, gcMode string) []string {
 	env := make([]string, 0, len(base)+len(pinEnv)+4)
 	for _, e := range base {
-		if gcMode == GCDefault && (strings.HasPrefix(e, "GOGC=") || strings.HasPrefix(e, "GOMEMLIMIT=")) {
+		if gcMode != GCOff && (strings.HasPrefix(e, "GOGC=") || strings.HasPrefix(e, "GOMEMLIMIT=")) {
 			continue
 		}
 		env = append(env, e)

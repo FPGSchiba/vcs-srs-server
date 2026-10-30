@@ -96,8 +96,12 @@ func TestParseLegFlagsLabel(t *testing.T) {
 func TestParseLegFlagsGeneratorGC(t *testing.T) {
 	base := []string{"--server-bin", "s", "--loadbot-bin", "l", "--out", "o"}
 	o, err := parseLegFlags(base, io.Discard)
+	if err != nil || o.Bot.GeneratorGC != "default" {
+		t.Fatalf("default = %q err = %v, want default", o.Bot.GeneratorGC, err)
+	}
+	o, err = parseLegFlags(append(append([]string{}, base...), "--generator-gc", "off"), io.Discard)
 	if err != nil || o.Bot.GeneratorGC != "off" {
-		t.Fatalf("default = %q err = %v, want off", o.Bot.GeneratorGC, err)
+		t.Fatalf("off = %q err = %v", o.Bot.GeneratorGC, err)
 	}
 	o, err = parseLegFlags(append(append([]string{}, base...), "--generator-gc", "default"), io.Discard)
 	if err != nil || o.Bot.GeneratorGC != "default" {
@@ -105,5 +109,25 @@ func TestParseLegFlagsGeneratorGC(t *testing.T) {
 	}
 	if _, err = parseLegFlags(append(append([]string{}, base...), "--generator-gc", "on"), io.Discard); err == nil {
 		t.Error("--generator-gc on must be refused")
+	}
+}
+
+func TestParseLegFlagsHostDefaults(t *testing.T) {
+	// No --predicted-knee and no --predict: the prediction is context only.
+	base := []string{"--server-bin", "s", "--loadbot-bin", "l", "--out", "o"}
+	o, err := parseLegFlags(base, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.JoinRateFloor != 4 || o.MemPerBotMiB != 2 || o.MemMargin != 0.2 || o.MemReserveMiB != 512 || o.BotsPerGenCPU != 1500 {
+		t.Errorf("host defaults = floor %v mem %v/%v/%v bots-per-cpu %v", o.JoinRateFloor, o.MemPerBotMiB, o.MemMargin, o.MemReserveMiB, o.BotsPerGenCPU)
+	}
+	if o.PredictedKnee != 0 {
+		t.Errorf("PredictedKnee = %d without a flag", o.PredictedKnee)
+	}
+	args := append(append([]string{}, base...), "--join-rate-floor", "0", "--mem-per-bot-mib", "3", "--mem-margin", "0.1", "--mem-reserve-mib", "256", "--bots-per-gen-cpu", "0")
+	o, err = parseLegFlags(args, io.Discard)
+	if err != nil || o.JoinRateFloor != 0 || o.MemPerBotMiB != 3 || o.MemMargin != 0.1 || o.MemReserveMiB != 256 || o.BotsPerGenCPU != 0 {
+		t.Errorf("overrides = %+v err = %v", o, err)
 	}
 }

@@ -81,6 +81,9 @@ type fakeWorld struct {
 	// warmupDiesV2 makes the first warm-up hold return the v2 hold-death text;
 	// warmupDiesV3 records a v3 control_lost event during it instead.
 	warmupDiesV2, warmupDiesV3 bool
+	// setNErrAt makes SetN fail with a wrapped context.DeadlineExceeded for any
+	// target >= it, on systems started at or after setNErrFromStart (0 = all).
+	setNErrAt, setNErrFromStart int
 }
 
 // fakeDeath kills a bot when the nth (1-based) occurrence of phase (ramp, settle
@@ -105,6 +108,7 @@ type fakeHold struct {
 
 type fakeSystem struct {
 	w          *fakeWorld
+	id         int // 1-based start ordinal
 	n          int
 	failedRamp bool // the last SetN had join failures
 	lost       []ControlLostEvent
@@ -174,7 +178,7 @@ func (w *fakeWorld) Start(ctx context.Context) (System, error) {
 		return nil, w.startErr
 	}
 	w.starts++
-	return &fakeSystem{w: w}, nil
+	return &fakeSystem{w: w, id: w.starts}, nil
 }
 
 // measuredAt reports whether a measured (non-probe, non-preflight) hold ran at
@@ -189,6 +193,9 @@ func (w *fakeWorld) measuredAt(n int) bool {
 }
 
 func (s *fakeSystem) SetN(ctx context.Context, n int) (Joins, error) {
+	if s.w.setNErrAt > 0 && n >= s.w.setNErrAt && s.id >= s.w.setNErrFromStart {
+		return Joins{}, fmt.Errorf("loadbot: %w", context.DeadlineExceeded)
+	}
 	s.failedRamp = false
 	s.w.mu.Lock()
 	s.w.setNs = append(s.w.setNs, n)
@@ -687,11 +694,11 @@ func TestDriverProbeHoldsFeedTheSettleColumns(t *testing.T) {
 	}
 }
 
-// TestDriverBudgetStopAfterABreachIsAKnee: whatever budget makes the guard
-// stop the sweep after a breach was already measured, the result must be a
-// knee at the last pass, never "time-bound" (which reads as censored and would
-// turn the D13 go/no-go into a no-go for a knee the leg actually bracketed).
-func TestDriverBudgetStopAfterABreachIsAKnee(t *testing.T) {
+// TestDriverBudgetStopAfterABreachIsBracketed: whatever budget makes the guard
+// stop the sweep after a breach was already measured, the result must be the
+// bracket (lo <= knee < hi), never "time-bound" (the knee was bracketed) and
+// not a bare knee (three bisections never ran).
+func TestDriverBudgetStopAfterABreachIsBracketed(t *testing.T) {
 	found := false
 	for b := 2 * time.Minute; b <= 40*time.Minute; b += 5 * time.Second {
 		w := &fakeWorld{kneeN: 150} // 100 passes, 200 breaches, then bisect
@@ -712,8 +719,9 @@ func TestDriverBudgetStopAfterABreachIsAKnee(t *testing.T) {
 			continue
 		}
 		found = true
-		if out.Result.Kind != sweep.KneeFound || out.Result.N < 100 || out.Result.N >= 200 {
-			t.Fatalf("budget %s: result = %v, want a knee in [100, 200)", b, out.Result)
+		if out.Result.Kind != sweep.Bracketed || out.Result.N < 100 || out.Result.N >= 200 ||
+			out.Result.Hi <= out.Result.N || out.Result.Hi > 200 {
+			t.Fatalf("budget %s: result = %v, want Bracketed with N in [100, 200) and Hi in (N, 200]", b, out.Result)
 		}
 		if !strings.Contains(strings.Join(out.Notes, ";"), "bisection") {
 			t.Errorf("budget %s: notes do not say the bisection was cut short: %v", b, out.Notes)

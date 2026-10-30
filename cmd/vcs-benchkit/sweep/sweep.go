@@ -32,6 +32,10 @@ const (
 	// size. N is the last passing size (0 if none) and At the size that lost
 	// control: the knee is at least N, censored, not attributed to the server.
 	ControlLostBound
+	// Bracketed: the sweep was stopped (the budget guard) after a breach
+	// bracketed the knee. N is the largest pass and Hi the smallest breach:
+	// lo <= knee < hi. Censored: three bisections would have narrowed it.
+	Bracketed
 )
 
 // Result is a sweep's final answer.
@@ -40,6 +44,12 @@ type Result struct {
 	N    int
 	// At is the step size that lost control twice (ControlLostBound only).
 	At int
+	// Limit names what bound N_max for a TimeBound result: "" or "time" when
+	// the time budget did, else "memory", "generator-cpu", "ports" or
+	// "explicit".
+	Limit string
+	// Hi is the upper end of a bracket (Bracketed results, K-T4).
+	Hi int
 }
 
 // String renders the result as the design names it: "knee N",
@@ -51,11 +61,16 @@ func (r Result) String() string {
 	case GeneratorBound:
 		return fmt.Sprintf("≥ %d (generator-bound)", r.N)
 	case TimeBound:
+		if r.Limit != "" && r.Limit != "time" {
+			return fmt.Sprintf("≥ %d (N_max: %s)", r.N, r.Limit)
+		}
 		return fmt.Sprintf("≥ %d (time-bound)", r.N)
 	case BelowRange:
 		return fmt.Sprintf("< %d (below range)", r.N)
 	case ControlLostBound:
 		return fmt.Sprintf("≥ %d (control lost at %d)", r.N, r.At)
+	case Bracketed:
+		return fmt.Sprintf("%d ≤ knee < %d (bracketed)", r.N, r.Hi)
 	}
 	return fmt.Sprintf("Result(%d, %d)", int(r.Kind), r.N)
 }
@@ -109,21 +124,36 @@ type Sweep struct {
 // non-positive prediction starts at 1. A non-positive nMax runs no step and
 // ends as TimeBound with N 0.
 func NewSweep(predictedKnee, nMax int) *Sweep {
+	return NewSweepAt(max(1, predictedKnee/4), nMax)
+}
+
+// NewSweepAt starts a sweep at an explicit first step size (at least 1, at
+// most nMax). A non-positive nMax runs no step and ends as TimeBound with N 0.
+func NewSweepAt(start, nMax int) *Sweep {
 	s := &Sweep{nMax: nMax}
 	if nMax < 1 {
 		s.phase = phaseDone
 		s.result = Result{Kind: TimeBound, N: 0}
 		return s
 	}
-	start := predictedKnee / 4
-	if start < 1 {
-		start = 1
-	}
-	if start > nMax {
-		start = nMax
-	}
+	start = min(max(start, 1), nMax)
 	s.next = start
 	return s
+}
+
+// HostStart is the sweep's first step size derived from the host: the
+// calibration's bot count clamped to [max(1, ceil(nMax/16)), max(1, nMax/2)].
+// calBots <= 0 is treated as nMax/8. It is 0 when nMax < 1.
+func HostStart(calBots, nMax int) int {
+	if nMax < 1 {
+		return 0
+	}
+	if calBots <= 0 {
+		calBots = nMax / 8
+	}
+	lo := max(1, (nMax+15)/16)
+	hi := max(1, nMax/2)
+	return min(max(calBots, lo), hi)
 }
 
 // Next returns the size of the step to run. It returns false when the sweep
@@ -235,10 +265,9 @@ func (s *Sweep) Bracket() (lo, hi int) { return s.lo, s.hi }
 
 // Stop ends the sweep early (the leg's budget guard) and returns its result.
 // A sweep still doubling has seen no breach, so it is time-bound at its last
-// pass. Once a breach brackets the knee, the last pass is a knee, coarser
-// than three bisections would give but not censored; with no pass at all it
-// is below range. A pending step is discarded. A finished sweep keeps its
-// result.
+// pass. Once a breach brackets the knee, the result is that bracket
+// (Bracketed: lo <= knee < hi, censored); with no pass at all it is below
+// range. A pending step is discarded. A finished sweep keeps its result.
 func (s *Sweep) Stop() Result {
 	if s.phase == phaseDone {
 		return s.result
@@ -250,7 +279,7 @@ func (s *Sweep) Stop() Result {
 	case s.lo == 0:
 		s.finish(Result{Kind: BelowRange, N: s.smallestB})
 	default:
-		s.finish(Result{Kind: KneeFound, N: s.lo})
+		s.finish(Result{Kind: Bracketed, N: s.lo, Hi: s.hi})
 	}
 	return s.result
 }
