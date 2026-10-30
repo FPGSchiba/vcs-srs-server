@@ -308,14 +308,16 @@ write_records() {
     --argjson sysctl_raise "$(str_or_null "${BENCH_HOST_SYSCTL_RAISE:-}")" \
     --arg kernel "$kernel" --argjson nproc "$(num_or_null "$nproc_v")" \
     --arg server_set "$server_set" --arg gen_set "$gen_set" --arg gogc "$gogc" \
-    --argjson join_floor "$(str_or_null "$join_floor")"     --arg client_ref "$client_ref" --arg server_sha "$server_sha" --argjson server_dirty "$dirty" \
+    --argjson join_floor "$(str_or_null "$join_floor")" \
+    --arg client_ref "$client_ref" --arg server_sha "$server_sha" --argjson server_dirty "$dirty" \
     --argjson rmem_max "$(num_or_null "$rmem0")" --argjson wmem_max "$(num_or_null "$wmem0")" \
     --argjson leg_args "$legs_json" --arg note "$note" \
     --arg started_utc "$started" --arg ended_utc "$ended" \
     --arg label "$label" --arg bot_label_note "$BOT_LABEL_NOTE" \
     '{host_label: $host_label, mode: $mode, image: $image, docker_version: $docker_version,
       tool_versions: $tool_versions, sysctl_raise: $sysctl_raise,
-      kernel: $kernel, nproc: $nproc, server_set: $server_set, gen_set: $gen_set, gogc: $gogc, join_floor: $join_floor,
+      kernel: $kernel, nproc: $nproc, server_set: $server_set, gen_set: $gen_set, gogc: $gogc,
+      join_floor: $join_floor,
       client_ref: $client_ref, server_sha: $server_sha, server_dirty: $server_dirty,
       rmem_max: $rmem_max, wmem_max: $wmem_max, leg_args: $leg_args, note: $note,
       started_utc: $started_utc, ended_utc: $ended_utc,
