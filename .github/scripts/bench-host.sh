@@ -231,7 +231,8 @@ done
 
 # Server pair: with two server cpus, are they two cores or two hyperthreads of one? Seq and D2 only
 # mean "two cores" in the first case, so a shared core is a warning (an S-only run uses one cpu and
-# stays quiet). "unknown" when the topology is unreadable or, in docker mode, not looked at here.
+# stays quiet). "unknown" when the topology is unreadable or, in docker mode, not looked at here:
+# the SMT check applies to native mode only (the sibling map is not read under docker).
 if [ "${#server_cpus[@]}" -ne 2 ]; then
   server_pair="n/a (1 cpu)"
 else
@@ -589,41 +590,41 @@ pipeline_native() {
   k=1
   while [ "$k" -le "$repeats" ]; do
     for v in $variants; do
-     for sc in ${scenario//,/ }; do
-      dir="$out_dir/gogc-$v"
-      run mkdir -p "$dir/results"
-      cmd=("$bin/vcs-benchkit" leg
-        --server-bin "$bin/vcs-server"
-        --loadbot-bin "$bin/vcs-loadbot"
-        --scenario "$sc"
-        --arms "$arms"
-        --seed "$k"
-        --out "$dir/results/$k-$sc"
-        --probe "$out_dir/env-probe.json")
-      if [ "$have_predict" -eq 1 ]; then cmd+=(--predict "$predict_file"); fi
-      cmd+=(--server-sha "$server_sha"
-        --client-sha "$client_sha"
-        --q6 "host run: server $server_set, generator $gen_set (user, 2026-10-29)"
-        --server-set "$server_set"
-        --gen-set "$gen_set"
-        --topology "$topology"
-        --label "$label"
-        --generator-gc "$v"
-        --budget "$budget"
-        "$sysctl_flag")
-      if [ "$have_join_floor" -eq 1 ]; then cmd+=(--join-rate-floor "$join_floor"); fi
-      if [ "${#leg_args[@]}" -gt 0 ]; then cmd+=("${leg_args[@]}"); fi
-      echo "== leg $k, $sc, GOGC $v =="
-      if [ "$dry_run" -eq 1 ] && [ -n "${BENCH_HOST_FAKE_RESULTS:-}" ]; then
-        mkdir -p "$dir/results/$k-$sc"
-        printf 'FAKE results GOGC %s leg %s %s\n' "$v" "$k" "$sc" > "$dir/results/$k-$sc/results.md"
-      fi
-      if ! run_tee "$dir/leg-$k-$sc.log" "${cmd[@]}"; then
-        echo "bench-host: leg $k ($sc, GOGC $v) failed; continuing" >&2
-        failed=1
-        leg_diagnostics "$dir/results/$k-$sc"
-      fi
-     done
+      for sc in ${scenario//,/ }; do
+        dir="$out_dir/gogc-$v"
+        run mkdir -p "$dir/results"
+        cmd=("$bin/vcs-benchkit" leg
+          --server-bin "$bin/vcs-server"
+          --loadbot-bin "$bin/vcs-loadbot"
+          --scenario "$sc"
+          --arms "$arms"
+          --seed "$k"
+          --out "$dir/results/$k-$sc"
+          --probe "$out_dir/env-probe.json")
+        if [ "$have_predict" -eq 1 ]; then cmd+=(--predict "$predict_file"); fi
+        cmd+=(--server-sha "$server_sha"
+          --client-sha "$client_sha"
+          --q6 "host run: server $server_set, generator $gen_set (user, 2026-10-29)"
+          --server-set "$server_set"
+          --gen-set "$gen_set"
+          --topology "$topology"
+          --label "$label"
+          --generator-gc "$v"
+          --budget "$budget"
+          "$sysctl_flag")
+        if [ "$have_join_floor" -eq 1 ]; then cmd+=(--join-rate-floor "$join_floor"); fi
+        if [ "${#leg_args[@]}" -gt 0 ]; then cmd+=("${leg_args[@]}"); fi
+        echo "== leg $k, $sc, GOGC $v =="
+        if [ "$dry_run" -eq 1 ] && [ -n "${BENCH_HOST_FAKE_RESULTS:-}" ]; then
+          mkdir -p "$dir/results/$k-$sc"
+          printf 'FAKE results GOGC %s leg %s %s\n' "$v" "$k" "$sc" > "$dir/results/$k-$sc/results.md"
+        fi
+        if ! run_tee "$dir/leg-$k-$sc.log" "${cmd[@]}"; then
+          echo "bench-host: leg $k ($sc, GOGC $v) failed; continuing" >&2
+          failed=1
+          leg_diagnostics "$dir/results/$k-$sc"
+        fi
+      done
     done
     k=$((k + 1))
   done
