@@ -119,8 +119,8 @@ func (realClock) Now() time.Time { return time.Now() }
 
 // Config is the protocol of one arm (design 6.4).
 type Config struct {
-	Predicted int     // B-0 predicted knee; context only once Start is set
-	NMax      int     // time/port/memory cap on a sweep step
+	Predicted int // B-0 predicted knee; context only once Start is set
+	NMax      int // time/port/memory cap on a sweep step
 	// Start is the sweep's first step size, taken from the host (0 = the
 	// legacy max(1, Predicted/4)). The warm-up is max(2, Start/2) when it is
 	// set.
@@ -128,10 +128,10 @@ type Config struct {
 	// Top is the largest bot count any step may request, the overload
 	// included (0 = 2*NMax). NMaxBy names what bounded NMax (time, memory,
 	// generator-cpu, ports, explicit) and is carried on a time-bound result.
-	Top    int
-	NMaxBy string
-	JoinRate  float64 // joins per second, for the time guard
-	Budget    time.Duration
+	Top      int
+	NMaxBy   string
+	JoinRate float64 // joins per second, for the time guard
+	Budget   time.Duration
 
 	Warmup, Hold, Confirm, Overload, ProbeHold time.Duration
 
