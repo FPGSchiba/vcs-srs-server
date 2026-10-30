@@ -74,7 +74,7 @@ func EstimateLeg(knee int, m JoinModel, steps int) time.Duration {
 	k := max(knee, 0)
 	ramps := 2*m.Seconds(0, k) + m.Seconds(k, 2*k)
 	fixed := time.Duration(steps)*(SettleTypical+HoldDuration) + confirmAndOverload + startAndWarmup
-	if ramps >= (maxDuration-fixed).Seconds() {
+	if ramps >= (maxDuration - fixed).Seconds() {
 		return maxDuration
 	}
 	return time.Duration(ramps*float64(time.Second)) + fixed
