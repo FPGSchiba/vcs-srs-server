@@ -1,0 +1,4 @@
+arm,scenario,repeats,median_n,min_n,max_n,censored,unconfirmed,predicted_knee,topology,arm_label
+S,one-big-net,2,3010,3010,3020,false,false,3800,2 hyperthreads of 1 core,
+Seq,one-big-net,2,3110,3110,3120,false,false,3800,2 hyperthreads of 1 core,
+D2,one-big-net,2,2910,2910,2920,false,false,3800,2 hyperthreads of 1 core,bot-only; real client: ROADMAP Phase 9

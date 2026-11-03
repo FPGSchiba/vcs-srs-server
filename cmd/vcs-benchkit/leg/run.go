@@ -2,7 +2,6 @@ package leg
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -162,13 +161,15 @@ func newManifest(o Options, pins map[string]PinRecord, probeRaw []byte) *Manifes
 	}
 }
 
-// Validate checks resolved options. S4 builds the S arm of one-big-net only.
+// Validate checks resolved options: Arms is a comma list of arms, Scenario one
+// of Scenarios, and every arm must fit the server and generator sets.
 func (o *Options) Validate() error {
+	arms, armsErr := ParseArms(o.Arms)
 	switch {
-	case o.Arms != "S":
-		return fmt.Errorf("--arms %q: S4 builds the S arm only; Seq and D2 arrive with S5", o.Arms)
-	case o.Scenario != "one-big-net":
-		return fmt.Errorf("--scenario %q: v1 runs one-big-net only", o.Scenario)
+	case armsErr != nil:
+		return armsErr
+	case !ValidScenario(o.Scenario):
+		return fmt.Errorf("--scenario %q: want one of %s", o.Scenario, strings.Join(Scenarios, ", "))
 	case o.ServerBin == "" || o.LoadbotBin == "" || o.OutDir == "":
 		return errors.New("--server-bin, --loadbot-bin and --out are required")
 	case o.ServerSet == "" || o.GenSet == "":
@@ -198,7 +199,12 @@ func (o *Options) Validate() error {
 	case o.Bot.GRPCLog != "" && o.Bot.GRPCLog != "off" && o.Bot.GRPCLog != "info" && o.Bot.GRPCLog != "warning" && o.Bot.GRPCLog != "error":
 		return fmt.Errorf("--grpc-log %q: want info, warning, error or off", o.Bot.GRPCLog)
 	}
-	return disjoint(o.ServerSet, o.GenSet)
+	for _, a := range arms {
+		if _, err := PlanArm(a, o.ServerSet, o.GenSet); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func readPortRange(read func(string) ([]byte, error)) ([2]int, error) {
@@ -235,13 +241,15 @@ func readUlimitN() (int, error) {
 // 6.3). The calibration reflector gets the whole server set and the load
 // generator its own set. The sets must be valid and disjoint.
 func BuildPins(serverSet, genSet string) (map[string]PinRecord, error) {
-	if err := disjoint(serverSet, genSet); err != nil {
+	plan, err := PlanArm("S", serverSet, genSet)
+	if err != nil {
 		return nil, err
 	}
 	serverCPUs, _ := CPUList(serverSet)
 	genCPUs, _ := CPUList(genSet)
+	sp := plan.Server[topology.Standalone]
 	return map[string]PinRecord{
-		"server":    {CPUs: strconv.Itoa(serverCPUs[0]), GOMAXPROCS: 1, Shards: topology.ShardCount(1)},
+		"server":    {CPUs: sp.CPUs, GOMAXPROCS: sp.GOMAXPROCS, Shards: topology.ShardCount(sp.GOMAXPROCS)},
 		"reflector": {CPUs: serverSet, GOMAXPROCS: len(serverCPUs)},
 		"generator": {CPUs: genSet, GOMAXPROCS: len(genCPUs)},
 	}, nil
@@ -304,6 +312,13 @@ type Manifest struct {
 	Memory          *MemoryRecord     `json:"memory,omitempty"`
 	DecisionsRound3 map[string]string `json:"decisions_round3,omitempty"`
 
+	// Round 5 (W6 S5): what the bot reported at the arm's first step, and the
+	// order the leg ran its arms in.
+	ArmLabel string      `json:"arm_label,omitempty"`
+	Parity   *StepParity `json:"parity,omitempty"`
+	Corpus   *CorpusInfo `json:"corpus,omitempty"`
+	ArmOrder []string    `json:"arm_order,omitempty"`
+
 	EnvProbe json.RawMessage `json:"env_probe,omitempty"`
 
 	Result       string   `json:"result,omitempty"`
@@ -336,246 +351,6 @@ func writeManifest(dir string, m *Manifest) error {
 		enc.SetIndent("", "  ")
 		return enc.Encode(m)
 	})
-}
-
-// Run executes one leg: manifest, calibration, pre-flight, the S arm, files.
-func Run(ctx context.Context, o Options, logw io.Writer) error {
-	// Progress arrives from the bot's reader goroutine as well as this one.
-	logw = &syncWriter{w: logw}
-	// Resolve inputs: explicit flags win over the probe and prediction files.
-	var probeRaw []byte
-	if o.ProbeFile != "" {
-		b, err := os.ReadFile(o.ProbeFile)
-		if err != nil {
-			return err
-		}
-		p, err := ParseProbe(b)
-		if err != nil {
-			return err
-		}
-		probeRaw = b
-		if o.ServerSet == "" {
-			o.ServerSet = p.ServerSet
-		}
-		if o.GenSet == "" {
-			o.GenSet = p.GeneratorSet
-		}
-		if o.Topology == "" {
-			o.Topology = p.TopologyLabel
-		}
-	}
-	if o.PredictedKnee <= 0 && o.PredictFile != "" {
-		b, err := os.ReadFile(o.PredictFile)
-		if err != nil {
-			return err
-		}
-		if o.PredictedKnee, err = PredictedKnee(b, o.Scenario, o.Arms); err != nil {
-			return err
-		}
-	}
-	o.normalizeRound2()
-	if err := o.Validate(); err != nil {
-		return err
-	}
-	if o.readFile == nil {
-		o.readFile = os.ReadFile
-	}
-	if err := os.MkdirAll(o.OutDir, 0o755); err != nil {
-		return err
-	}
-	serverCPUs, _ := CPUList(o.ServerSet)
-	genCPUs, _ := CPUList(o.GenSet)
-	pins, err := BuildPins(o.ServerSet, o.GenSet)
-	if err != nil {
-		return err
-	}
-	serverPin := pins["server"].CPUs
-
-	m := newManifest(o, pins, probeRaw)
-	tag := LegTag(o.Seed, o.Arms, o.Scenario)
-	// The reporter prints the diagnostics block into the Actions log; its source
-	// is set once the S arm's environment exists.
-	rep := &diagReporter{w: logw, tag: tag}
-	fail := func(err error) error {
-		m.Error = err.Error()
-		_ = writeManifest(o.OutDir, m)
-		rep.Failure(err)
-		return err
-	}
-	logf := func(f string, a ...any) { fmt.Fprintf(logw, "%s "+f+"\n", append([]any{tag}, a...)...) }
-	say := func(line string) { fmt.Fprintln(logw, line) }
-
-	// Whatever happens next, the leg ends with its results table: in the log
-	// for the person watching the run and in results.md for the step summary.
-	var cal *Calibration
-	var out *Outcome
-	defer func() {
-		var buf bytes.Buffer
-		if err := WriteResultsMarkdown(&buf, legResultsInput(o, m, cal, out)); err != nil {
-			logf("results.md: %v", err)
-			return
-		}
-		if err := os.WriteFile(filepath.Join(o.OutDir, "results.md"), buf.Bytes(), 0o644); err != nil {
-			logf("results.md: %v", err)
-		}
-		fmt.Fprintf(logw, "\n%s\n", buf.String())
-	}()
-
-	// 1. Manifest inputs: sysctls (raise rmem_max/wmem_max only), port range, ulimit.
-	if o.Sysctl && runtime.GOOS == "linux" {
-		m.Sysctl = RaiseSocketBuffers(o.readFile, runCmd, socketBufferTarget)
-	} else {
-		m.Sysctl = map[string]string{"skipped": "not requested or not linux"}
-	}
-	portRange, err := readPortRange(o.readFile)
-	if err != nil {
-		return fail(fmt.Errorf("read ip_local_port_range: %w", err))
-	}
-	ulimitN, err := readUlimitN()
-	if err != nil {
-		return fail(err)
-	}
-	m.PortRange, m.UlimitN = portRange, ulimitN
-
-	// 1b. What this load bot can do (v2 has no `features`): it decides which v3
-	// flags every later run passes. Probed once per leg, before calibration.
-	feats := ProbeFeatures(o.LoadbotBin, ProbeTimeout)
-	m.recordRound2(o, feats)
-	logf("%s", Round2Summary(o, feats))
-	if feats.Version == 2 {
-		logf("load bot v2 (no features subcommand or probe failed)")
-	} else {
-		logf("load bot v%d, features %v", feats.Version, feats.Names())
-	}
-
-	// 1c. Memory pre-flight, before any ramp: a host that cannot hold the bots is
-	// refused, and calibration steps above what memory allows are dropped.
-	mf := ReadMemFacts(o.readFile)
-	memTop, calSteps, memNote, err := memoryPreflight(o, mf)
-	m.recordMemory(o, mf, memTop, err != nil)
-	if err != nil {
-		return fail(err)
-	}
-	var calNotes []string
-	if memNote != "" {
-		logf("%s", memNote)
-		calNotes = append(calNotes, memNote)
-	}
-	o.CalSteps = calSteps
-
-	// 2. Calibration: the generator's receive side on its own.
-	legStart := time.Now()
-	logf("calibration: reflector on %s, generator on %s", o.ServerSet, o.GenSet)
-	cal, err = RunCalibration(ctx, CalConfig{
-		LoadbotBin: o.LoadbotBin, ServerSet: o.ServerSet, GenSet: o.GenSet, Seed: o.Seed,
-		Steps: o.CalSteps, Hold: o.CalHold, Senders: len(serverCPUs), StderrDir: o.OutDir, Features: feats, Bot: &o.Bot,
-		OnLine: func(kind string, raw []byte) {
-			switch kind {
-			case "calibration":
-				var s CalStep
-				if json.Unmarshal(raw, &s) == nil {
-					say(FormatCalLine(tag, s))
-				}
-			case "progress":
-				var p Progress
-				if json.Unmarshal(raw, &p) == nil {
-					say(FormatRampProgress(tag, p))
-				}
-			}
-		},
-	})
-	if err != nil {
-		return fail(fmt.Errorf("calibration: %w", err))
-	}
-	if cal.StoppedAt > 0 {
-		note := fmt.Sprintf("calibration stopped at N=%d: %s", cal.StoppedAt, cal.StopReason)
-		calNotes = append(calNotes, note)
-		say(FormatCalStopped(tag, cal))
-	}
-	if err := writeFile(o.OutDir, "calibration.csv", func(w io.Writer) error { return WriteCalibrationCSVLabeled(w, cal, o.Topology, o.Label) }); err != nil {
-		return fail(err)
-	}
-
-	// 3. Pre-flight: the port and descriptor budget, and N_max.
-	remaining := o.Budget - time.Since(legStart)
-	if o.Budget <= 0 {
-		remaining = 1000 * time.Hour
-	}
-	// The host decides N_max, the start and the join scale; the prediction is
-	// context only.
-	calBots := int(cal.ReceivePPS / rxPPSPerBot)
-	baseScale := o.Bot.JoinRateScale
-	caps := planHost(&o, feats, memTop, calBots, remaining, portRange, ulimitN, len(genCPUs))
-	m.recordCaps(caps, calBots)
-	if feats.Has("join_rate") {
-		// The bot argv now carries the anchored scale.
-		m.recordRound2(o, feats)
-		m.Ramp.RateScaleBase = baseScale
-	}
-	if caps.NMax < 1 {
-		return fail(errors.New("pre-flight: no sweep step fits the time, port, descriptor, memory and generator budgets (" + describeCaps(caps) + ")"))
-	}
-	if err := sweep.Preflight(portRange, ulimitN, caps.Top); err != nil {
-		return fail(err)
-	}
-	rule := fmt.Sprintf("join rule constant %s/s (bot lacks join_rate)", fmtFloat(o.JoinRate))
-	if feats.Has("join_rate") {
-		rule = fmt.Sprintf("join rule min(%s, %s/N) floor %s", fmtFloat(o.Bot.JoinRateMax), fmtFloat(o.Bot.JoinRateScale), fmtFloat(o.JoinRateFloor))
-	}
-	logf("pre-flight ok: N_max %d (%s), start %d, top %d, %s; predicted knee %s (context only)",
-		caps.NMax, caps.By, caps.Start, caps.Top, rule, predictedText(o.PredictedKnee))
-	logf("%s", describeCaps(caps))
-	nMax := caps.NMax
-
-	// 4-8. The S arm.
-	scratch, err := os.MkdirTemp("", "vcs-benchkit-leg-")
-	if err != nil {
-		return fail(fmt.Errorf("scratch dir: %w", err))
-	}
-	defer os.RemoveAll(scratch)
-	// The server inherits the kit's environment (topology passes os.Environ()), so
-	// its grpc transport log says why it closes a connection. Set only now: the
-	// reflector, which speaks no gRPC, has already run.
-	for _, kv := range ServerEnvWith(o.Bot.GRPCLog) {
-		k, v, _ := strings.Cut(kv, "=")
-		if err := os.Setenv(k, v); err != nil {
-			return fail(fmt.Errorf("set %s: %w", k, err))
-		}
-	}
-	env := &hostEnv{
-		serverBin: o.ServerBin, loadbotBin: o.LoadbotBin, outDir: o.OutDir, scratchDir: scratch, scenario: o.Scenario, seed: o.Seed,
-		serverPin: serverPin, serverGOMAXPROCS: 1, serverCPUs: serverCPUs, genSet: o.GenSet, genNCPU: len(genCPUs), features: feats, bot: &o.Bot,
-		onProgress:    func(p Progress) { say(FormatRampProgress(tag, p)) },
-		onControlLost: func(ev ControlLostEvent) { say(FormatControlLostLine(tag, ev)) },
-		logf:          logf,
-	}
-	rep.src = env
-	cfg := driverConfig(o, caps, remaining, feats)
-	cfg.OnRow = func(r Row) {
-		if r.Kind == "burst" {
-			say(FormatBurstLine(tag, r))
-		} else {
-			say(FormatRowLine(tag, r))
-		}
-		rep.Row(r)
-	}
-	cfg.Logf = logf
-	d := NewDriver(env, cfg)
-	var runErr error
-	out, runErr = d.Run(ctx)
-	m.Starts, m.Notes, m.ServerErrors = out.Starts, append(calNotes, out.Notes...), env.errorsSeen()
-	m.recordOutcome(out, runErr)
-
-	// 9. Files, written even after a failure so the partial run is inspectable.
-	// A leg that stopped early with a bracket is not a failure: it has a result.
-	if err := writeOutcomeFiles(o, out, nMax, runErr); err != nil {
-		return fail(err)
-	}
-	if runErr != nil {
-		return fail(runErr)
-	}
-	logf("result: %s (calibration %s)", out.Result, FormatCapacity(cal))
-	return writeManifest(o.OutDir, m)
 }
 
 // syncWriter serialises writes so progress lines from the bot's reader

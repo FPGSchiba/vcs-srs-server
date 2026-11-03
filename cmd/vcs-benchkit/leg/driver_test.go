@@ -593,6 +593,38 @@ func TestDriverServerCPUOverBoundIsABreach(t *testing.T) {
 	}
 }
 
+func TestDriverNodeCountDropIsABreachAndKeepsTheNodeReading(t *testing.T) {
+	w := &fakeWorld{kneeN: 1 << 30,
+		winHook: func(n int, win *Window) {
+			win.Nodes = NodeWindow{Polls: 3, Min: 3, Clients: map[string]int{"nodeA": n}}
+			if n >= 400 {
+				win.Nodes.Min = 2
+			}
+		}}
+	out, err := NewDriver(w, testConfig()).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := sweepRow(t, out, 400)
+	if r.Outcome != sweep.Breach || !strings.Contains(strings.Join(r.Reasons, ";"), "node count dropped") {
+		t.Fatalf("row = %+v, want a node count breach", r)
+	}
+	if r.Nodes.Min != 2 || r.Nodes.Clients["nodeA"] != 400 {
+		t.Errorf("Row.Nodes = %+v, want the hold's reading", r.Nodes)
+	}
+}
+
+func TestDriverNoNodePollsIsNotABreach(t *testing.T) {
+	w := &fakeWorld{kneeN: 1 << 30}
+	out, err := NewDriver(w, testConfig()).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := sweepRow(t, out, 400); r.Outcome != sweep.Pass {
+		t.Fatalf("row = %+v, want a pass without node polls", r)
+	}
+}
+
 func TestDriverResourceExhaustedInTheHoldIsABreach(t *testing.T) {
 	w := &fakeWorld{kneeN: 1 << 30,
 		stepHook: func(n int, label string, st *Step) {
@@ -1395,4 +1427,67 @@ func TestDriverRampDoneLineCountsFailingChunkJoins(t *testing.T) {
 		}
 	}
 	t.Fatalf("no ramp done line in %q", lines)
+}
+
+// --- v4: the bot's own latency decides the late-loss and one-way breaches ---
+
+// withV4Latency makes the fake bot report a v4 step with the given latency.
+func withV4Latency(oneWayP99Us int64, lateRatio float64) func(n int, label string, st *Step) {
+	return func(n int, label string, st *Step) {
+		if label == "preflight" || label == "warmup" || strings.HasPrefix(label, "probe-") {
+			return
+		}
+		st.Schema = "loadbot-step/4"
+		st.Payload = "opus-speech-corpus"
+		st.OneWayP99Us = &oneWayP99Us
+		st.LateLossRatio = &lateRatio
+	}
+}
+
+func TestMeasureUsesBotLatencyOneWay(t *testing.T) {
+	w := &fakeWorld{kneeN: 1 << 30, stepHook: withV4Latency(60000, 0)}
+	out, err := NewDriver(w, testConfig()).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := sweepRowAtOrAbove(out, 1)
+	if r == nil {
+		t.Fatal("no sweep row")
+	}
+	if r.Outcome != sweep.Breach || !strings.Contains(strings.Join(r.Reasons, ";"), "one-way p99 60ms above 50ms") {
+		t.Fatalf("row = %+v, want a one-way breach naming 60ms above 50ms", r)
+	}
+	if r.Data.OneWayP99 != 60*time.Millisecond {
+		t.Fatalf("Data.OneWayP99 = %v", r.Data.OneWayP99)
+	}
+}
+
+func TestMeasureUsesBotLatencyLateLoss(t *testing.T) {
+	w := &fakeWorld{kneeN: 1 << 30, stepHook: withV4Latency(900, 0.02)}
+	out, err := NewDriver(w, testConfig()).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := sweepRowAtOrAbove(out, 1)
+	if r == nil || r.Outcome != sweep.Breach || !strings.Contains(strings.Join(r.Reasons, ";"), "late loss 2.00%") {
+		t.Fatalf("row = %+v, want a late-loss breach", r)
+	}
+}
+
+func TestMeasureWithV3StepKeepsLatencyUnmeasured(t *testing.T) {
+	w := &fakeWorld{kneeN: 1 << 30}
+	out, err := NewDriver(w, testConfig()).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := sweepRowAtOrAbove(out, 1)
+	if r == nil || !r.Held {
+		t.Fatalf("row = %+v", r)
+	}
+	if r.Data.LateLossRatio != 0 || r.Data.OneWayP99 != 0 {
+		t.Fatalf("unmeasured values must stay zero: %+v", r.Data)
+	}
+	if notMeasured(r.Step) != "late_loss;one_way_p99" {
+		t.Fatalf("not_measured = %q", notMeasured(r.Step))
+	}
 }

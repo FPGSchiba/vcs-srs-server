@@ -19,10 +19,13 @@ const clockTicksPerSec = 100
 // snapshot is one 1 s sampler reading.
 type snapshot struct {
 	At       time.Time
-	ServerTk uint64 // server process utime+stime
+	ServerTk uint64 // server process utime+stime (single-process path; see Procs)
 	GenTk    uint64 // load bot utime+stime
 	CPU      map[string]sample.CPUTimes
-	Drops    uint64 // server socket d<n>, cumulative
+	Drops    uint64 // server socket d<n>, cumulative (single-process path; see Procs)
+	// Procs are the per-server-process readings, in serverProc order. When
+	// present they replace ServerTk and Drops.
+	Procs []procSnap
 	// Softnet is the sum of softnet_stat "dropped" over all CPUs; UDP is the
 	// snmp Udp: counters. NetOK is false when either file could not be read
 	// (NetErr says why). The snapshot is kept anyway: a ramp window must not
@@ -40,11 +43,38 @@ type snapshot struct {
 	SoftnetPerCPU []sample.Softnet
 }
 
-// windowFrom reduces the readings of one hold to a Window. serverNCPU and
-// genNCPU are the sizes of the processes' CPU sets (the CPU fraction's
-// denominator); serverCPUs are the CPUs whose softirq is reported. errs are
-// sampler failures collected while the snapshots were taken.
+// procSnap is one server process's reading: its utime+stime and, when it has a
+// voice socket, that socket's cumulative drop counter.
+type procSnap struct {
+	Tk       uint64
+	Drops    uint64
+	HasDrops bool
+}
+
+// serverProc names one server process the sampler reads. VoiceKey is its voice
+// socket's local "addr:port" in ss output; empty for a process with no voice
+// socket (the distributed control process).
+type serverProc struct {
+	Role     string
+	PID      int
+	NCPU     int
+	VoiceKey string
+}
+
+// windowFrom reduces the readings of one hold to a Window for a single server
+// process (the S arm). serverNCPU and genNCPU are the sizes of the processes'
+// CPU sets (the CPU fraction's denominator); serverCPUs are the CPUs whose
+// softirq is reported. errs are sampler failures collected while the snapshots
+// were taken.
 func windowFrom(snaps []snapshot, serverNCPU int, serverCPUs []int, genNCPU int, errs []string) Window {
+	return windowFromServers(snaps, []serverProc{{Role: "standalone", NCPU: serverNCPU}}, serverCPUs, genNCPU, errs)
+}
+
+// windowFromServers is windowFrom over any number of server processes.
+// ServerCPU is the busiest process's fraction of its own CPU set, ServerDrops
+// the sum over the processes that have a voice socket, and ServerCPUByRole the
+// per-role fractions (nil for one process).
+func windowFromServers(snaps []snapshot, servers []serverProc, serverCPUs []int, genNCPU int, errs []string) Window {
 	w := Window{ServerCPU: math.NaN(), GenCPU: math.NaN()}
 	if len(errs) > 0 {
 		w.Err = strings.Join(errs, "; ")
@@ -67,7 +97,35 @@ func windowFrom(snaps []snapshot, serverNCPU int, serverCPUs []int, genNCPU int,
 		}
 		return float64(b-a) / (clockTicksPerSec * w.Seconds * float64(ncpu))
 	}
-	w.ServerCPU = frac(first.ServerTk, last.ServerTk, serverNCPU)
+	procs := func(sn snapshot) []procSnap {
+		if sn.Procs != nil {
+			return sn.Procs
+		}
+		// Legacy snapshots carry no Procs; only they use the old fields.
+		return []procSnap{{Tk: sn.ServerTk, Drops: sn.Drops, HasDrops: true}}
+	}
+	fp, lp := procs(first), procs(last)
+	if len(fp) != len(servers) || len(lp) != len(servers) {
+		w.Err = strings.TrimPrefix(w.Err+"; server readings do not match the server processes", "; ")
+		return w
+	}
+	// A process whose counter went backwards is NaN, and a NaN anywhere makes
+	// the busiest NaN: an unread figure never hides behind a quiet sibling.
+	w.ServerCPU = math.Inf(-1)
+	for i, sv := range servers {
+		f := frac(fp[i].Tk, lp[i].Tk, sv.NCPU)
+		if len(servers) > 1 {
+			if w.ServerCPUByRole == nil {
+				w.ServerCPUByRole = map[string]float64{}
+			}
+			w.ServerCPUByRole[sv.Role] = f
+		}
+		if math.IsNaN(f) || math.IsNaN(w.ServerCPU) {
+			w.ServerCPU = math.NaN()
+		} else if f > w.ServerCPU {
+			w.ServerCPU = f
+		}
+	}
 	w.GenCPU = frac(first.GenTk, last.GenTk, genNCPU)
 	for _, c := range serverCPUs {
 		k := "cpu" + strconv.Itoa(c)
@@ -81,7 +139,12 @@ func windowFrom(snaps []snapshot, serverNCPU int, serverCPUs []int, genNCPU int,
 		w.StealTicks = l.Steal - f.Steal
 	}
 	for i := 1; i < len(snaps); i++ {
-		w.ServerDrops += sample.DropDelta(snaps[i-1].Drops, snaps[i].Drops)
+		a, b := procs(snaps[i-1]), procs(snaps[i])
+		for j := range servers {
+			if a[j].HasDrops && b[j].HasDrops {
+				w.ServerDrops += sample.DropDelta(a[j].Drops, b[j].Drops)
+			}
+		}
 	}
 	if first.NetOK && last.NetOK {
 		w.NetOK = true
@@ -169,14 +232,23 @@ func counterDelta(prev, cur uint64) uint64 {
 
 // procSampler reads the counters of one running system.
 type procSampler struct {
-	serverPID, genPID int
-	serverNCPU        int
-	serverCPUs        []int
-	genNCPU           int
-	// voiceKey is the server voice socket's local "addr:port" in ss output.
-	voiceKey string
-	read     func(path string) ([]byte, error)
-	ss       func() ([]byte, error)
+	// servers are the processes of the system under test: one standalone
+	// process, or the distributed control, node and global processes.
+	servers    []serverProc
+	genPID     int
+	serverCPUs []int
+	genNCPU    int
+	read       func(path string) ([]byte, error)
+	ss         func() ([]byte, error)
+}
+
+// label names a server process in an error: "server" for the only process (the
+// single-process wording is unchanged), else its role.
+func (p *procSampler) label(sv serverProc) string {
+	if len(p.servers) == 1 {
+		return "server"
+	}
+	return sv.Role
 }
 
 // take reads one snapshot. A failed read is returned as an error string and
@@ -192,8 +264,11 @@ func (p *procSampler) take(now time.Time) (snapshot, string) {
 		return u + st, err
 	}
 	var err error
-	if s.ServerTk, err = pidTicks(p.serverPID); err != nil {
-		return s, "server /proc stat: " + err.Error()
+	s.Procs = make([]procSnap, len(p.servers))
+	for i, sv := range p.servers {
+		if s.Procs[i].Tk, err = pidTicks(sv.PID); err != nil {
+			return s, p.label(sv) + " /proc stat: " + err.Error()
+		}
 	}
 	if s.GenTk, err = pidTicks(p.genPID); err != nil {
 		return s, "load bot /proc stat: " + err.Error()
@@ -209,11 +284,17 @@ func (p *procSampler) take(now time.Time) (snapshot, string) {
 	if err != nil {
 		return s, "ss -uamp: " + err.Error()
 	}
-	drops, ok := sample.ParseSSDrops(out)[p.voiceKey]
-	if !ok {
-		return s, fmt.Sprintf("ss -uamp: server socket %s not in the output", p.voiceKey)
+	byKey := sample.ParseSSDrops(out)
+	for i, sv := range p.servers {
+		if sv.VoiceKey == "" {
+			continue
+		}
+		d, ok := byKey[sv.VoiceKey]
+		if !ok {
+			return s, fmt.Sprintf("ss -uamp: %s socket %s not in the output", p.label(sv), sv.VoiceKey)
+		}
+		s.Procs[i].Drops, s.Procs[i].HasDrops = d, true
 	}
-	s.Drops = drops
 	s.NetOK, s.NetErr = p.takeNet(&s)
 	p.takeTCP(&s)
 	return s, ""
@@ -292,7 +373,7 @@ func (p *procSampler) peek(prev snapshot) (Window, snapshot) {
 	if prev.At.IsZero() {
 		return none, cur
 	}
-	return windowFrom([]snapshot{prev, cur}, p.serverNCPU, p.serverCPUs, p.genNCPU, nil), cur
+	return windowFromServers([]snapshot{prev, cur}, p.servers, p.serverCPUs, p.genNCPU, nil), cur
 }
 
 // begin starts the 1 s sampler and returns the func that stops it.
@@ -338,7 +419,7 @@ func (p *procSampler) begin(interval time.Duration) func() Window {
 		record() // the window ends at the stop, not at the last tick
 		mu.Lock()
 		defer mu.Unlock()
-		return windowFrom(snaps, p.serverNCPU, p.serverCPUs, p.genNCPU, errs)
+		return windowFromServers(snaps, p.servers, p.serverCPUs, p.genNCPU, errs)
 	}
 }
 

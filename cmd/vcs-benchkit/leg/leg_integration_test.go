@@ -46,7 +46,8 @@ func TestLegSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	for _, f := range []string{"steps.csv", "knees.csv", "calibration.csv", "manifest.json"} {
+	// Per-arm files sit in <out>/S; the calibration and the index belong to the leg.
+	for _, f := range []string{"S/steps.csv", "S/knees.csv", "calibration.csv", "S/manifest.json", "leg.json", "results.md"} {
 		if _, err := os.Stat(filepath.Join(out, f)); err != nil {
 			t.Errorf("missing %s: %v", f, err)
 		}
@@ -58,7 +59,7 @@ func TestLegSmoke(t *testing.T) {
 	}
 	// server-<k>.log.gz is the kept server log (S-T7); a server-<k> directory
 	// would be a data directory.
-	m, _ := filepath.Glob(filepath.Join(out, "server-*"))
+	m, _ := filepath.Glob(filepath.Join(out, "S", "server-*"))
 	logs := 0
 	for _, f := range m {
 		if strings.HasSuffix(f, ".log.gz") {
@@ -70,7 +71,7 @@ func TestLegSmoke(t *testing.T) {
 	if logs == 0 {
 		t.Error("no server-<k>.log.gz in the results directory")
 	}
-	mb, err := os.ReadFile(filepath.Join(out, "manifest.json"))
+	mb, err := os.ReadFile(filepath.Join(out, "S", "manifest.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +84,7 @@ func TestLegSmoke(t *testing.T) {
 	if got := man.Pins["server"]; got.CPUs != "0" || got.GOMAXPROCS != 1 || got.Shards != 2 {
 		t.Errorf("manifest server pin = %+v, want cpus 0 (the first of the server set), gomaxprocs 1, 2 shards", got)
 	}
-	fh, err := os.Open(filepath.Join(out, "knees.csv"))
+	fh, err := os.Open(filepath.Join(out, "S", "knees.csv"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,4 +94,95 @@ func TestLegSmoke(t *testing.T) {
 		t.Fatalf("knees.csv: %v rows=%d", err, len(recs))
 	}
 	t.Logf("knees.csv: %v", recs[1])
+}
+
+// TestLegSmokeArms starts each arm's real environment (S, Seq and the D2
+// topology) with the real headless server and vcs-loadbot, joins a few bots,
+// holds 2 s and checks what the environment promises: the logs, the per-role
+// samplers and, for D2, the node poller. It needs Linux, four cpus (server set
+// 0,1 and generator set 2,3) and a v4 bot; an older bot skips it with
+// "bot lacks arm_d2". The multi-arm Run itself is covered by the leg tests of
+// the multi-arm leg task.
+func TestLegSmokeArms(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the arms pin with taskset and sample /proc and ss: linux only")
+	}
+	server, loadbot := os.Getenv("VCS_SERVER_BIN"), os.Getenv("LOADBOT_BIN")
+	if server == "" || loadbot == "" {
+		t.Skip("set VCS_SERVER_BIN and LOADBOT_BIN to run the arms smoke test")
+	}
+	if runtime.NumCPU() < 4 {
+		t.Skip("needs four cpus: server set 0,1 and generator set 2,3")
+	}
+	feats := ProbeFeatures(loadbot, 10*time.Second)
+	if err := RequireFeatures([]string{"D2"}, "one-big-net", feats); err != nil {
+		t.Skip(err.Error())
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	for _, arm := range CanonicalArms {
+		t.Run(arm, func(t *testing.T) {
+			plan, err := PlanArm(arm, "0,1", "2,3")
+			if err != nil {
+				t.Fatal(err)
+			}
+			out := t.TempDir()
+			env := NewArmEnv(plan, envBase{
+				serverBin: server, loadbotBin: loadbot, outDir: out, scratchDir: t.TempDir(),
+				scenario: "one-big-net", seed: 1, serverCPUs: []int{0, 1}, features: feats,
+			})
+			sys, err := env.Start(ctx)
+			if err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			closed := false
+			defer func() {
+				if !closed {
+					_ = sys.Close()
+				}
+			}()
+			if _, err := sys.SetN(ctx, 16); err != nil {
+				t.Fatalf("SetN: %v", err)
+			}
+			end := sys.BeginSample()
+			if _, err := sys.Hold(ctx, 2*time.Second, "smoke"); err != nil {
+				t.Fatalf("Hold: %v", err)
+			}
+			w := end()
+			if w.Err != "" {
+				t.Errorf("sampler: %s", w.Err)
+			}
+			text, err := sys.LogText()
+			if err != nil || text == "" {
+				t.Errorf("LogText = %d bytes, err %v", len(text), err)
+			}
+			if arm == "D2" {
+				if w.Nodes.Polls < 1 || w.Nodes.Min != expectedNodes {
+					t.Errorf("node window = %+v, want >=1 poll and %d nodes", w.Nodes, expectedNodes)
+				}
+				if len(w.Nodes.Clients) == 0 {
+					t.Errorf("node clients empty: distributionStatus addresses did not match the topology's (%+v)", w.Nodes)
+				}
+				for _, r := range distRoles {
+					if !strings.Contains(text, "== "+string(r)+" ==") {
+						t.Errorf("no %s section in the D2 log text", r)
+					}
+				}
+				if len(w.ServerCPUByRole) != len(distRoles) {
+					t.Errorf("cpu by role = %v, want every role", w.ServerCPUByRole)
+				}
+			}
+			closed = true
+			if err := sys.Close(); err != nil {
+				t.Errorf("Close: %v", err)
+			}
+			want := "server-1.log.gz"
+			if arm == "D2" {
+				want = "server-1-nodeA.log.gz"
+			}
+			if _, err := os.Stat(filepath.Join(out, want)); err != nil {
+				t.Errorf("missing %s: %v", want, err)
+			}
+		})
+	}
 }

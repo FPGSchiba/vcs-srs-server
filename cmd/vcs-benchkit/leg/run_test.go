@@ -55,9 +55,10 @@ func TestValidateOptions(t *testing.T) {
 		t.Fatalf("valid options: %v", err)
 	}
 	cases := map[string]func(o *Options){
-		"only S":       func(o *Options) { o.Arms = "S,Seq" },
-		"seq later":    func(o *Options) { o.Arms = "Seq" },
-		"scenario":     func(o *Options) { o.Scenario = "org-op" },
+		"bad arm":      func(o *Options) { o.Arms = "S,X" },
+		"dup arm":      func(o *Options) { o.Arms = "S,S" },
+		"seq one cpu":  func(o *Options) { o.Arms = "S,Seq"; o.ServerSet = "0" },
+		"scenario":     func(o *Options) { o.Scenario = "nope" },
 		"server bin":   func(o *Options) { o.ServerBin = "" },
 		"loadbot bin":  func(o *Options) { o.LoadbotBin = "" },
 		"out":          func(o *Options) { o.OutDir = "" },
@@ -97,10 +98,20 @@ func TestValidateOptions(t *testing.T) {
 			t.Errorf("%s: err = %v", flag, err)
 		}
 	}
-	// S4 builds the S arm only: the message must say where Seq and D2 arrive.
+	// S5: arm lists and both scenarios are accepted; a Seq arm on one cpu names itself.
+	for _, good := range []func(o *Options){
+		func(o *Options) { o.Arms = "D2,S,Seq" },
+		func(o *Options) { o.Scenario = "org-op" },
+	} {
+		g := ok
+		good(&g)
+		if err := g.Validate(); err != nil {
+			t.Errorf("must be valid: %v", err)
+		}
+	}
 	o := ok
-	o.Arms = "Seq"
-	if err := o.Validate(); err == nil || !strings.Contains(err.Error(), "S5") {
+	o.Arms, o.ServerSet = "Seq", "0"
+	if err := o.Validate(); err == nil || !strings.Contains(err.Error(), "needs 2 server cpus") {
 		t.Errorf("err = %v", err)
 	}
 }

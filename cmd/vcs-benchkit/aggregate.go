@@ -13,11 +13,14 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/FPGSchiba/vcs-srs-server/cmd/vcs-benchkit/leg"
 )
 
 // legKnee is one leg's knees.csv row.
 type legKnee struct {
 	dir, arm, scenario, result, kind, topology, predicted string
+	armLabel                                              string // from the arm's manifest.json; "" when absent
 	n                                                     int
 }
 
@@ -99,6 +102,8 @@ type legInfo struct {
 	ctlLost, bursts string
 	// stoppedEarly is the manifest's stopped_early reason ("" when absent).
 	stoppedEarly string
+	// armLabel is the manifest's arm_label ("" when absent).
+	armLabel string
 }
 
 // readColumns reads a CSV into one map per data row, keyed by header name.
@@ -143,10 +148,12 @@ func readLegInfo(root, dir string, kneeFile bool) (legInfo, error) {
 			Scenario string `json:"scenario"`
 			Error    string `json:"error"`
 			Stopped  string `json:"stopped_early"`
+			ArmLabel string `json:"arm_label"`
 		}
 		if json.Unmarshal(b, &m) == nil {
 			li.err = m.Error
 			li.stoppedEarly = m.Stopped
+			li.armLabel = m.ArmLabel
 			if li.arm == "" {
 				li.arm, li.scen = m.Arm, m.Scenario
 			}
@@ -231,9 +238,11 @@ type aggRow struct {
 	censored, unconfirmed     bool
 }
 
-// renderAggregateMarkdown builds aggregate.md: one row per leg directory, so a
-// failed leg is visible, then the statistics table when any leg finished.
-func renderAggregateMarkdown(legs []legInfo, rows []aggRow, lbl string) string {
+// renderAggregateMarkdown builds aggregate.md: one row per leg directory (per
+// arm directory in the multi-arm layout), so a failed run is visible, then the
+// statistics table when any finished. multiArmLegs is the number of leg.json
+// files: when non-zero the rows are arm runs and the heading says so.
+func renderAggregateMarkdown(legs []legInfo, rows []aggRow, ratios []ratioRow, multiArmLegs int, lbl string) string {
 	var b bytes.Buffer
 	finished := 0
 	for _, l := range legs {
@@ -241,7 +250,11 @@ func renderAggregateMarkdown(legs []legInfo, rows []aggRow, lbl string) string {
 			finished++
 		}
 	}
-	fmt.Fprintf(&b, "### Aggregate: %d of %d legs finished\n\n", finished, len(legs))
+	if multiArmLegs > 0 {
+		fmt.Fprintf(&b, "### Aggregate: %d of %d arm runs finished (%d legs)\n\n", finished, len(legs), multiArmLegs)
+	} else {
+		fmt.Fprintf(&b, "### Aggregate: %d of %d legs finished\n\n", finished, len(legs))
+	}
 	b.WriteString("| leg | result | N | kind | calibration pps | steps (N:outcome) | control lost (steps) | bursts (silent/live failures) | error |\n")
 	b.WriteString("|---|---|---|---|---|---|---|---|---|\n")
 	for _, l := range legs {
@@ -258,6 +271,16 @@ func renderAggregateMarkdown(legs []legInfo, rows []aggRow, lbl string) string {
 		}
 		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",
 			mdCell(l.dir), mdCell(result), n, mdCell(kind), mdCell(l.calib), mdCell(l.steps), mdCell(l.ctlLost), mdCell(l.bursts), mdCell(errText))
+	}
+	if len(ratios) > 0 {
+		b.WriteString("\n### Within-leg ratios across legs\n\n")
+		b.WriteString("| scenario | ratio | legs | median | min | max | censored legs |\n")
+		b.WriteString("|---|---|---|---|---|---|---|\n")
+		for _, r := range ratios {
+			fmt.Fprintf(&b, "| %s | %s | %d | %s | %s | %s | %d |\n",
+				mdCell(r.scenario), mdCell(r.ratio), r.legs, dash(r.median), dash(r.min), dash(r.max), r.censored)
+		}
+		b.WriteString("\n_A ratio is knee over knee within one leg; a censored bound is never a ratio, so its leg is not counted in legs. The censored legs column also includes legs where a side errored._\n")
 	}
 	if len(rows) > 0 {
 		b.WriteString("\n| arm | scenario | repeats | median N | min N | max N | censored | unconfirmed |\n")
@@ -297,8 +320,9 @@ func runAggregate(args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("aggregate: --in and --out are required, and nothing else")
 	}
 	dirs := map[string]bool{} // leg dir -> has knees.csv
+	var legJSONs []string     // slash paths, relative to --in, of every dir holding a leg.json
 	err := filepath.WalkDir(*in, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || (d.Name() != "knees.csv" && d.Name() != "manifest.json") {
+		if err != nil || d.IsDir() || (d.Name() != "knees.csv" && d.Name() != "manifest.json" && d.Name() != "leg.json") {
 			return err
 		}
 		rel, err := filepath.Rel(*in, filepath.Dir(p))
@@ -306,6 +330,10 @@ func runAggregate(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
+		if d.Name() == "leg.json" {
+			legJSONs = append(legJSONs, rel)
+			return nil
+		}
 		dirs[rel] = dirs[rel] || d.Name() == "knees.csv"
 		return nil
 	})
@@ -326,6 +354,7 @@ func runAggregate(args []string, stdout, stderr io.Writer) error {
 		}
 		infos = append(infos, li)
 		if li.knee != nil {
+			li.knee.armLabel = li.armLabel
 			legs = append(legs, *li.knee)
 		}
 	}
@@ -348,7 +377,12 @@ func runAggregate(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 	}
-	md := renderAggregateMarkdown(infos, rows, *lbl)
+	sort.Strings(legJSONs)
+	ratios, err := writeRatiosCSV(*in, *out, legJSONs, *lbl)
+	if err != nil {
+		return err
+	}
+	md := renderAggregateMarkdown(infos, rows, ratios, len(legJSONs), *lbl)
 	if err := os.WriteFile(filepath.Join(*out, "aggregate.md"), []byte(md), 0o644); err != nil {
 		return err
 	}
@@ -370,7 +404,7 @@ func writeAggregateCSV(out string, groups map[string][]legKnee, keys []string, r
 	}
 	defer f.Close()
 	cw := csv.NewWriter(f)
-	if err := cw.Write([]string{"arm", "scenario", "repeats", "median_n", "min_n", "max_n", "censored", "unconfirmed", "results", "predicted_knee", "topology", "label"}); err != nil {
+	if err := cw.Write([]string{"arm", "scenario", "repeats", "median_n", "min_n", "max_n", "censored", "unconfirmed", "results", "predicted_knee", "topology", "label", "arm_label"}); err != nil {
 		return err
 	}
 	for _, k := range keys {
@@ -380,7 +414,11 @@ func writeAggregateCSV(out string, groups map[string][]legKnee, keys []string, r
 		var results []string
 		topos := map[string]bool{}
 		censored, unconfirmed := false, false
+		armLabel := ""
 		for _, l := range g {
+			if armLabel == "" {
+				armLabel = l.armLabel
+			}
 			ns = append(ns, l.n)
 			results = append(results, l.result)
 			topos[l.topology] = true
@@ -405,7 +443,7 @@ func writeAggregateCSV(out string, groups map[string][]legKnee, keys []string, r
 		if err := cw.Write([]string{
 			g[0].arm, g[0].scenario, strconv.Itoa(len(g)),
 			strconv.Itoa(med), strconv.Itoa(ns[0]), strconv.Itoa(ns[len(ns)-1]),
-			strconv.FormatBool(censored), strconv.FormatBool(unconfirmed), strings.Join(results, "; "), g[0].predicted, topo, lbl,
+			strconv.FormatBool(censored), strconv.FormatBool(unconfirmed), strings.Join(results, "; "), g[0].predicted, topo, lbl, armLabel,
 		}); err != nil {
 			return err
 		}
@@ -413,4 +451,116 @@ func writeAggregateCSV(out string, groups map[string][]legKnee, keys []string, r
 	}
 	cw.Flush()
 	return cw.Error()
+}
+
+// ratioRow is one scenario x ratio line of ratios.csv, kept for the markdown.
+// median, min and max are formatted ("" when no leg had a ratio).
+type ratioRow struct {
+	scenario, ratio, topology string
+	median, min, max          string
+	legs, censored            int
+}
+
+// medianFloat of ascending values; an even count averages the middle pair.
+func medianFloat(sorted []float64) float64 {
+	m := len(sorted) / 2
+	if len(sorted)%2 == 1 {
+		return sorted[m]
+	}
+	return (sorted[m-1] + sorted[m]) / 2
+}
+
+// writeRatiosCSV reads every leg.json (dirs relative to in) and writes
+// ratios.csv: per scenario and ratio key, the median/min/max of the within-leg
+// ratios. Only legs where both arms were attempted count; a leg whose ratio is
+// null (a censored or failed side) is counted in censored_legs, never in legs,
+// so a bound never leaks into a ratio. With no leg.json (the old single-arm
+// layout) the file holds just its header.
+func writeRatiosCSV(in, out string, legJSONs []string, lbl string) ([]ratioRow, error) {
+	type acc struct {
+		vals     []float64
+		censored int
+		topos    map[string]bool
+	}
+	groups := map[string]*acc{}
+	var keys []string
+	for _, rel := range legJSONs {
+		b, err := os.ReadFile(filepath.Join(in, filepath.FromSlash(rel), "leg.json"))
+		if err != nil {
+			return nil, err
+		}
+		var idx leg.LegIndex
+		if err := json.Unmarshal(b, &idx); err != nil {
+			return nil, fmt.Errorf("%s/leg.json: %w", rel, err)
+		}
+		for _, key := range leg.RatioKeys {
+			num, den := leg.RatioSides(key)
+			_, okN := idx.Arms[num]
+			_, okD := idx.Arms[den]
+			if !okN || !okD {
+				continue
+			}
+			k := idx.Scenario + "\x00" + key
+			a := groups[k]
+			if a == nil {
+				a = &acc{topos: map[string]bool{}}
+				groups[k] = a
+				keys = append(keys, k)
+			}
+			a.topos[idx.TopologyLabel] = true
+			if v := idx.Ratios[key]; v != nil {
+				a.vals = append(a.vals, *v)
+			} else {
+				a.censored++
+			}
+		}
+	}
+	order := map[string]int{}
+	for i, k := range leg.RatioKeys {
+		order[k] = i
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		si, ri, _ := strings.Cut(keys[i], "\x00")
+		sj, rj, _ := strings.Cut(keys[j], "\x00")
+		if si != sj {
+			return si < sj
+		}
+		return order[ri] < order[rj]
+	})
+	f, err := os.Create(filepath.Join(out, "ratios.csv"))
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	cw := csv.NewWriter(f)
+	if err := cw.Write([]string{"scenario", "ratio", "legs", "median", "min", "max", "censored_legs", "topology", "label"}); err != nil {
+		return nil, err
+	}
+	var rows []ratioRow
+	for _, k := range keys {
+		a := groups[k]
+		scen, ratio, _ := strings.Cut(k, "\x00")
+		sort.Float64s(a.vals)
+		var med, mn, mx string
+		if n := len(a.vals); n > 0 {
+			med = fmt.Sprintf("%.2f", medianFloat(a.vals))
+			mn = fmt.Sprintf("%.2f", a.vals[0])
+			mx = fmt.Sprintf("%.2f", a.vals[n-1])
+		}
+		var tl []string
+		for t := range a.topos {
+			tl = append(tl, t)
+		}
+		sort.Strings(tl)
+		topo := tl[0]
+		if len(tl) > 1 {
+			topo = "mixed: " + strings.Join(tl, " | ")
+		}
+		if err := cw.Write([]string{scen, ratio, strconv.Itoa(len(a.vals)), med, mn, mx, strconv.Itoa(a.censored), topo, lbl}); err != nil {
+			return nil, err
+		}
+		rows = append(rows, ratioRow{scenario: scen, ratio: ratio, topology: topo, median: med, min: mn, max: mx, legs: len(a.vals), censored: a.censored})
+	}
+	cw.Flush()
+	return rows, cw.Error()
 }

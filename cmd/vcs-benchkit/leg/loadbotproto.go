@@ -289,6 +289,48 @@ func ParseFeatures(stdout []byte, runErr error) Features {
 	return f
 }
 
+// ParityType is the `type` of a v4 parity line.
+const ParityType = "parity"
+
+// ParityLine is the v4 `parity` line (I-4): the bot's one session.Connect, run
+// before bot 0 joins on the S and Seq arms.
+type ParityLine struct {
+	Type      string  `json:"type"`
+	Schema    string  `json:"schema"`
+	Arm       string  `json:"arm"`
+	OK        bool    `json:"ok"`
+	ConnectMs float64 `json:"connect_ms"`
+	Error     string  `json:"error"`
+	Path      string  `json:"path"`
+}
+
+// StepParity is the step line's copy of a parity line.
+type StepParity struct {
+	OK        bool    `json:"ok"`
+	ConnectMs float64 `json:"connect_ms"`
+}
+
+// CorpusInfo describes the Opus speech corpus a step's frames came from.
+type CorpusInfo struct {
+	SHA256     string `json:"sha256"`
+	Frames     int    `json:"frames"`
+	SizeMin    int    `json:"size_min"`
+	SizeMedian int    `json:"size_median"`
+	SizeP95    int    `json:"size_p95"`
+	SizeMax    int    `json:"size_max"`
+}
+
+// notMeasured names the breach criteria the bot did not measure in st: both
+// late loss and one-way p99 when either is missing (a v3 bot, a non-Linux bot,
+// the D2 arm), else "". The pair is never split: a half-measured step is
+// treated as unmeasured so no reader mistakes it for a latency verdict.
+func notMeasured(st Step) string {
+	if st.LateLossRatio == nil || st.OneWayP99Us == nil {
+		return NotMeasured
+	}
+	return ""
+}
+
 // StepControlLostType is the `type` of an I-10 line.
 const StepControlLostType = "control_lost"
 

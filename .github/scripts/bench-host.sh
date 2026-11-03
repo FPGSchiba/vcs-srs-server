@@ -20,8 +20,8 @@ Flags:
   --host-label L        required. local-docker, local-linux or aws-<type> (e.g. aws-c7i.4xlarge)
   --server-set CPUS     required. taskset list for the server (1 or 2 cpus)
   --gen-set CPUS        required. taskset list for the load bot
-  --arms S              default S. Seq and D2 arrive with kit S5
-  --scenario NAME       default one-big-net (the only scenario)
+  --arms LIST           comma list of S, Seq, D2. Default S. Seq and D2 need a 2-cpu --server-set
+  --scenario LIST       comma list of one-big-net, org-op, or "all" for both. Default one-big-net
   --repeats K           default 1. 1 to 5 legs per GOGC variant, seeds 1..K, run serially
   --gogc off|default|both
                         default default. default = Go defaults, off = GOGC=off GOMEMLIMIT=1GiB
@@ -33,13 +33,25 @@ Flags:
   --micro run|skip      default run. skip runs the legs without a prediction unless --predict FILE
                         or --leg-arg --predicted-knee=N is given (the prediction is context only)
   --predict FILE        a predict.json from an earlier run (with --micro skip)
-  --budget D            default 100m. The kit's leg budget
+  --budget D            default 100m. The kit's sweep budget per arm
   --leg-arg ARG         repeatable pass-through to vcs-benchkit leg (smoke runs only)
   --note TEXT           free text recorded in host.json
   --privileged-sysctl   docker mode only, opt-in. Runs the container --privileged with
                         --network host to raise rmem_max/wmem_max; prints a warning
   --dry-run             print every command instead of running it
   --help                this text
+
+CPU sets per arm (the kit pins each arm's processes inside --server-set):
+  S    standalone server on the first server cpu
+  Seq  standalone server on both server cpus
+  D2   control and global on both, nodeA on the first, nodeB on the second
+For Seq and D2 to measure two cores, pick a 2-cpu --server-set on two different physical cores
+(check /sys/devices/system/cpu/cpu<N>/topology/thread_siblings_list; the script warns when the two
+are hyperthreads of one core and records server_pair in host.json). Leave their SMT siblings out of
+--gen-set and otherwise idle, and give the generator every remaining cpu. Example for a 16-vCPU,
+8-core instance whose siblings are (0,8) (1,9) ...: --server-set 0,1 --gen-set 2-7,10-15
+Full AWS matrix (all arms, both scenarios), Go-default GC, three seeds:
+  --arms S,Seq,D2 --scenario all --repeats 3 --gogc default
 
 EC2 (no extra tooling; the instance is yours to provide):
   git archive HEAD | ssh <host> 'mkdir -p vcs && tar -x -C vcs'
@@ -104,12 +116,34 @@ done
 
 host_label_re='^(local-docker|local-linux|aws-[a-z0-9-]+\.[a-z0-9]+)$'
 [[ "$host_label" =~ $host_label_re ]] || die "--host-label must be local-docker, local-linux or aws-<type> (got '$host_label')"
-case "$arms" in
-  S) ;;
-  Seq|D2) die "--arms $arms: Seq and D2 arrive with kit S5; only S exists" ;;
-  *) die "--arms must be S (got '$arms')" ;;
-esac
-[ "$scenario" = "one-big-net" ] || die "--scenario must be one-big-net (got '$scenario')"
+# list_canon FLAG LIST ALLOWED...: validates a comma list (no empty or duplicate element, only ALLOWED
+# names) and sets CANON to the comma list in ALLOWED order, so the same set always prints the same.
+CANON=""
+list_canon() {
+  local flag="$1" list="$2" a el seen out="" found
+  shift 2
+  [ -n "$list" ] || die "$flag: empty list (allowed: $*)"
+  case "$list" in ,*|*,|*,,*) die "$flag: '$list' has an empty element (allowed: $*)" ;; esac
+  local parts; IFS=',' read -ra parts <<< "$list"
+  for el in "${parts[@]}"; do
+    found=0; for a in "$@"; do if [ "$el" = "$a" ]; then found=1; fi; done
+    [ "$found" -eq 1 ] || die "$flag: unknown name '$el' in '$list' (allowed: $*)"
+  done
+  for a in "$@"; do
+    seen=0
+    for el in "${parts[@]}"; do if [ "$el" = "$a" ]; then seen=$((seen + 1)); fi; done
+    [ "$seen" -le 1 ] || die "$flag: '$a' is listed twice in '$list'"
+    if [ "$seen" -eq 1 ]; then out="${out:+$out,}$a"; fi
+  done
+  CANON="$out"
+}
+list_canon --arms "$arms" S Seq D2; arms="$CANON"
+if [ "$scenario" = "all" ]; then
+  scenario="one-big-net,org-op"
+elif [[ ",$scenario," == *,all,* ]]; then
+  die "--scenario: all cannot be combined with other names (got '$scenario')"
+fi
+list_canon --scenario "$scenario" one-big-net org-op; scenario="$CANON"
 [[ "$repeats" =~ ^[1-5]$ ]] || die "--repeats must be 1 to 5 (got '$repeats')"
 case "$gogc" in off|default|both) ;; *) die "--gogc must be off, default or both (got '$gogc')" ;; esac
 join_floor_re='^[0-9]+(\.[0-9]+)?$'
@@ -150,6 +184,10 @@ cpu_expand() {
 cpu_expand --server-set "$server_set"; server_cpus=("${CPUS[@]}")
 cpu_expand --gen-set "$gen_set";       gen_cpus=("${CPUS[@]}")
 [ "${#server_cpus[@]}" -ge 1 ] && [ "${#server_cpus[@]}" -le 2 ] || die "server set must be 1 or 2 cpus (got ${#server_cpus[@]} in '$server_set')"
+need2=""
+case ",$arms," in *,Seq,*) need2="Seq" ;; esac
+case ",$arms," in *,D2,*) need2="${need2:+$need2,}D2" ;; esac
+if [ -n "$need2" ] && [ "${#server_cpus[@]}" -ne 2 ]; then die "--arms $need2 need a 2-cpu --server-set (got '$server_set')"; fi
 
 overlap=""
 for s in "${server_cpus[@]}"; do
@@ -190,6 +228,32 @@ for s in ${sib_scan[@]+"${sib_scan[@]}"}; do
     done
   done
 done
+
+# Server pair: with two server cpus, are they two cores or two hyperthreads of one? Seq and D2 only
+# mean "two cores" in the first case, so a shared core is a warning (an S-only run uses one cpu and
+# stays quiet). "unknown" when the topology is unreadable or, in docker mode, not looked at here:
+# the SMT check applies to native mode only (the sibling map is not read under docker).
+if [ "${#server_cpus[@]}" -ne 2 ]; then
+  server_pair="n/a (1 cpu)"
+else
+  server_pair="unknown"
+  if [ "${#sib_scan[@]}" -gt 0 ]; then
+    sib="$sysfs_root/sys/devices/system/cpu/cpu${server_cpus[0]}/topology/thread_siblings_list"
+    if [ -r "$sib" ]; then
+      sl="$(tr -d "[:space:]" < "$sib")"
+      if ( cpu_expand "cpu${server_cpus[0]} siblings" "$sl" ) >/dev/null 2>&1; then
+        cpu_expand "cpu${server_cpus[0]} siblings" "$sl"
+        server_pair="2 cores"
+        for t in "${CPUS[@]}"; do
+          if [ "$t" -eq "${server_cpus[1]}" ]; then server_pair="2 hyperthreads of 1 core"; fi
+        done
+      fi
+    fi
+  fi
+  if [ "$server_pair" = "2 hyperthreads of 1 core" ] && [ "$arms" != "S" ]; then
+    echo "bench-host: WARNING: server cpus ${server_cpus[0]} and ${server_cpus[1]} are hyperthreads of one core: Seq and D2 measure SMT, not a second core" >&2
+  fi
+fi
 
 if [ -e "$out_dir" ]; then
   [ -d "$out_dir" ] || die "--out $out_dir is not a directory"
@@ -308,6 +372,8 @@ write_records() {
     --argjson sysctl_raise "$(str_or_null "${BENCH_HOST_SYSCTL_RAISE:-}")" \
     --arg kernel "$kernel" --argjson nproc "$(num_or_null "$nproc_v")" \
     --arg server_set "$server_set" --arg gen_set "$gen_set" --arg gogc "$gogc" \
+    --arg arms "$arms" --arg scenarios "$scenario" --arg server_pair "$server_pair" \
+    --argjson arm_pins "$arm_pins_json" \
     --argjson join_floor "$(str_or_null "$join_floor")" \
     --arg client_ref "$client_ref" --arg server_sha "$server_sha" --argjson server_dirty "$dirty" \
     --argjson rmem_max "$(num_or_null "$rmem0")" --argjson wmem_max "$(num_or_null "$wmem0")" \
@@ -317,13 +383,15 @@ write_records() {
     '{host_label: $host_label, mode: $mode, image: $image, docker_version: $docker_version,
       tool_versions: $tool_versions, sysctl_raise: $sysctl_raise,
       kernel: $kernel, nproc: $nproc, server_set: $server_set, gen_set: $gen_set, gogc: $gogc,
+      arms: ($arms | split(",")), scenarios: ($scenarios | split(",")), server_pair: $server_pair,
+      arm_pins: $arm_pins,
       join_floor: $join_floor,
       client_ref: $client_ref, server_sha: $server_sha, server_dirty: $server_dirty,
       rmem_max: $rmem_max, wmem_max: $wmem_max, leg_args: $leg_args, note: $note,
       started_utc: $started_utc, ended_utc: $ended_utc,
       relative_only: true, label: $label, bot_label_note: $bot_label_note}' > "$out_dir/host.json"
 
-  local sum="$out_dir/summary.md" v k dir f
+  local sum="$out_dir/summary.md" v k dir f sc scenarios_sp="${scenario//,/ }"
   {
     echo "# Bench host run: $host_label"
     echo
@@ -331,8 +399,8 @@ write_records() {
     echo
     echo "| fact | value |"
     echo "|---|---|"
-    jq -r '. as $h | ["host_label","mode","image","docker_version","tool_versions","sysctl_raise","kernel","nproc","server_set","gen_set","gogc","join_floor","client_ref","server_sha","server_dirty","rmem_max","wmem_max","leg_args","note","started_utc","ended_utc"][]
-      | "| \(.) | \($h[.] | if type == "array" then join(" ") elif . == null then "-" else tostring end | gsub("\\|"; "\\|") | gsub("\n"; " ")) |"' "$out_dir/host.json"
+    jq -r '. as $h | ["host_label","mode","image","docker_version","tool_versions","sysctl_raise","kernel","nproc","server_set","gen_set","arms","scenarios","server_pair","arm_pins","gogc","join_floor","client_ref","server_sha","server_dirty","rmem_max","wmem_max","leg_args","note","started_utc","ended_utc"][]
+      | "| \(.) | \($h[.] | if type == "array" then join(" ") elif type == "object" then to_entries | map("\(.key): \(.value)") | join("; ") elif . == null then "-" else tostring end | gsub("\\|"; "\\|") | gsub("\n"; " ")) |"' "$out_dir/host.json"
     echo
     echo "$BOT_LABEL_NOTE"
     for v in $variants; do
@@ -341,11 +409,13 @@ write_records() {
       echo "## GOGC $v"
       k=1
       while [ "$k" -le "$repeats" ]; do
-        f="$dir/results/$k-$scenario/results.md"
-        echo
-        echo "### Leg $k results"
-        echo
-        if [ -f "$f" ]; then cat "$f"; else echo "_no results.md (the leg did not finish)_"; fi
+        for sc in ${scenarios_sp}; do
+          f="$dir/results/$k-$sc/results.md"
+          echo
+          echo "### Leg $k, $sc results"
+          echo
+          if [ -f "$f" ]; then cat "$f"; else echo "_no results.md (the leg did not finish)_"; fi
+        done
         k=$((k + 1))
       done
       f="$dir/aggregate/aggregate.md"
@@ -363,16 +433,20 @@ write_records() {
 leg_diagnostics() { # LEG_DIR
   local d="$1" f srv
   [ "$dry_run" -eq 0 ] || return 0
-  for f in "$d"/loadbot-*.log "$d"/calibrate.log "$d"/reflect.log; do
+  # The leg layout (design I-6): calibration logs at the leg root, the rest per arm.
+  for f in "$d"/calibrate.log "$d"/reflect.log "$d"/*/loadbot-*.log; do
     [ -e "$f" ] || continue
     echo "== $f (last 50 lines) =="
     tail -n 50 "$f" 2>&1 || true
   done
-  srv="$(ls "$d"/server-*.log.gz 2>/dev/null | sort -V | tail -n 1 || true)"
+  srv="$(ls -t "$d"/*/server-*.log.gz 2>/dev/null | head -n 1 || true)"
   echo "== ${srv:-server log} (last 200 lines) =="
   if [ -n "$srv" ]; then zcat "$srv" 2>&1 | tail -n 200 || true; else echo "no server log kept"; fi
-  echo "== $d/manifest.json =="
-  cat "$d/manifest.json" 2>&1 || true
+  for f in "$d"/*/manifest.json; do
+    [ -e "$f" ] || continue
+    echo "== $f =="
+    cat "$f" 2>&1 || true
+  done
 }
 
 pipeline_native() {
@@ -402,6 +476,18 @@ pipeline_native() {
   [ "$dry_run" -eq 1 ] || mkdir -p "$out_dir"
 
   local started dirty rmem0 wmem0
+  # The per-arm CPU plan (design I-5): where each arm's processes run inside --server-set.
+  local s0="${server_cpus[0]}" s1="${server_cpus[1]:-}" arm_pins_json='{}' a pin
+  echo "== arm plan (server set $server_set, pair: $server_pair) =="
+  for a in ${arms//,/ }; do
+    case "$a" in
+      S) pin="standalone cpu $s0" ;;
+      Seq) pin="standalone cpus $s0,$s1" ;;
+      D2) pin="control $s0,$s1 / nodeA $s0 / nodeB $s1 / global $s0,$s1" ;;
+    esac
+    echo "$a: $pin"
+    arm_pins_json="$(printf '%s' "$arm_pins_json" | jq -c --arg a "$a" --arg p "$pin" '. + {($a): $p}')"
+  done
   started="$(now_utc)"
   dirty="${BENCH_HOST_SERVER_DIRTY:-${BENCH_HOST_FAKE_DIRTY:-}}"
   if [ -z "$dirty" ]; then
@@ -484,6 +570,7 @@ pipeline_native() {
     smt="$(jq -r .smt "$out_dir/env-probe.json")"
   fi
   topology="$host_label: server $server_set ($nsrv cpu), generator $gen_set ($ngen cpu), smt $smt"
+  if [ "$nsrv" -eq 2 ]; then topology="$topology, server pair $server_pair"; fi
 
   local have_predict=0 predict_file="$out_dir/micro/predict.json"
   echo "== micro =="
@@ -503,43 +590,50 @@ pipeline_native() {
   fi
 
   echo "== legs =="
-  local k v dir cmd
+  local k v dir cmd sc
   k=1
   while [ "$k" -le "$repeats" ]; do
     for v in $variants; do
-      dir="$out_dir/gogc-$v"
-      run mkdir -p "$dir/results"
-      cmd=("$bin/vcs-benchkit" leg
-        --server-bin "$bin/vcs-server"
-        --loadbot-bin "$bin/vcs-loadbot"
-        --scenario "$scenario"
-        --arms "$arms"
-        --seed "$k"
-        --out "$dir/results/$k-$scenario"
-        --probe "$out_dir/env-probe.json")
-      if [ "$have_predict" -eq 1 ]; then cmd+=(--predict "$predict_file"); fi
-      cmd+=(--server-sha "$server_sha"
-        --client-sha "$client_sha"
-        --q6 "host run: server $server_set, generator $gen_set (user, 2026-10-29)"
-        --server-set "$server_set"
-        --gen-set "$gen_set"
-        --topology "$topology"
-        --label "$label"
-        --generator-gc "$v"
-        --budget "$budget"
-        "$sysctl_flag")
-      if [ "$have_join_floor" -eq 1 ]; then cmd+=(--join-rate-floor "$join_floor"); fi
-      if [ "${#leg_args[@]}" -gt 0 ]; then cmd+=("${leg_args[@]}"); fi
-      echo "== leg $k, GOGC $v =="
-      if [ "$dry_run" -eq 1 ] && [ -n "${BENCH_HOST_FAKE_RESULTS:-}" ]; then
-        mkdir -p "$dir/results/$k-$scenario"
-        printf 'FAKE results GOGC %s leg %s\n' "$v" "$k" > "$dir/results/$k-$scenario/results.md"
-      fi
-      if ! run_tee "$dir/leg-$k.log" "${cmd[@]}"; then
-        echo "bench-host: leg $k (GOGC $v) failed; continuing" >&2
-        failed=1
-        leg_diagnostics "$dir/results/$k-$scenario"
-      fi
+      for sc in ${scenario//,/ }; do
+        dir="$out_dir/gogc-$v"
+        run mkdir -p "$dir/results"
+        cmd=("$bin/vcs-benchkit" leg
+          --server-bin "$bin/vcs-server"
+          --loadbot-bin "$bin/vcs-loadbot"
+          --scenario "$sc"
+          --arms "$arms"
+          --seed "$k"
+          --out "$dir/results/$k-$sc"
+          --probe "$out_dir/env-probe.json")
+        if [ "$have_predict" -eq 1 ]; then cmd+=(--predict "$predict_file"); fi
+        cmd+=(--server-sha "$server_sha"
+          --client-sha "$client_sha"
+          --q6 "host run: server $server_set, generator $gen_set (user, 2026-10-29)"
+          --server-set "$server_set"
+          --gen-set "$gen_set"
+          --topology "$topology"
+          --label "$label"
+          --generator-gc "$v"
+          --budget "$budget"
+          "$sysctl_flag")
+        if [ "$have_join_floor" -eq 1 ]; then cmd+=(--join-rate-floor "$join_floor"); fi
+        if [ "${#leg_args[@]}" -gt 0 ]; then cmd+=("${leg_args[@]}"); fi
+        echo "== leg $k, $sc, GOGC $v =="
+        if [ "$dry_run" -eq 1 ] && [ -n "${BENCH_HOST_FAKE_RESULTS:-}" ]; then
+          mkdir -p "$dir/results/$k-$sc"
+          printf 'FAKE results GOGC %s leg %s %s\n' "$v" "$k" "$sc" > "$dir/results/$k-$sc/results.md"
+          for a in ${arms//,/ }; do
+            [ "${BENCH_HOST_FAKE_MISSING_ARM:-}" = "$k-$sc/$a" ] && continue
+            mkdir -p "$dir/results/$k-$sc/$a"
+            : > "$dir/results/$k-$sc/$a/knees.csv"
+          done
+        fi
+        if ! run_tee "$dir/leg-$k-$sc.log" "${cmd[@]}"; then
+          echo "bench-host: leg $k ($sc, GOGC $v) failed; continuing" >&2
+          failed=1
+          leg_diagnostics "$dir/results/$k-$sc"
+        fi
+      done
     done
     k=$((k + 1))
   done
@@ -547,11 +641,16 @@ pipeline_native() {
   echo "== aggregate =="
   for v in $variants; do
     dir="$out_dir/gogc-$v"
-    if [ "$dry_run" -eq 0 ]; then
-      local legs_done
-      legs_done="$(find "$dir/results" -name knees.csv 2>/dev/null | wc -l | tr -d ' ')"
-      if [ "$legs_done" -ne "$repeats" ]; then
-        echo "PARTIAL: GOGC $v: $legs_done of $repeats legs aggregated; the statistics cover the surviving legs only"
+    if [ "$dry_run" -eq 0 ] || [ -n "${BENCH_HOST_FAKE_RESULTS:-}" ]; then
+      # A leg writes one knees.csv per finished arm (<leg>/<arm>/knees.csv), so the
+      # count is arm results against repeats x scenarios x arms.
+      local n_sc n_arms want got
+      n_sc=$((1 + $(printf '%s' "$scenario" | tr -cd ',' | wc -c | tr -d ' ')))
+      n_arms=$((1 + $(printf '%s' "$arms" | tr -cd ',' | wc -c | tr -d ' ')))
+      want=$((repeats * n_sc * n_arms))
+      got="$(find "$dir/results" -mindepth 3 -maxdepth 3 -name knees.csv 2>/dev/null | wc -l | tr -d ' ')"
+      if [ "$got" -ne "$want" ]; then
+        echo "PARTIAL: GOGC $v: $got of $want arm results ($repeats legs x $n_sc scenarios x $n_arms arms) aggregated; the statistics cover the surviving arms only"
       fi
     fi
     if [ "$dry_run" -eq 1 ] && [ -n "${BENCH_HOST_FAKE_RESULTS:-}" ]; then

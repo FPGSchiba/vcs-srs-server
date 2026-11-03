@@ -47,6 +47,16 @@ func serverLogGzName(k int) string { return fmt.Sprintf("server-%d.log.gz", k) }
 // SaveServerLog writes text, gzipped, as <outDir>/server-<k>.log.gz and returns
 // the path. It copies nothing else.
 func SaveServerLog(outDir string, k int, text string) (string, error) {
+	return saveGz(filepath.Join(outDir, serverLogGzName(k)), text)
+}
+
+// SaveRoleLog writes one role's log of a distributed topology, gzipped, as
+// <outDir>/server-<k>-<role>.log.gz and returns the path.
+func SaveRoleLog(outDir string, k int, role, text string) (string, error) {
+	return saveGz(filepath.Join(outDir, fmt.Sprintf("server-%d-%s.log.gz", k, role)), text)
+}
+
+func saveGz(p, text string) (string, error) {
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
 	if _, err := zw.Write([]byte(text)); err != nil {
@@ -55,7 +65,6 @@ func SaveServerLog(outDir string, k int, text string) (string, error) {
 	if err := zw.Close(); err != nil {
 		return "", err
 	}
-	p := filepath.Join(outDir, serverLogGzName(k))
 	return p, os.WriteFile(p, buf.Bytes(), 0o644)
 }
 

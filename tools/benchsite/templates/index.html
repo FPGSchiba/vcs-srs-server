@@ -1,0 +1,12 @@
+{{template "head" .}}
+<h1>VCS server benchmark results</h1>
+<p class="note">Runs newest first. Numbers are relative comparisons between arms of the same run; runs are compared with each other only when image version and topology match.</p>
+{{if .Runs}}
+<table>
+<tr><th>Run</th><th>Server SHA</th><th>Client SHA</th><th>Image version</th><th>Topology</th><th>Knee N (median) per scenario and arm</th><th>Comparison</th></tr>
+{{range .Runs}}<tr>
+<td><a href="runs/{{.ID}}/index.html">{{.ID}}</a></td><td>{{.ServerSHA}}</td><td>{{.ClientSHA}}</td><td>{{.Image}}</td><td>{{.Topology}}</td><td>{{.Knees}}</td><td>{{if .Prev}}vs {{.Prev}}{{else}}none{{end}}</td>
+</tr>{{end}}
+</table>
+{{else}}<p>No runs published yet.</p>{{end}}
+{{template "foot" .}}

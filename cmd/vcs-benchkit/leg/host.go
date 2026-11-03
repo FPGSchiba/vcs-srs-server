@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,16 +17,30 @@ import (
 	"github.com/FPGSchiba/vcs-srs-server/internal/topology"
 )
 
-// hostEnv starts the real S-arm system: a pinned standalone server and a
+// serverTopology is the part of *topology.Topology the environments use, so a
+// test can stand a fake in for the processes.
+type serverTopology interface {
+	Addr(topology.Role) string
+	PIDs() map[topology.Role]int
+	Status(context.Context) (topology.DistributionStatus, error)
+	LogText(topology.Role) (string, error)
+	Errors() []string
+	Stop() error
+}
+
+// hostEnv starts the real S or Seq system: a pinned standalone server and a
 // pinned `vcs-loadbot run`. Every Start is a fresh server in a fresh directory.
 type hostEnv struct {
 	serverBin, loadbotBin, outDir, scenario string
 	// scratchDir holds what must not reach the results artifact: the throwaway
 	// coalition passwords and each server's data directory. Only the load bot's
 	// stderr logs go under outDir.
-	scratchDir       string
-	seed             int64
-	serverPin        string // the S arm's one CPU
+	scratchDir string
+	seed       int64
+	// arm is the bot's --arm value ("" means S); serverPin is the server's CPU
+	// list (S one cpu, Seq both) and serverGOMAXPROCS its GOMAXPROCS.
+	arm              string
+	serverPin        string
 	serverGOMAXPROCS int
 	serverCPUs       []int // the whole server set, for softirq
 	genSet           string
@@ -85,6 +98,21 @@ func (e *hostEnv) BotStderrText() (string, error) {
 	return string(b), err
 }
 
+// serverNCPU is how many cpus the server process is pinned to (1 when unpinned).
+func (e *hostEnv) serverNCPU() int {
+	if l, err := CPUList(e.serverPin); err == nil && len(l) > 0 {
+		return len(l)
+	}
+	return 1
+}
+
+func (e *hostEnv) armName() string {
+	if e.arm == "" {
+		return "S"
+	}
+	return e.arm
+}
+
 func (e *hostEnv) errorsSeen() []string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -95,8 +123,10 @@ func (e *hostEnv) serverDir(k int) string {
 	return filepath.Join(e.scratchDir, fmt.Sprintf("server-%d", k))
 }
 
-func (e *hostEnv) passwordsFile() (string, error) {
-	p := filepath.Join(e.scratchDir, "passwords.json")
+func (e *hostEnv) passwordsFile() (string, error) { return writePasswords(e.scratchDir) }
+
+func writePasswords(scratchDir string) (string, error) {
+	p := filepath.Join(scratchDir, "passwords.json")
 	m := map[string]string{}
 	for _, c := range topology.DefaultCoalitions {
 		m[c.Name] = c.Password
@@ -130,11 +160,15 @@ func (e *hostEnv) Start(ctx context.Context) (System, error) {
 		return nil, err
 	}
 	control, voiceAddr := top.Addr(topology.Control), top.Addr(topology.Standalone)
-	name, argv, pinEnv, err := PinCommand(runtime.GOOS, e.loadbotBin, append([]string{
-		"run", "--scenario", e.scenario, "--arm", "S",
-		"--control", control, "--voice", voiceAddr, "--allow", control + "," + voiceAddr,
-		"--passwords", pw, "--unit", "LDBT", "--seed", strconv.FormatInt(e.seed, 10),
-	}, BotRunArgsWith(e.features, botParamsOr(e.bot))...), e.genSet)
+	argv := BotArgv(e.armName(), e.scenario, ArmAddrs{Control: control, Voice: voiceAddr}, pw, e.seed, e.features, botParamsOr(e.bot))
+	return e.newSystem(k, top, argv, []serverProc{{Role: "standalone", PID: top.PIDs()[topology.Standalone], NCPU: e.serverNCPU(), VoiceKey: voiceAddr}}, nil)
+}
+
+// newSystem starts the pinned load bot with argv against a running topology and
+// wraps both as a system. logText replaces the standalone log read (nil keeps
+// it). On any failure it stops the topology.
+func (e *hostEnv) newSystem(k int, top serverTopology, botArgv []string, servers []serverProc, logText func() (string, error)) (*hostSystem, error) {
+	name, argv, pinEnv, err := PinCommand(runtime.GOOS, e.loadbotBin, botArgv, e.genSet)
 	if err != nil {
 		_ = top.Stop()
 		return nil, err
@@ -166,12 +200,12 @@ func (e *hostEnv) Start(ctx context.Context) (System, error) {
 	s := &hostSystem{
 		k: k, env: e, top: top, cmd: cmd, stdin: stdin, logf: logf,
 		bot:  NewBot(stdin, stdout, BotHooks{OnProgress: e.onProgress, OnControlLost: e.onControlLost, Features: e.features}),
-		done: make(chan struct{}),
+		done: make(chan struct{}), logText: logText,
 		sampler: &procSampler{
-			serverPID: top.PIDs()[topology.Standalone], genPID: cmd.Process.Pid,
-			serverNCPU: 1, serverCPUs: e.serverCPUs, genNCPU: e.genNCPU,
-			voiceKey: voiceAddr, read: os.ReadFile,
-			ss: func() ([]byte, error) { return runCmd("ss", "-uamp") },
+			servers: servers,
+			genPID:  cmd.Process.Pid, serverCPUs: e.serverCPUs, genNCPU: e.genNCPU,
+			read: os.ReadFile,
+			ss:   func() ([]byte, error) { return runCmd("ss", "-uamp") },
 		},
 	}
 	go func() { _ = cmd.Wait(); close(s.done) }()
@@ -184,7 +218,7 @@ func (e *hostEnv) Start(ctx context.Context) (System, error) {
 type hostSystem struct {
 	k       int
 	env     *hostEnv
-	top     *topology.Topology
+	top     serverTopology
 	cmd     *exec.Cmd
 	stdin   interface{ Close() error }
 	logf    *os.File
@@ -196,6 +230,8 @@ type hostSystem struct {
 	holds int
 	// curN is the bot count the last SetN or Burst asked for (heartbeat lines).
 	curN int
+	// logText replaces the standalone log read; the distributed system sets it.
+	logText func() (string, error)
 }
 
 func (s *hostSystem) SetN(ctx context.Context, n int) (Joins, error) {
@@ -285,11 +321,18 @@ func (s *hostSystem) Hold(ctx context.Context, d time.Duration, label string) (S
 	return s.bot.Hold(hctx, d, label)
 }
 
-func (s *hostSystem) LogText() (string, error) { return s.top.LogText(topology.Standalone) }
+func (s *hostSystem) LogText() (string, error) {
+	if s.logText != nil {
+		return s.logText()
+	}
+	return s.top.LogText(topology.Standalone)
+}
 
 func (s *hostSystem) BeginSample() func() Window { return s.sampler.begin(time.Second) }
 
-func (s *hostSystem) Close() error {
+// stopBot ends the load bot: quit, close stdin, wait (killing after 20 s) and
+// close its stderr file.
+func (s *hostSystem) stopBot() {
 	_ = s.bot.Quit()
 	_ = s.stdin.Close()
 	select {
@@ -299,6 +342,10 @@ func (s *hostSystem) Close() error {
 		<-s.done
 	}
 	_ = s.logf.Close()
+}
+
+func (s *hostSystem) Close() error {
+	s.stopBot()
 	errs := s.top.Errors()
 	s.env.mu.Lock()
 	s.env.serverErrs = append(s.env.serverErrs, errs...)
