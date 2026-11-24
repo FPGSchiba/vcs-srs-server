@@ -1,4 +1,4 @@
-FROM golang:1.27.3 AS builder
+FROM golang:1.27.4 AS builder
 ARG TARGETARCH
 
 # protoc v36.2 from the upstream release, verified by sha256 per architecture.
